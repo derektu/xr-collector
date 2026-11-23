@@ -29,7 +29,6 @@ export class AppTray {
   private again = false;
   private lastRead = 0;
   private stopped = false;
-  private midnight: ReturnType<typeof setTimeout> | undefined;
   private readonly stopFollowing: () => void;
   reads = 0;
 
@@ -41,7 +40,6 @@ export class AppTray {
     this.draw();
     this.stopFollowing = options.changes.subscribe((batch) => { if (menuStaleAfter(batch.changes)) void this.refresh(); });
     void this.refresh();
-    this.atMidnight();
   }
 
   current(): TrayMenu { return this.menu; }
@@ -99,18 +97,8 @@ export class AppTray {
 
   destroy(): void {
     this.stopped = true;
-    clearTimeout(this.midnight);
     this.stopFollowing();
     this.tray.destroy();
-  }
-
-  private atMidnight(): void {
-    const next = new Date();
-    next.setHours(24, 0, 1, 0);
-    this.midnight = setTimeout(() => {
-      this.show(trayModel(this.state));
-      this.atMidnight();
-    }, next.getTime() - Date.now());
   }
 
   private show(model: TrayModel): void {

@@ -110,7 +110,7 @@ app.whenReady().then(async () => {
     get: (options) => app.getLoginItemSettings(options),
     set: (options) => app.setLoginItemSettings(options),
   };
-  const loginStartup = new DesktopLoginStartup(loginItemAdapter, path.join(app.getPath('userData'), 'login-startup.json'));
+  const loginStartup = new DesktopLoginStartup(loginItemAdapter);
   registerPageChannels({
     ipc: ipcMain,
     theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json')),
@@ -184,15 +184,6 @@ app.whenReady().then(async () => {
   });
   for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
   mainWindow.runtimeStarted();
-  if (!startedAtLogin) {
-    try {
-      const repair = await loginStartup.repairMovedRegistration();
-      if (repair.repaired) runtime.recordDeviceEvent('info', 'device.login_startup_repaired', 'App 位置改變後，已把登入自啟更新到目前位置。');
-    } catch (error) {
-      runtime.recordDeviceEvent('error', 'device.login_startup_repair_failed', error instanceof Error ? error.message : '無法修復登入自啟。',
-        'login_startup_failed');
-    }
-  }
   await mainWindow.open(startedAtLogin);
   closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
   tray = new AppTray({

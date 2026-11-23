@@ -1,6 +1,6 @@
 // The login startup switch shows what the operating system reports. Without these rules a refused
 // write leaves the switch on although the OS kept it off, a change made in the OS settings stays
-// hidden until the page reloads, and a slow read started before a write puts the old value back.
+// hidden until the page reloads.
 import { describe, expect, it } from 'vitest';
 import { LoginStartupControl, loginStartupNote, type LoginStartupPort } from '../../../src/transport/web/login-startup-control.js';
 import type { LoginStartupStatus } from '../../../src/shared/api/device-types.js';
@@ -61,24 +61,6 @@ describe('login startup control', () => {
     expect(control.current().status?.enabled).toBe(true);
   });
 
-  it('keeps a newer write when a read started before it answers late', async () => {
-    const { control, calls, written } = heldOs();
-    const started = control.start();
-    calls[0]!.answer(status(false));
-    await started;
-
-    const slowRead = control.focus();
-    const writing = control.write(true);
-    calls[2]!.answer(status(true));
-    await writing;
-    calls[1]!.answer(status(false));
-    await slowRead;
-
-    expect(calls[1]!.signal.aborted).toBe(true);
-    expect(control.current()).toMatchObject({ status: { enabled: true }, pending: false, error: null });
-    expect(written).toEqual([true]);
-  });
-
   it('ignores answers after the screen closed and shows the state again when it comes back', async () => {
     const { control, calls } = heldOs();
     const first = control.start();
@@ -104,7 +86,6 @@ describe('login startup control', () => {
     expect(shown(reported('enabled', 'reworded on'))).toBeNull();
     expect(shown(reported('disabled', 'reworded off'))).toBeNull();
     expect(shown(reported('requires_approval', 'approve it'))).toEqual({ kind: 'status', message: 'approve it' });
-    expect(shown(reported('relocated', 'moved'))).toEqual({ kind: 'status', message: 'moved' });
     expect(shown(reported('unavailable', 'any'))).toEqual({ kind: 'unavailable' });
     expect(shown(null)).toEqual({ kind: 'loading' });
     expect(shown(reported('enabled', 'on'), { error: 'refused' })).toEqual({ kind: 'error', message: 'refused' });

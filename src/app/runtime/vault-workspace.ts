@@ -242,7 +242,6 @@ export class VaultWorkspace {
         ...(onAutoPaused ? { onAutoPaused: (record) => onAutoPaused(vault.vaultId, plugin.id, record) } : {}),
       });
     }));
-    for (const event of vault.recoveryEvents) jobs.recordEvent(event);
     const partial = { vault, runtime, collector, subscriptions, jobs };
     const bundle: Bundle = { ...partial, schedule: makeScheduler(partial, this.options, this.noteChange) };
     return bundle;

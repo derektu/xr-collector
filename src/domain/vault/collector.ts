@@ -27,11 +27,6 @@ export interface TypeSubscriptions {
   removals?: Array<{ id: string; title: string }>;
 }
 
-export interface SaveResult {
-  document: SavedDocument;
-  recollected: boolean;
-}
-
 export interface CollectorOptions {
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
   noteChange?: NoteChange;
@@ -73,14 +68,14 @@ export class Collector implements DocumentCollector {
    * in between still leaves the document visible. Any other save of a deleted item fails with
    * `document_deleted`.
    */
-  save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<SaveResult> {
+  save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<{ document: SavedDocument }> {
     const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
       const deletion = await this.vault.deletions.get(id);
       if (!deletion) {
         const document = await this.vault.add(captured);
         this.noted(id);
-        return { document, recollected: false };
+        return { document };
       }
       if (!explicitAfter(intent, deletion.deletedAt)) {
         const target = this.vault.sources.get(captured.sourceType)?.subscription?.targetNoun ?? '訂閱';
@@ -91,11 +86,7 @@ export class Collector implements DocumentCollector {
       const document = await this.vault.add(captured, { collectedAt: now > after ? now : after });
       await this.vault.deletions.clear(id);
       this.noted(id);
-      this.options.recordEvent?.({
-        eventType: 'document.recollected', message: `已重新收集「${document.title}」，解除刪除紀錄。`,
-        documentId: id, sourceId: document.sourceId, sourceTitle: document.title, namesSource: true,
-      });
-      return { document, recollected: true };
+      return { document };
     });
   }
 
@@ -123,8 +114,8 @@ export class Collector implements DocumentCollector {
    * Deletes a document: the deletion record goes first and hides the document at once, then the
    * file is removed and the search excludes the document. The index entry is removed in the
    * background, so a deletion never waits for a rebuild; a failed removal is recorded as a warning
-   * and the document stays excluded until the index catches up. A stop after the record leaves work
-   * that opening the Vault finishes.
+   * and the document stays excluded until the index catches up. A file left behind after the record
+   * stays hidden until the user removes it.
    */
   delete(id: string): Promise<DocumentDeletion> {
     return this.exclusive(id, async () => {
@@ -145,7 +136,7 @@ export class Collector implements DocumentCollector {
         console.error('Document file removal failed', error);
         this.options.recordEvent?.({
           eventType: 'document.delete_failed', ...event,
-          message: `「${document.title}」已標記為刪除，但檔案無法移除；下次開啟知識庫時會再移除。`,
+          message: `「${document.title}」已標記為刪除，但檔案無法移除。`,
         });
       }
       let indexed = true;

@@ -637,7 +637,7 @@ describe('CollectorRuntime Vault setup', () => {
     });
   }
 
-  it('keeps device-only login and Agent settings out of a Vault export (L33-A2)', async () => {
+  it('keeps device-only Agent settings out of a Vault export (L33-A2)', async () => {
     const search: TranscriptSearch = {
       status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }), index: async () => undefined, remove: async () => undefined,
       rebuild: async () => undefined, search: async () => ({ hits: [], total: 0, statusCounts: { draft: 0, published: 0 }, offset: 0, limit: 20 }),
@@ -652,7 +652,6 @@ describe('CollectorRuntime Vault setup', () => {
     }));
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
     await new VaultSelection(path.join(setup.value.profilePath, 'vault-selection.json')).write(setup.vaultPath);
-    await writeFile(path.join(setup.value.profilePath, 'login-startup.json'), '{"deviceOnly":true}\n');
     const runtime = await startCollectorServer(setup.value);
     cleanups.push(() => runtime.close());
     const originalAgent = await connectionOf(runtime);
@@ -673,16 +672,13 @@ describe('CollectorRuntime Vault setup', () => {
     const payload = Buffer.concat([...entries.values()]);
     const names = [...entries.keys()];
     const packageLeaks = {
-      loginSettingsName: names.some((name) => name.includes('login-startup.json')),
       agentSettingsName: names.some((name) => name.includes('agent-settings.json')),
-      loginSettingValue: payload.includes(Buffer.from('deviceOnly')),
       agentToken: payload.includes(Buffer.from(originalAgent.token)),
       agentPort: payload.includes(Buffer.from('65431')),
     };
-    expect(manifest.files.map((file) => file.path)).not.toContain('login-startup.json');
     expect(manifest.files.map((file) => file.path)).not.toContain('agent-settings.json');
     expect(packageLeaks).toEqual({
-      loginSettingsName: false, agentSettingsName: false, loginSettingValue: false, agentToken: false, agentPort: false,
+      agentSettingsName: false, agentToken: false, agentPort: false,
     });
   });
 

@@ -251,7 +251,7 @@ Playwright 以 `_electron.launch` 啟動打包版，靠 Electron fuses 的 `Enab
 
 Windows 的 NSIS 安裝程式本身（安裝、捷徑、解除安裝）不經過 verify；verify 啟動的是安裝程式包進去的同一個 `win-unpacked` 內容。
 
-打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。profile、Vault、匯出與備份可導進 run 目錄，但 OS 登入項目不受這些路徑隔離。startup 的打包版使用全新隔離 profile、不切換登入自啟；Windows 沿用登入設定的 profile 手動啟動還可能修復搬移後的 OS 註冊，這類案例也在 VM 執行。登入項目的真實註冊、外部停用與登入行為依 [login-startup.md](features/login-startup.md) 的 VM 前置條件與時段執行。
+打包版與使用者安裝的 App 是同一個 bundle id（`com.moneydj.xrcollector`）。profile、Vault、匯出與備份可導進 run 目錄，但 OS 登入項目不受這些路徑隔離。startup 的打包版使用全新隔離 profile、不切換登入自啟。登入項目的真實註冊、外部停用與登入行為依 [login-startup.md](features/login-startup.md) 的 VM 前置條件與時段執行。
 
 **startup**：App 能正確啟動的檢查，開發版 Electron 與打包版、Mac 與 Windows 同一支，視窗隱藏、不需要互動與網路，不訂閱、不收集。全部通過 exit code 為 0，任一項失敗不為 0。nightly 在兩個平台各跑開發版與打包版：
 

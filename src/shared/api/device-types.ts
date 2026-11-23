@@ -1,6 +1,6 @@
 import type { JobError } from '../jobs/job-types.js';
 
-export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'relocated' | 'unavailable';
+export type LoginStartupState = 'enabled' | 'disabled' | 'requires_approval' | 'unavailable';
 
 export interface LoginStartupStatus {
   supported: boolean;
