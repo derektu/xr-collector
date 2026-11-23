@@ -149,7 +149,7 @@ export class MarkdownVault implements DocumentVault {
         source_id: capture.key,
         publisher: capture.publisher.name,
         collected_at: collectedAt,
-        content_extent: capture.contentExtent ?? 'full',
+        content_extent: capture.contentExtent,
         ...definition.frontmatter.write(capture.details),
         source_tags: [],
       },

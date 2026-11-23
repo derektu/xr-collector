@@ -69,7 +69,7 @@ async function vaultRoot(): Promise<string> {
 
 function channel(id: string, title: string): SubscriptionRecord {
   return {
-    id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z',
+    id, title, url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
     settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 },
   };
 }

@@ -69,7 +69,7 @@ async function seed(root: string) {
   await vault.add(transcriptDocument({ ...capture, videoId: deletedId, sourceUrl: `https://www.youtube.com/watch?v=${deletedId}`, title: '已刪除' }));
   await new Collector(vault).delete(`youtube:${deletedId}`);
   await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').add({
-    id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+    id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123', enabled: true, addedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     settings, nextCheckAt: null, lastDispatchedAt: null, outOfRange: [{ videoId: 'old00000001', before: '2026-09-01T00:00:00.000Z' }],
   });
   await new JsonScheduleStore(new VaultFileWriter(root, PRODUCT_SOURCES)).save({ enabled: true });

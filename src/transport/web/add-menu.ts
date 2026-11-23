@@ -88,7 +88,7 @@ export function addMismatch(declarations: SourceDeclarations, mode: AddMode, rec
     return { message: `這是 ${kind.label}，要改為訂閱嗎？`, action: '改為訂閱', switchTo: `${declaration.id}-${kind.id}` };
   }
   if (mode !== 'url' && kind.capability === 'single') {
-    return { message: `這是單${declaration.item.measure}${declaration.item.noun}，要改為加入一次嗎？`, action: '改為加入一次', switchTo: 'url' };
+    return { message: `這是單${declaration.item.measureWord}${declaration.item.noun}，要改為加入一次嗎？`, action: '改為加入一次', switchTo: 'url' };
   }
   return null;
 }

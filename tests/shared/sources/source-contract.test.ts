@@ -427,10 +427,10 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
   ];
   const document = (type: string, key: string): CapturedDocument => ({
     sourceType: type, key, sourceUrl: itemUrl(type, key), title: `${type} ${key}`, publisher: { id: null, name: `${type} 作者` },
-    publishedAt: null, bodyMarkdown: `${key} 的內容。`, details: { rating: 3, note: null },
+    publishedAt: null, bodyMarkdown: `${key} 的內容。`, contentExtent: 'full', details: { rating: 3, note: null },
   });
   const feed = (type: string, id: string): SubscriptionRecord => ({
-    id, title: `${type} 動態 ${id}`, url: feedUrl(type, id), enabled: true, addedAt: '2026-09-18T00:00:00.000Z',
+    id, title: `${type} 動態 ${id}`, url: feedUrl(type, id), enabled: true, addedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
     settings: FAKE_DEFAULTS, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
   const items = async (root: string) => new Map([...await itemStates(SOURCES, registeredSource(await registeredFiles(root, SOURCES)))]

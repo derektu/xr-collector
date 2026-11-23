@@ -91,7 +91,7 @@ export function fakeDefinition(type: string, group: string, formats: { vault?: n
       { input: 'choice', key: 'maxItems', label: '數量', default: FAKE_DEFAULTS.maxItems, options: [{ value: 3, label: '3 篇' }, { value: 5, label: '5 篇' }] },
     ],
     item: {
-      noun: '文章', measure: '篇', keyPattern: /^[a-z0-9-]{3,40}$/u, documentType: 'Article',
+      noun: '文章', measureWord: '篇', keyPattern: /^[a-z0-9-]{3,40}$/u, documentType: 'Article',
       urlForKey: itemUrl, openOriginalLabel: '開啟原始文章',
     },
     subscription: {
@@ -112,8 +112,8 @@ export function fakeDefinition(type: string, group: string, formats: { vault?: n
     jobKindNames: { item: 'item', check: 'feed', add: 'feed-add' },
     failureLabels: { no_subtitles: '沒有內文', video_unavailable: '文章不存在' },
     prompts: {
-      anyInput: `請輸入 ${type} 網址。`, itemInput: `請輸入 ${type} 文章網址。`, subscriptionInput: `請輸入 ${type} 動態網址。`,
-      itemPlaceholder: `貼上 ${type} 文章網址`, subscriptionPlaceholder: `貼上 ${type} 動態網址`, itemCard: '收集這篇文章。',
+      anyInputHint: `請輸入 ${type} 網址。`, itemInputHint: `請輸入 ${type} 文章網址。`, subscriptionInputHint: `請輸入 ${type} 動態網址。`,
+      itemPlaceholder: `貼上 ${type} 文章網址`, subscriptionPlaceholder: `貼上 ${type} 動態網址`, itemCardText: '收集這篇文章。',
     },
     owns: (_input, url) => url?.hostname === host,
     classify(input) {
@@ -236,7 +236,7 @@ export class FakeSource {
     return {
       key: ref.key, sourceUrl: ref.url, title: item.title,
       publisher: feed ? { id: feed.id, name: feed.title } : { id: null, name: `${this.type} 作者` },
-      publishedAt: item.publishedAt, bodyMarkdown: `${item.title} 的內容。`,
+      publishedAt: item.publishedAt, bodyMarkdown: `${item.title} 的內容。`, contentExtent: 'full',
       details: details as unknown as Record<string, unknown>,
     };
   }
@@ -263,7 +263,6 @@ export function createFakePlugin(definition: SourceDefinition<FakeSettings>, sou
     },
     login: {
       status: () => source.signedIn ? 'signed_in' : 'required',
-      describe: () => `登入 ${definition.label}`,
     },
   };
   return plugin;

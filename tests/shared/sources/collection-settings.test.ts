@@ -12,7 +12,7 @@ import {
 import { publishedSince } from '../../../src/shared/documents/published.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 
-const { fields, subscription } = rangeSettings({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, { noun: '影片', measure: '支' });
+const { fields, subscription } = rangeSettings({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, { noun: '影片', measureWord: '支' });
 const field = (key: string) => fields.find((candidate) => candidate.key === key)!;
 
 function rejection(run: () => unknown): { code: string; message: string } {

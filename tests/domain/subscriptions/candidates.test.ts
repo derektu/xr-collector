@@ -13,7 +13,7 @@ function setup() {
   const source = new SyntheticYouTube();
   const id = source.addChannel('discovery');
   const channel: SubscriptionRecord = {
-    id, title: '合成頻道', url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: NOW.toISOString(),
+    id, title: '合成頻道', url: `https://www.youtube.com/channel/${id}/videos`, enabled: true, addedAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
     settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
   };
   return { source, id, channel };

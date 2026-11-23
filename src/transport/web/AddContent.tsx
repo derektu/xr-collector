@@ -158,7 +158,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
       <div className="card-main">
         <p className="card-kind">{recognition.kindLabel}</p>
         <p className="card-title">{target.url.replace(/^https:\/\/(www\.)?/u, '')}</p>
-        <p>{declaration?.prompts.itemCard}</p>
+        <p>{declaration?.prompts.itemCardText}</p>
       </div>
     </div>;
   }

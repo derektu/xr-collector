@@ -17,7 +17,7 @@ export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
   settings: RSS_SETTINGS.fields,
   item: {
     noun: '文章',
-    measure: '篇',
+    measureWord: '篇',
     keyPattern: ARTICLE_KEY_PATTERN,
     documentType: 'Article',
     openOriginalLabel: '開啟原始文章',
@@ -27,19 +27,18 @@ export const rssDeclaration: SourcePluginDeclaration<RssSettings> = {
     ...RSS_SETTINGS.subscription,
   },
   jobKindNames: { item: 'article', check: 'feed', add: 'feed-add' },
-  phaseLabels: { capture: '讀取文章' },
   failureLabels: {
     network_error: '網路錯誤', rate_limited: '網站限制連線', feed_not_found: '找不到 feed', feed_invalid: 'feed 格式錯誤',
     feed_unavailable: '無法讀取 feed', article_missing: '文章已不在 feed',
   },
   documentDetailLine: (document) => document.contentExtent === 'summary' ? '只有摘要' : null,
   prompts: {
-    anyInput: '請輸入 RSS feed 或網站網址。',
-    itemInput: 'RSS 文章只能透過訂閱收集。',
-    subscriptionInput: '請輸入 RSS feed 或網站網址。',
+    anyInputHint: '請輸入 RSS feed 或網站網址。',
+    itemInputHint: 'RSS 文章只能透過訂閱收集。',
+    subscriptionInputHint: '請輸入 RSS feed 或網站網址。',
     itemPlaceholder: '',
     subscriptionPlaceholder: '貼上 RSS feed 或網站網址',
-    itemCard: '',
+    itemCardText: '',
   },
   owns: (_input, url) => isWebAddress(url),
   classify(input) {

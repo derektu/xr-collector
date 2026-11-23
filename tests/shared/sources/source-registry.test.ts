@@ -20,6 +20,14 @@ describe('source declarations', () => {
     expect(declarations.jobKind('other', 'check')).toBeNull();
   });
 
+  it('names a type\'s subscriptions by its subscription kind, else by the type\'s label, else by its ID', () => {
+    const singleOnly = { ...fake2, kinds: fake2.kinds.filter((kind) => kind.capability !== 'subscription') };
+    const declarations = new SourceDeclarations([fake, singleOnly]);
+    expect(declarations.subscriptionKindLabel('fake')).toBe('fake 動態');
+    expect(declarations.subscriptionKindLabel('fake2')).toBe('Fake fake2');
+    expect(declarations.subscriptionKindLabel('other')).toBe('other');
+  });
+
   it('is not built from an empty list or a type listed twice', () => {
     expect(() => new SourceDeclarations([])).toThrow('No source types are given');
     expect(() => new SourceDeclarations([fake, fake])).toThrow('Source type fake is given twice');

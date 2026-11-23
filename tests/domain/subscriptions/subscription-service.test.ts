@@ -143,6 +143,7 @@ function channel(id: string, enabled: boolean): SubscriptionRecord {
     url: `https://www.youtube.com/channel/${id}/videos`,
     enabled,
     addedAt: '2026-09-17T00:00:00.000Z',
+    updatedAt: '2026-09-17T00:00:00.000Z',
     settings: DEFAULT_POLICY,
   };
 }

@@ -33,7 +33,7 @@ export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
   settings: YOUTUBE_SETTINGS.fields,
   item: {
     noun: '影片',
-    measure: '支',
+    measureWord: '支',
     keyPattern: VIDEO_ID_PATTERN,
     documentType: 'Transcript',
     urlForKey: videoUrl,
@@ -44,18 +44,17 @@ export const youtubeDeclaration: SourcePluginDeclaration<CollectionPolicy> = {
     ...YOUTUBE_SETTINGS.subscription,
   },
   jobKindNames: { item: 'video', check: 'channel', add: 'channel-add' },
-  phaseLabels: { capture: '擷取字幕' },
   failureLabels: {
     no_subtitles: '沒有字幕', video_unavailable: '影片不存在', network_error: '網路錯誤', capture_failed: '收集失敗', rate_limited: 'YouTube 限制連線',
   },
   documentDetailLine: (document) => subtitleLine(document.youtube),
   prompts: {
-    anyInput: '請輸入 YouTube 影片網址、頻道網址或 @handle。',
-    itemInput: '請輸入 YouTube 影片網址。',
-    subscriptionInput: '請輸入 YouTube 頻道網址或 @handle。',
+    anyInputHint: '請輸入 YouTube 影片網址、頻道網址或 @handle。',
+    itemInputHint: '請輸入 YouTube 影片網址。',
+    subscriptionInputHint: '請輸入 YouTube 頻道網址或 @handle。',
     itemPlaceholder: '貼上 YouTube 影片網址',
     subscriptionPlaceholder: '貼上 YouTube 頻道網址或 @handle',
-    itemCard: '收集這支影片的字幕，加入知識庫。',
+    itemCardText: '收集這支影片的字幕，加入知識庫。',
   },
   owns: ownsYouTubeInput,
   classify(input) {

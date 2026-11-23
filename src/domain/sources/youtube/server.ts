@@ -86,6 +86,7 @@ export function transcriptItem(transcript: CapturedTranscript): CapturedItem {
     publisher: { id: transcript.channelId, name: transcript.channelTitle },
     publishedAt: transcript.publishedAt,
     bodyMarkdown: transcript.bodyMarkdown,
+    contentExtent: 'full',
     details: details as unknown as Record<string, unknown>,
   };
 }

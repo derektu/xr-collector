@@ -72,7 +72,7 @@ function isRecord(value: unknown, keyField: string, isValidSettings: (value: unk
     && typeof record.url === 'string'
     && typeof record.enabled === 'boolean'
     && typeof record.addedAt === 'string'
-    && isOptionalTime(record.updatedAt)
+    && typeof record.updatedAt === 'string'
     && isOptionalTime(record.lastCheckedAt)
     && (record.checkFailures === undefined || isCheckFailures(record.checkFailures))
     && (record.autoPausedAt === undefined || typeof record.autoPausedAt === 'string')
