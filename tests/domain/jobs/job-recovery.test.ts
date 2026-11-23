@@ -357,6 +357,31 @@ describe('checks across restarts start over (R-T4)', () => {
     ]);
   });
 
+  it('stops the items a restart resumed when their subscription is removed, even if the new listing no longer finds them', async () => {
+    const w = await world();
+    const subscribed = subscribe(w.subs, 'UC-orphan-items');
+    w.script.channelVideos.set(subscribed.id, listed(2, 'o'));
+    const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
+    const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
+    await g1.source.holds.started(videoId(0, 'o'));
+    const itemIds = g1.manager.get(accepted.job.id).items!.map((item) => item.jobId!);
+
+    w.script.channelVideos.set(subscribed.id, []);
+    const g2 = await w.crash(g1, (source) => { source.holdAllCaptures = true; });
+    await g2.manager.whenSettled(accepted.job.id);
+    await g2.source.holds.started(videoId(0, 'o'));
+
+    g2.manager.stopSubscription('youtube', subscribed.id, 'subscription_removed');
+    g2.source.release(videoId(0, 'o'));
+    const items = await Promise.all(itemIds.map((id) => g2.manager.whenSettled(id)));
+
+    expect(items.map((item) => item.result)).toEqual([
+      { outcome: 'skipped', skipReason: 'subscription_removed' },
+      { outcome: 'skipped', skipReason: 'subscription_removed' },
+    ]);
+    expect(w.vault.saves).toBe(0);
+  });
+
   it('discovers with the settings and time of the restart (R-06)', async () => {
     const w = await world();
     const subscribed = subscribe(w.subs, 'UC-rediscover');
