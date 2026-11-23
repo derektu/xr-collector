@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TransferStatus } from '../../shared/vault/vault-types.js';
 import { api } from './api-client.js';
 import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
@@ -6,11 +6,7 @@ import { useLiveRead } from './use-changes.js';
 import { fileName, relocationPhase, revealLabel, switchesVault, transferRunning } from './transfer-presentation.js';
 import { NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 
-type Open = { kind: 'create' | 'open'; resume: boolean; source?: string };
-
-let background: 'create' | 'open' | null = null;
-
-const kindOf = (status: TransferStatus): 'create' | 'open' => (status.operation === 'create' ? 'create' : 'open');
+type Open = { kind: 'create' } | { kind: 'open'; source?: string };
 
 export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   vaultPath: string | null;
@@ -25,13 +21,6 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   const unavailable = status?.relocationUnavailable ?? null;
   const running = switchesVault(status) && transferRunning(status);
 
-  const shownBefore = useRef<TransferStatus | null>(null);
-  useEffect(() => {
-    if (open || !background || !status || status === shownBefore.current || !switchesVault(status) || transferRunning(status)) return;
-    setOpen({ kind: background, resume: true });
-    background = null;
-  }, [status, open]);
-
   async function reveal(): Promise<void> {
     setProblem(null);
     try { await desktop?.revealVault(); } catch (error) { setProblem(errorText(error, '無法開啟資料夾。')); }
@@ -39,10 +28,10 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
 
   async function openOther(): Promise<void> {
     setProblem(null);
-    if (!desktop) { setOpen({ kind: 'open', resume: false }); return; }
+    if (!desktop) { setOpen({ kind: 'open' }); return; }
     try {
       const source = await desktop.chooseVault((await api.getVaultSetup()).newVault.location);
-      if (source) setOpen({ kind: 'open', resume: false, source });
+      if (source) setOpen({ kind: 'open', source });
     } catch (error) {
       setProblem(`無法開啟資料夾選擇視窗：${errorText(error, '請稍後再試。')}`);
     }
@@ -52,7 +41,6 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
     setOpen(null);
     if (switched) window.location.reload();
   };
-  const toBackground = () => { background = open?.kind ?? null; shownBefore.current = status; setOpen(null); };
 
   return <section className="settings-section" data-testid="settings-vault">
     <h2>知識庫</h2>
@@ -60,7 +48,7 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
     {counts ? <p className="hint" data-testid="vault-counts" data-documents={counts.documents} data-sources={counts.sources}>{counts.documents} 份文件・{counts.sources} 個訂閱</p> : null}
     <div className="settings-line vault-actions" data-testid="vault-actions">
       <div className="vault-action-group">
-        <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'create', resume: false })}
+        <button type="button" className="button" disabled={!!unavailable || running} onClick={() => setOpen({ kind: 'create' })}
           data-testid="vault-create">建立新的知識庫…</button>
         <button type="button" className="button" disabled={!!unavailable || running} onClick={() => void openOther()}
           data-testid="vault-open-other">開啟既有知識庫…</button>
@@ -71,49 +59,30 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
       </div>
     </div>
     {unavailable ? <p className="hint" data-testid="vault-relocation-unavailable">{unavailable.message}</p> : null}
-    {running && !open && status ? <div className="transfer-progress-line vault-background" data-testid="vault-background">
-      <p className="transfer-progress" role="status"><span className="spinner" aria-hidden="true" />{status.message}</p>
-      <button type="button" className="button small" onClick={() => {
-        background = null;
-        setOpen({ kind: kindOf(status), resume: true });
-      }}>查看</button>
-    </div> : null}
+    {running && !open && status ? <p className="transfer-progress vault-switching" role="status" data-testid="vault-switching">
+      <span className="spinner" aria-hidden="true" />{status.message}</p> : null}
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
-    {open?.kind === 'open' && current ? <OpenOtherDialog resume={open.resume}
-      {...(open.source ? { source: open.source } : {})} onBackground={toBackground} onClose={close} /> : null}
-    {open?.kind === 'create' && current ? <CreateDialog resume={open.resume}
-      onBackground={toBackground} onClose={close} /> : null}
+    {open?.kind === 'open' && current ? <OpenOtherDialog {...(open.source ? { source: open.source } : {})} onClose={close} /> : null}
+    {open?.kind === 'create' && current ? <CreateDialog onClose={close} /> : null}
   </section>;
 }
 
-function useRelocation(resume: boolean) {
-  const [phase, setPhase] = useState<'input' | 'running' | 'done' | 'failed'>(resume ? 'running' : 'input');
+function useRelocation() {
+  const [phase, setPhase] = useState<'input' | 'running' | 'done' | 'failed'>('input');
   const [outcome, setOutcome] = useState<TransferStatus | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const progress = useTransferProgress(phase === 'running');
-  const followed = useRef(false);
-
-  async function follow(): Promise<void> {
-    const status = await followTransfer();
-    const next = relocationPhase(status);
-    setOutcome(status);
-    if (next !== 'done') setFailure(status.message);
-    setPhase(next);
-  }
-
-  useEffect(() => {
-    if (resume && !followed.current) {
-      followed.current = true;
-      follow().catch((error: unknown) => { setFailure(errorText(error, '無法讀取進度。')); setPhase('failed'); });
-    }
-  }, [resume]);
 
   async function start(request: () => Promise<TransferStatus>): Promise<void> {
     setFailure(null);
     setPhase('running');
     try {
       await request();
-      await follow();
+      const status = await followTransfer();
+      const next = relocationPhase(status);
+      setOutcome(status);
+      if (next !== 'done') setFailure(status.message);
+      setPhase(next);
     } catch (error) {
       setFailure(errorText(error, '操作失敗，請稍後再試。'));
       setPhase('input');
@@ -134,21 +103,19 @@ function SwitchOutcome({ outcome, done, testId }: { outcome: TransferStatus; don
 
 type NewVaultForm = { loaded: false } | { loaded: true; name: string; location: string };
 
-function CreateDialog({ resume, onBackground, onClose }: {
-  resume: boolean; onBackground: () => void; onClose: (switched: boolean) => void;
-}) {
+function CreateDialog({ onClose }: { onClose: (switched: boolean) => void }) {
   const desktop = window.xrCollectorDesktop;
   const [form, setForm] = useState<NewVaultForm>({ loaded: false });
-  const { check, checking, ready } = useNewVaultCheck(form.loaded ? form.location : '', form.loaded ? form.name : '', form.loaded);
-  const { phase, outcome, failure, progress, start, setFailure } = useRelocation(resume);
+  const { check, checking } = useNewVaultCheck(form.loaded ? form.location : '', form.loaded ? form.name : '', form.loaded);
+  const { phase, outcome, failure, progress, start, setFailure } = useRelocation();
 
   useEffect(() => {
     api.getVaultSetup().then((setup) => setForm({ loaded: true, name: setup.newVault.name, location: setup.newVault.location }))
       .catch((error: unknown) => setFailure(errorText(error, '無法讀取預設位置。')));
   }, []);
 
-  const setName = (name: string) => setForm((current) => (current.loaded ? { ...current, name } : current));
-  const setLocation = (location: string) => setForm((current) => (current.loaded ? { ...current, location } : current));
+  const setName = (name: string) => { setFailure(null); setForm((current) => (current.loaded ? { ...current, name } : current)); };
+  const setLocation = (location: string) => { setFailure(null); setForm((current) => (current.loaded ? { ...current, location } : current)); };
 
   async function chooseLocation(): Promise<void> {
     try {
@@ -170,10 +137,9 @@ function CreateDialog({ resume, onBackground, onClose }: {
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={() => onClose(false)}>取消</button>
-        <button type="button" className="button primary" disabled={!ready || !form.loaded}
+        <button type="button" className="button primary" disabled={!form.loaded}
           onClick={() => { if (form.loaded) void start(() => api.createVault(form.location, form.name)); }} data-testid="create-vault-confirm">建立</button>
       </> : null}
-      {phase === 'running' ? <button type="button" className="button" onClick={onBackground}>在背景繼續</button> : null}
       {phase === 'done' || phase === 'failed'
         ? <button type="button" className="button primary" onClick={() => onClose(phase === 'done')} data-testid="transfer-close">{phase === 'done' ? '完成' : '關閉'}</button>
         : null}
@@ -181,12 +147,10 @@ function CreateDialog({ resume, onBackground, onClose }: {
   </Modal>;
 }
 
-function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
-  resume: boolean; source?: string; onBackground: () => void; onClose: (switched: boolean) => void;
-}) {
+function OpenOtherDialog({ source: chosen, onClose }: { source?: string; onClose: (switched: boolean) => void }) {
   const [source, setSource] = useState(chosen ?? '');
   const [looking, setLooking] = useState(false);
-  const { phase, outcome, failure, progress, start, setFailure } = useRelocation(resume);
+  const { phase, outcome, failure, progress, start, setFailure } = useRelocation();
 
   async function open(path: string): Promise<void> {
     setFailure(null);
@@ -203,8 +167,8 @@ function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
   }
 
   useEffect(() => {
-    if (chosen && !resume) void open(chosen);
-  }, [chosen, resume]);
+    if (chosen) void open(chosen);
+  }, [chosen]);
 
   const typing = phase === 'input' && !chosen;
   return <Modal title="開啟既有知識庫" {...(typing ? { width: 'form' as const } : {})} busy={phase === 'running'} onDismiss={() => onClose(phase === 'done')} testId="open-vault-dialog">
@@ -219,7 +183,6 @@ function OpenOtherDialog({ resume, source: chosen, onBackground, onClose }: {
         <button type="button" className="button primary" disabled={!source.trim() || looking} onClick={() => void open(source.trim())} data-testid="open-vault-confirm">開啟</button>
       </> : null}
       {phase === 'input' && chosen ? <button type="button" className="button" onClick={() => onClose(false)}>關閉</button> : null}
-      {phase === 'running' ? <button type="button" className="button" onClick={onBackground}>在背景繼續</button> : null}
       {phase === 'done' || phase === 'failed'
         ? <button type="button" className="button primary" onClick={() => onClose(phase === 'done')} data-testid="transfer-close">{phase === 'done' ? '完成' : '關閉'}</button>
         : null}

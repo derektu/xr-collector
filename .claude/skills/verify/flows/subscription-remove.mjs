@@ -7,7 +7,7 @@
 // covered by tests/transport/server/routes/subscriptions.lifecycle.test.ts and the other HTTP tests.
 import { idle, subscribe } from '../scripts/lib/seed.mjs';
 import { apiIds, deletedIds, indexIds, sameIds, vaultIds } from './lib/document-ids.mjs';
-import { recordRequests, screenAt } from './lib/revision.mjs';
+import { recordRequests } from './lib/requests.mjs';
 
 export const name = 'subscription-remove';
 export const title = '移除訂閱：取消、預設保留文件、確認後文件仍可閱讀';
@@ -28,10 +28,7 @@ export async function run({ instance, page, record, waitFor }) {
   const row = by(`source-row-${feed.id}`);
   const dialog = by('confirm-remove');
   // The dialog states the document count the list shows, so the list must show every document first.
-  // A revision read right after the last save can still precede it: the server publishes a round of
-  // changes once the round ends, so the list's count is the state to wait for.
   const openRemove = async () => {
-    await screenAt(page, instance);
     await waitFor(async () => (await row.locator('.numeric').innerText()).trim() === String(ids.length), `list shows ${ids.length} documents`);
     await waitFor(async () => (await by('notice').count()) === 0, 'no toast over the page', { timeout: 15_000 });
     await page.getByRole('button', { name: `${feed.title} 的更多動作`, exact: true }).click();

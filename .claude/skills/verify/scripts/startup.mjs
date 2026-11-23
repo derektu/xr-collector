@@ -108,9 +108,7 @@ try {
 
   await record.scenario('STARTUP-02', '主視窗載入，沒有 console error 與未捕捉的例外', async ({ expect, shot }) => {
     const window = desktop.window;
-    // The screen has read the server once it shows a revision; errors of the first load are in by then.
-    await waitFor(() => window.evaluate(() => Boolean(document.documentElement.dataset.revision)), 'the main window read the server', { timeout: 60_000 });
-    await window.getByTestId('nav-documents').click();
+    await window.getByTestId('nav-documents').click({ timeout: 60_000 });
     await window.getByTestId('document-list').getByText(FIXTURE.title).first().waitFor({ timeout: 60_000 });
     expect(desktop.pageErrors.length === 0, `未捕捉的例外 ${desktop.pageErrors.length} 個`, { id: 'startup.page-errors', expected: [], actual: desktop.pageErrors });
     expect(desktop.consoleErrors.length === 0, `console error ${desktop.consoleErrors.length} 個`, { id: 'startup.console-errors', expected: [], actual: desktop.consoleErrors });

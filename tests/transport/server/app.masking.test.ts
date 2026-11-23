@@ -92,12 +92,21 @@ describe('HTTP answers', () => {
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address() as { port: number };
     const controller = new AbortController();
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/events?after=${origin}`, { signal: controller.signal });
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/events`, { signal: controller.signal });
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let text = '';
-    while (!text.includes('event: change')) text += decoder.decode((await reader.read()).value, { stream: true });
-    while (!text.slice(text.indexOf('event: change')).includes('\n\n')) text += decoder.decode((await reader.read()).value, { stream: true });
+    const readUntil = async (done: () => boolean) => {
+      while (!done()) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error(`event stream ended: ${text}`);
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+    };
+    await readUntil(() => text.includes('event: hello'));
+    changes.note({ kind: 'pacing', group: `group ${SECRET}` });
+    changes.flush();
+    await readUntil(() => text.includes('event: change') && text.slice(text.indexOf('event: change')).includes('\n\n'));
     controller.abort();
     expect(text).toContain('"group":"group [已遮蔽]"');
     expect(text).not.toContain(SECRET);

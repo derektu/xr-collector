@@ -22,7 +22,7 @@ describe('screens without polling', () => {
     expect(using(/setInterval\(/u)).toEqual([]);
   });
 
-  it('keeps timeouts to typing pauses, hover, notices, read spacing and midnight', () => {
+  it('keeps timeouts to typing pauses, hover, notices, read spacing and the tray at midnight', () => {
     expect(using(/setTimeout\(/u)).toEqual([
       'src/desktop/electron/tray.ts', // spaces reads after changes; draws again at midnight
       'src/transport/web/AddContent.tsx', // recognizes an address after a pause in typing
@@ -30,9 +30,7 @@ describe('screens without polling', () => {
       'src/transport/web/App.tsx', // hides a notice
       'src/transport/web/Documents.tsx', // searches after a pause in typing
       'src/transport/web/NewVaultFields.tsx', // checks a typed name or location after a pause in typing
-      'src/transport/web/SourceDetail.tsx', // saves a typed setting after a pause in typing
       'src/transport/web/use-changes.ts', // spaces reads after changes; opens the change stream again after the server refused it
-      'src/transport/web/use-day.ts', // draws day-relative labels again at midnight
     ]);
   });
 });

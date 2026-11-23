@@ -35,29 +35,24 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
     for (const wake of [...waiting]) wake();
   });
 
-  serve(app, API_ROUTES.events, async (request: FastifyRequest<{ Querystring: { after?: string } }>, reply) => {
+  serve(app, API_ROUTES.events, async (_request, reply) => {
     if (streams.size >= MAX_STREAMS) throw new CollectorError('too_many_streams', '同時開啟的事件連線過多，請關閉其他連線後再試。');
-    const lastEventId = request.headers['last-event-id'];
-    const after = parseCursor(typeof lastEventId === 'string' ? lastEventId : request.query.after);
-    stream(reply, after);
+    stream(reply);
   });
 
-  function stream(reply: FastifyReply, after: ReturnType<typeof parseCursor>): void {
+  function stream(reply: FastifyReply): void {
     reply.hijack();
     const response = reply.raw;
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
       'XR-Revision': changes.revision,
     });
-    const send = (event: string, data: unknown, id?: string) => {
-      response.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${maskSecretsJson(data)}\n\n`);
+    const send = (event: string, data: unknown) => {
+      response.write(`event: ${event}\ndata: ${maskSecretsJson(data)}\n\n`);
     };
     response.write('retry: 1000\n\n');
-    const catchup = after ? changes.since(after) : null;
-    if (catchup?.kind === 'reset') send('reset', { revision: changes.revision }, changes.revision);
-    else send('hello', { revision: changes.revision }, after ? undefined : changes.revision);
-    for (const batch of catchup?.kind === 'batches' ? catchup.batches : []) send('change', batch, batch.revision);
-    const unsubscribe = changes.subscribe((batch) => send('change', batch, batch.revision));
+    send('hello', { revision: changes.revision });
+    const unsubscribe = changes.subscribe((batch) => send('change', batch));
     const heartbeat = setInterval(() => response.write(': \n\n'), HEARTBEAT_MS);
     heartbeat.unref();
     const end = () => {

@@ -63,8 +63,8 @@ async function snapshot() {
   const instance = attach(need('run'));
   const name = need('name');
   const { page, close } = await openPage(instance, { route: o.route, colorScheme: o.theme });
-  // The screen has read the server (`data-revision`) or shows Onboarding, its fonts are loaded and its styles drawn.
-  await waitFor(() => page.evaluate(() => Boolean(document.documentElement.dataset.revision || document.querySelector('.onboarding-screen'))), 'the screen read the server');
+  // The App or Onboarding shows with no loading indicator left, its fonts are loaded and its styles drawn.
+  await waitFor(() => page.evaluate(() => Boolean(document.querySelector('.shell, .onboarding-screen') && !document.querySelector('.loading, [data-loading="true"]'))), 'the screen shows its data');
   await page.evaluate(() => document.fonts.ready);
   await painted(page);
   await mkdir(instance.evidence, { recursive: true });

@@ -1,7 +1,7 @@
 // The change push the window and Agents follow instead of polling: /api/events publishes a scoped
 // change for each kind of data change under revisions that increase one by one, every response
-// names its XR-Revision, a reconnecting reader catches up or is reset, and /api/changes answers a
-// waiting read. A missed change leaves the window showing outdated jobs, documents or settings.
+// names its XR-Revision, and /api/changes answers a waiting read from a revision or resets it. A
+// missed change leaves the window showing outdated jobs, documents or settings.
 import { request as httpRequest } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,7 +26,7 @@ afterEach(async () => {
 const CHANNEL = { id: 'UCchangeevents00000000000', title: 'Changes', url: 'https://www.youtube.com/channel/UCchangeevents00000000000' };
 const video = (id: string): DiscoveredYouTubeVideo => ({ id, title: `Video ${id}`, url: `https://www.youtube.com/watch?v=${id}`, publishedAt: null, upcoming: false });
 
-interface StreamEvent { event: string; id: string | null; data: { revision: string; changes?: Change[] } }
+interface StreamEvent { event: string; data: { revision: string; changes?: Change[] } }
 
 /** Reads the event stream at `base` until closed. */
 async function openEvents(base: string, headers: Record<string, string> = {}) {
@@ -48,7 +48,7 @@ async function openEvents(base: string, headers: Record<string, string> = {}) {
             buffer = buffer.slice(end + 2);
             const field = (name: string) => block.split('\n').find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2) ?? null;
             const event = field('event');
-            if (event) events.push({ event, id: field('id'), data: JSON.parse(field('data')!) });
+            if (event) events.push({ event, data: JSON.parse(field('data')!) });
           }
         }
       } catch { /* closed by the test */ }
@@ -233,27 +233,6 @@ describe('change events', () => {
     expect(number(write.headers.get('XR-Revision')), 'a write includes its own change').toBeGreaterThan(number(before));
     expect(write.headers.get('XR-Revision')).toBe(runtime.changes.revision);
     expect((await fetch(`${ui}/api/schedule`)).headers.get('XR-Revision')).toBe(runtime.changes.revision);
-  });
-
-  it('catches a reconnecting reader up from its last revision, and resets one it cannot', async () => {
-    const { ui, send } = await start();
-    const first = await openEvents(ui);
-    const hello = await first.next((event) => event.event === 'hello', 'hello');
-    first.close();
-    await send('PUT', '/api/schedule', { enabled: false });
-    await send('PUT', '/api/schedule', { enabled: true });
-
-    const again = await openEvents(ui, { 'Last-Event-ID': hello.data.revision });
-    await again.change((change) => change.kind === 'schedule', 'missed schedule change');
-    expect(again.events.find((event) => event.event === 'reset')).toBeUndefined();
-    const replayed = again.batches().map((batch) => number(batch.revision));
-    expect(replayed[0]).toBe(number(hello.data.revision) + 1);
-    again.close();
-
-    const other = await openEvents(ui, { 'Last-Event-ID': 'ffffffff:1' });
-    const reset = await other.next((event) => event.event === 'reset', 'reset');
-    expect(reset.data.revision).toBe(hello.data.revision.replace(/:\d+$/u, `:${replayed.at(-1)}`));
-    other.close();
   });
 
   it('answers a waiting read with the next matching changes, or nothing once the wait ends', async () => {

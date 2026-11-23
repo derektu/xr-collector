@@ -8,7 +8,7 @@ import { Icon } from './icons.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { sourcePath } from './source-presentation.js';
 import { readUntil } from './read-until.js';
-import { changeHub, useChanges } from './use-changes.js';
+import { changeHub, useChangeRead, useChanges } from './use-changes.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 type ReaderState =
@@ -38,23 +38,17 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   const subscriptionChanges = useChanges(['documents'], (change) => change.kind === 'subscription');
   const documentChanges = useChanges(['documents'], (change) => change.kind === 'document' && change.id === id);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    subscriptionChanges.track(api.listSubscriptions(controller.signal)
-      .then((list) => setSubscribed(new Set(list.subscriptions.map((source) => `${source.type}:${source.id}`)))));
-    return () => controller.abort();
-  }, [subscriptionChanges.tick]);
+  useChangeRead(subscriptionChanges, [], (signal) => api.listSubscriptions(signal), (outcome) => {
+    if ('value' in outcome) setSubscribed(new Set(outcome.value.subscriptions.map((source) => `${source.type}:${source.id}`)));
+  });
 
-  useEffect(() => {
-    const controller = new AbortController();
-    documentChanges.track(api.readDocument(id, controller.signal).then((document) => setState({ kind: 'ready', document })).catch((error: unknown) => {
-      if (controller.signal.aborted) return;
-      if (error instanceof ApiError && error.code === 'document_not_found') setState({ kind: 'missing' });
-      else if (error instanceof ApiError && error.code === 'document_deleted') setState({ kind: 'deleted' });
-      else { setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這份文件。' }); throw error; }
-    }));
-    return () => controller.abort();
-  }, [id, documentChanges.tick]);
+  useChangeRead(documentChanges, [id], (signal) => api.readDocument(id, signal), (outcome) => {
+    if ('value' in outcome) { setState({ kind: 'ready', document: outcome.value }); return; }
+    const { error } = outcome;
+    if (error instanceof ApiError && error.code === 'document_not_found') setState({ kind: 'missing' });
+    else if (error instanceof ApiError && error.code === 'document_deleted') setState({ kind: 'deleted' });
+    else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這份文件。' });
+  });
 
   useEffect(() => {
     if (recollect.kind !== 'running') return undefined;

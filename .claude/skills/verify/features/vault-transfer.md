@@ -33,7 +33,7 @@ Preconditions:
 - **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-compare`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
 - **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
 - **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`。
-- **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 只在可以建立時可按。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
+- **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 不等檢查結果；不能建立時按下由伺服器拒絕，`create-vault-failure` 顯示原因。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
 - **開啟其他。** Web：`vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-confirm` 先檢查該資料夾是知識庫再切換（不是知識庫時顯示 `open-vault-failure`），`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
 - **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「建立新的知識庫…」「開啟既有知識庫…」disabled。
 - **等待。** 以慢速收集製造進行中的工作，再開始匯入比對。等待期間工作頁、原始活動與摘要 API 仍可讀；收集步驟結束後比對完成，套用後確認收集繼續。

@@ -6,6 +6,7 @@ import type { SubscriptionSettings } from '../../shared/subscriptions/subscripti
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
+import { createLatestRequest } from './latest-request.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { currentRecognition, initials } from './source-presentation.js';
 import { resumeSummary, subscribeSummary, targetNoun } from './subscription-presentation.js';
@@ -35,7 +36,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ChosenSettings | null>(null);
-  const sequence = useRef(0);
+  const [recognitions] = useState(createLatestRequest);
 
   useEffect(() => {
     const element = dialog.current;
@@ -46,20 +47,17 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   useEffect(() => {
     const trimmed = url.trim();
     setFailure(null);
-    if (!trimmed) { sequence.current += 1; setRecognition({ state: 'idle' }); return undefined; }
-    const current = ++sequence.current;
-    const controller = new AbortController();
+    if (!trimmed) { setRecognition({ state: 'idle' }); return undefined; }
     setRecognition({ state: 'recognizing' });
     const timer = setTimeout(() => {
-      api.recognizeUrl(trimmed, controller.signal).then((result) => {
-        if (current === sequence.current) setRecognition({ state: 'done', input: trimmed, recognition: result });
-      }).catch((error: unknown) => {
-        if (controller.signal.aborted || current !== sequence.current) return;
+      recognitions.run((signal) => api.recognizeUrl(trimmed, signal)).then((answer) => {
+        if (answer.current) setRecognition({ state: 'done', input: trimmed, recognition: answer.value });
+      }, (error: unknown) => {
         setRecognition({ state: 'error', message: error instanceof Error ? error.message : '無法辨識這個網址。' });
       });
     }, RECOGNIZE_DELAY_MS);
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [url, mode]);
+    return () => { clearTimeout(timer); recognitions.cancel(); };
+  }, [url, recognitions]);
 
   async function perform(action: RecognitionAction, found: UrlRecognition): Promise<void> {
     setBusy(true);
@@ -77,7 +75,6 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
 
   function switchMode(next: AddMode): void {
     setMode(next);
-    setChosen(null);
     input.current?.focus();
   }
 

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type {
   ActivityGroupPage,
   ActivityLogHealth,
-  ActivityQuery,
   ActivitySummaryEntry,
   JobEvent,
 } from '../../shared/activity/activity-types.js';
@@ -33,10 +32,9 @@ import {
 import { api } from './api-client.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import { Icon } from './icons.js';
-import { useChanges } from './use-changes.js';
+import { useChangeRead, useChanges } from './use-changes.js';
 import { ActivityGroupPages, type GroupPagesState } from './activity-group-pages.js';
 import { readerPath } from './document-presentation.js';
-import { readFilteredJob } from './filtered-job.js';
 import { jobTitle } from './job-presentation.js';
 import { isOneOf } from './one-of.js';
 import { failureLabel, sourcePath, sourceRouteForPath } from './source-presentation.js';
@@ -75,15 +73,12 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   const jobChanges = useChanges(['jobs']);
   const logFlight = useRef<{ filter: string; again: boolean } | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    subscriptionChanges.track(api.listSubscriptions(controller.signal).then((list) => setSubscriptions(list.subscriptions)));
-    return () => controller.abort();
-  }, [subscriptionChanges.tick]);
+  useChangeRead(subscriptionChanges, [], (signal) => api.listSubscriptions(signal), (outcome) => {
+    if ('value' in outcome) setSubscriptions(outcome.value.subscriptions);
+  });
 
   const currentFilter = useRef(filter);
   currentFilter.current = filter;
-  const filterQuery = useRef<{ filter: string; query: ActivityQuery } | null>(null);
   useEffect(() => {
     logGeneration.current += 1;
     logFlight.current = null;
@@ -95,51 +90,42 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   useEffect(() => {
     const requested = filter;
     if (logFlight.current?.filter === requested) { logFlight.current.again = true; return; }
-    if (filterQuery.current?.filter !== requested) filterQuery.current = { filter: requested, query: activityQuery(state, new Date()) };
-    const query = filterQuery.current.query;
     const load = (): void => {
       const flight = { filter: requested, again: false };
       logFlight.current = flight;
-      const reading = read();
-      logChanges.track(reading);
-      void reading.catch(() => undefined).then(() => {
+      void read().then(() => {
         if (logFlight.current !== flight) return;
         logFlight.current = null;
         if (flight.again) load();
       });
     };
-    const read = () => (effectiveMode === 'summary'
-      ? api.activitySummary({ ...query, limit: LOG_PAGE })
-      : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
-      if (currentFilter.current !== requested) return;
-      setLog((previous) => {
-        const loaded = previous?.filter === requested ? previous : null;
-        if (page.view === 'raw') {
-          return loaded ? { ...loaded, events: mergeNewest(loaded.events, page.events), health: page.log }
-            : { filter: requested, events: page.events, entries: [], nextCursor: page.nextCursor, health: page.log };
-        }
-        const merged = loaded ? mergeSummary(loaded, page) : page;
-        return { filter: requested, events: [], entries: merged.entries, nextCursor: merged.nextCursor, health: page.log };
+    const read = () => {
+      const query = activityQuery(state, new Date());
+      return (effectiveMode === 'summary'
+        ? api.activitySummary({ ...query, limit: LOG_PAGE })
+        : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
+        if (currentFilter.current !== requested) return;
+        setLog((previous) => {
+          const loaded = previous?.filter === requested ? previous : null;
+          if (page.view === 'raw') {
+            return loaded ? { ...loaded, events: mergeNewest(loaded.events, page.events), health: page.log }
+              : { filter: requested, events: page.events, entries: [], nextCursor: page.nextCursor, health: page.log };
+          }
+          const merged = loaded ? mergeSummary(loaded, page) : page;
+          return { filter: requested, events: [], entries: merged.entries, nextCursor: merged.nextCursor, health: page.log };
+        });
+        setLogError(null);
+      }, (error: unknown) => {
+        if (currentFilter.current === requested) setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
       });
-      setLogError(null);
-    }).catch((error: unknown) => {
-      if (currentFilter.current === requested) {
-        setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
-      }
-      throw error;
-    });
+    };
     load();
-  }, [filter, logChanges.tick, effectiveMode]);
+  }, [filter, logChanges, effectiveMode]);
 
-  useEffect(() => {
-    if (!state.jobId) { setFilteredJob(null); jobChanges.track(Promise.resolve()); return undefined; }
-    let alive = true;
-    jobChanges.track(readFilteredJob((id) => api.getJob(id), state.jobId).then((job) => { if (alive) setFilteredJob(job); }, (error: unknown) => {
-      if (alive) setFilteredJob(null);
-      throw error;
-    }));
-    return () => { alive = false; };
-  }, [state.jobId, jobChanges.tick]);
+  const jobId = state.jobId;
+  useChangeRead(jobChanges, [jobId], (signal) => (jobId ? api.getJob(jobId, signal) : Promise.resolve(null)), (outcome) => {
+    setFilteredJob('value' in outcome ? outcome.value : null);
+  });
 
   function change(patch: Partial<ActivityViewState>): void {
     onState({ ...state, ...patch });
@@ -152,7 +138,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     const requestedGeneration = logGeneration.current;
     setLoadingOlder(true);
     try {
-      const query = filterQuery.current?.filter === filter ? filterQuery.current.query : activityQuery(state, new Date());
+      const query = activityQuery(state, new Date());
       const page = effectiveMode === 'summary'
         ? await api.activitySummary({ ...query, limit: LOG_PAGE, cursor: requestedCursor })
         : await api.activity({ ...query, limit: LOG_PAGE, cursor: requestedCursor });

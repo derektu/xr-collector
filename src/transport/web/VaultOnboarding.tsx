@@ -22,7 +22,7 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   const [name, setName] = useState(status.newVault.name);
   const [location, setLocation] = useState(status.newVault.location);
   const [described, setDescribed] = useState<PackageDescription | null>(null);
-  const { check, checking, ready } = useNewVaultCheck(location, name, screen !== 'home');
+  const { check, checking } = useNewVaultCheck(location, name, screen !== 'home');
   const desktop = window.xrCollectorDesktop;
   const pathEntry = desktop ? 'dialog' : 'manual';
 
@@ -116,7 +116,7 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   if (screen === 'create') {
     content = <OnboardingStep title="建立新的知識庫" busy={busy} onBack={back} testId="onboarding-create-form">
       {fields()}
-      <div className="ob-actions"><button type="button" className="button primary" disabled={busy || !ready}
+      <div className="ob-actions"><button type="button" className="button primary" disabled={busy}
         onClick={() => void run({ action: 'create', location, name })} data-testid="onboarding-create-confirm">{busy ? '正在建立…' : '建立'}</button></div>
       {failure}
     </OnboardingStep>;
@@ -124,7 +124,7 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
     content = <OnboardingStep title="從匯出檔建立知識庫" busy={busy} onBack={back} testId="onboarding-import-form">
       {fields(<PackageRow described={described} busy={busy} pathEntry={pathEntry}
         onChoose={() => void choosePackage()} onSubmitPath={(path) => void readPackage(path)} />)}
-      <div className="ob-actions"><button type="button" className="button primary" disabled={busy || !ready || !described}
+      <div className="ob-actions"><button type="button" className="button primary" disabled={busy || !described}
         onClick={() => described && void run({ action: 'import', location, name, packagePath: described.path })}
         data-testid="onboarding-import-confirm">{busy ? '正在匯入…' : '建立並匯入'}</button></div>
       {failure}

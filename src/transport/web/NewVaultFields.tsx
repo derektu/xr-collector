@@ -8,7 +8,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '無法檢查這個位置，請稍後再試。';
 }
 
-export function useNewVaultCheck(location: string, name: string, enabled = true): { check: NewVaultCheck | null; checking: boolean; ready: boolean } {
+export function useNewVaultCheck(location: string, name: string, enabled = true): { check: NewVaultCheck | null; checking: boolean } {
   const [check, setCheck] = useState<NewVaultCheck | null>(null);
   const [checking, setChecking] = useState(true);
   useEffect(() => {
@@ -26,7 +26,7 @@ export function useNewVaultCheck(location: string, name: string, enabled = true)
     }, CHECK_DELAY_MS);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [location, name, enabled]);
-  return { check, checking, ready: !checking && !!check?.path && !check.problem };
+  return { check, checking };
 }
 
 export function ListRow({ title, detail, children, testId, field }: { title: string; detail?: ReactNode; children?: ReactNode; testId?: string; field?: boolean }) {

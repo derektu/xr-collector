@@ -5,12 +5,13 @@ import type { SubscriptionSettings } from '../../shared/subscriptions/subscripti
 import { useSourceDeclarations } from './source-declarations.js';
 import { typedNumber } from './source-presentation.js';
 
-export function CollectionSettingsFields({ idPrefix, type, fields, value, onChange, disabled = false }: {
+export function CollectionSettingsFields({ idPrefix, type, fields, value, onChange, onCommitNumber, disabled = false }: {
   idPrefix: string;
   type: string | null;
   fields: SourceSettingField[];
   value: SubscriptionSettings;
   onChange: (patch: Partial<SubscriptionSettings>) => void;
+  onCommitNumber?: () => void;
   disabled?: boolean;
 }) {
   const declarations = useSourceDeclarations();
@@ -24,7 +25,8 @@ export function CollectionSettingsFields({ idPrefix, type, fields, value, onChan
       return <span className="setting-number">
         <input {...attributes} type="text" inputMode="numeric" autoComplete="off" value={String(value[key] ?? '')} disabled={disabled}
           aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId(key) : undefined} data-testid={`${idPrefix}-${key}`}
-          onChange={(event) => onChange({ [key]: typedNumber(event.target.value) } as Partial<SubscriptionSettings>)} />
+          onChange={(event) => onChange({ [key]: typedNumber(event.target.value) } as Partial<SubscriptionSettings>)}
+          onBlur={onCommitNumber} onKeyDown={(event) => { if (event.key === 'Enter') onCommitNumber?.(); }} />
         <span>{declared.unit}</span>
       </span>;
     }

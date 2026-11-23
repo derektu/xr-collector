@@ -23,13 +23,10 @@ import {
   shortTimeLabel,
 } from './source-presentation.js';
 import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
-import { useDay } from './use-day.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
-
-const TYPED_SAVE_DELAY_MS = 600;
 
 export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDocument, onNotice, onRemoved }: {
   type: string;
@@ -42,7 +39,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
   onRemoved: (message: string) => void;
 }) {
   const declarations = useSourceDeclarations();
-  const today = useDay();
+  const today = new Date();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -50,35 +47,21 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
   const [saving, setSaving] = useState<Saving>({ kind: 'idle' });
   const [savingSettings, setSavingSettings] = useState<SubscriptionSettings | null>(null);
   const [draft, setDraft] = useState<SubscriptionSettings | null>(null);
-  const typedSave = useRef<{ timer: ReturnType<typeof setTimeout>; send: () => void } | null>(null);
   const [reload, setReload] = useState(0);
-  const saveSequence = useRef(0);
-  const saveInFlight = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
-  const read = useLiveRead(['subscriptions'], (signal) => api.subscriptionDetail(type, id, signal).then((detail) => ({ detail }), (error: unknown) => {
-    if (error instanceof ApiError && error.code === 'subscription_not_found') return { detail: null };
-    throw error;
-  }), [type, id, reload]);
+  const read = useLiveRead(['subscriptions'], (signal) => api.subscriptionDetail(type, id, signal), [type, id, reload]);
   useEffect(() => {
     const error = read.error;
+    if (error instanceof ApiError && error.code === 'subscription_not_found') { setState({ kind: 'missing' }); return; }
     if (error) {
       setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
       return;
     }
     if (!read.value) return;
-    if (!read.value.detail) { setState({ kind: 'missing' }); return; }
-    setState({ kind: 'ready', detail: read.value.detail });
-    if (!saveInFlight.current) setSavingSettings(null);
+    setState({ kind: 'ready', detail: read.value });
+    setSavingSettings(null);
   }, [read.value, read.error]);
-
-  useEffect(() => () => {
-    const waiting = typedSave.current;
-    if (waiting) {
-      clearTimeout(waiting.timer);
-      waiting.send();
-    }
-  }, []);
 
   const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />訂閱</button>;
   if (state.kind === 'loading') return <>{back}<p className="loading" role="status">正在讀取…</p></>;
@@ -106,47 +89,39 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     }
   }
 
+  const typedKeys = fields.filter((field) => field.input === 'number').map((field) => field.key);
+  const typedPart = (settings: SubscriptionSettings): Partial<SubscriptionSettings> =>
+    Object.fromEntries(typedKeys.map((key) => [key, settings[key]])) as Partial<SubscriptionSettings>;
+
   function editSettings(patch: Partial<SubscriptionSettings>): void {
     const next = { ...(draft ?? savingSettings ?? source.settings), ...patch } as SubscriptionSettings;
-    if (typedSave.current) clearTimeout(typedSave.current.timer);
-    typedSave.current = null;
-    if (settingsErrors(fields, next).length > 0) {
+    const typed = Object.keys(patch).some((key) => typedKeys.includes(key));
+    if (typed || settingsErrors(fields, next).length > 0) {
       setDraft(next);
       setSaving({ kind: 'idle' });
       return;
     }
-    const send = () => {
-      typedSave.current = null;
-      setDraft(null);
-      saveSettings(next);
-    };
-    if (!Object.keys(patch).some((key) => fields.find((field) => field.key === key)?.input === 'number')) {
-      send();
-      return;
-    }
-    setDraft(next);
-    typedSave.current = { timer: setTimeout(send, TYPED_SAVE_DELAY_MS), send };
+    setDraft(null);
+    saveSettings(next, draft ? { ...typedPart(draft), ...patch } : patch);
   }
 
-  function saveSettings(patch: Partial<SubscriptionSettings>): void {
-    const sequence = ++saveSequence.current;
-    setSavingSettings({ ...(savingSettings ?? source.settings), ...patch } as SubscriptionSettings);
+  function commitTyped(): void {
+    if (!draft || settingsErrors(fields, draft).length > 0) return;
+    setDraft(null);
+    saveSettings(draft, typedPart(draft));
+  }
+
+  function saveSettings(shown: SubscriptionSettings, patch: Partial<SubscriptionSettings>): void {
+    setSavingSettings(shown);
     setSaving({ kind: 'saving' });
-    saveInFlight.current = true;
     const send = async () => {
       try {
         await api.updateSubscriptionSettings(source.type, source.id, patch);
-        if (sequence !== saveSequence.current) return;
-        saveInFlight.current = false;
         setSaving({ kind: 'saved' });
-        setReload((value) => value + 1);
       } catch (error) {
-        if (sequence !== saveSequence.current) return;
-        saveInFlight.current = false;
-        setSavingSettings(null);
         setSaving({ kind: 'error', message: error instanceof Error ? error.message : '無法儲存，請稍後再試。' });
-        setReload((value) => value + 1);
       }
+      setReload((value) => value + 1);
     };
     saveQueue.current = saveQueue.current.then(send);
   }
@@ -204,7 +179,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       </div>
       <div className="panel-body">
         <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={draft ?? savingSettings ?? source.settings}
-          onChange={editSettings} />
+          onChange={editSettings} onCommitNumber={commitTyped} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null, today)}</p>
       </div>

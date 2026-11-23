@@ -160,6 +160,7 @@ export async function run({ instance, page, record, waitFor }) {
     await by('detail-settings-intervalMinutes').selectOption('30');
     await by('detail-settings-backfillDays').fill('2');
     await by('detail-settings-backfillMaxItems').fill('25');
+    await by('detail-settings-backfillMaxItems').press('Enter');
     await waitFor(async () => {
       const saved = (await instance.api('/api/subscriptions')).subscriptions.find((x) => x.id === feed.id)?.settings;
       return saved?.intervalMinutes === 30 && saved.backfillDays === 2 && saved.backfillMaxItems === 25;

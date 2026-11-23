@@ -24,7 +24,6 @@ import {
   type SourceListState,
 } from './source-presentation.js';
 import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
-import { useDay } from './use-day.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 export interface SourcesProps {
@@ -40,7 +39,7 @@ export interface SourcesProps {
 
 export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd, onOpenSource, onNotice }: SourcesProps) {
   const declarations = useSourceDeclarations();
-  const today = useDay();
+  const today = new Date();
   const read = useLiveRead(['subscriptions'], (signal) => api.listSubscriptions(signal), []);
   const list: SubscriptionList | null = read.value;
   const loadError = read.error ? (read.error instanceof Error ? read.error.message : '無法讀取訂閱。') : null;
