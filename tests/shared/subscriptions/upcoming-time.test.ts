@@ -1,6 +1,3 @@
-// When a coming time is shown as today, tomorrow or a later date, as the subscription status column
-// and the tray's next check say it: a wrong day sends the user to look for a check that already ran
-// or is a day away.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { upcomingTime, upcomingTimeText } from '../../../src/shared/subscriptions/upcoming-time.js';
 
