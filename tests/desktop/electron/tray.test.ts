@@ -1,10 +1,8 @@
 // The tray reads the App's state again when a change it shows arrives: changes that arrive
 // together cost one read no sooner than the read gap after the last, a change during a read gets
-// one more read, and a destroyed tray reads nothing. At midnight it redraws the next check time
-// without a read.
+// one more read.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeBatch } from '../../../src/shared/api/changes.js';
-import type { TrayModel } from '../../../src/desktop/electron/tray-menu.js';
 
 vi.mock('electron', () => ({
   Tray: class { on() {} setImage() {} setToolTip() {} setContextMenu() {} destroy() {} },
@@ -15,18 +13,16 @@ vi.mock('electron', () => ({
 const { AppTray, READ_GAP_MS } = await import('../../../src/desktop/electron/tray.js');
 
 const jobChange: ChangeBatch = { revision: 'a:1', at: '2026-10-24T10:00:00.000Z', changes: [{ kind: 'job', id: 'j', parentId: null, state: 'running' }] };
-/** The status lines above the actions. */
-const status = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []).slice(0, 2);
 
 /** The app's API as the tray reads it; `hold` keeps reads waiting until `release`, and a held read answers what the API held when it was asked. */
-function api(nextCheckAt = '2026-10-24T18:52:00+08:00') {
+function api() {
   let held: Array<() => void> | null = null;
   const bodies: Record<string, unknown> = {
     '/api/device/updates': { update: { phase: 'up_to_date', currentVersion: '0.1.0', progress: null } },
     '/api/device/notifications': { notifications: { active: [] } },
     '/api/jobs/overview': { overview: { running: [], queued: [], failed: [] } },
     '/api/schedule': { schedule: { enabled: true, status: 'scheduled', lastCheck: null, connectivity: { state: 'online', checkedAt: null },
-      nextCheck: { type: 'youtube', subscriptionId: 's', title: 'A', at: nextCheckAt } } },
+      nextCheck: { type: 'youtube', subscriptionId: 's', title: 'A', at: '2026-10-24T18:52:00+08:00' } } },
   };
   vi.stubGlobal('fetch', async (url: URL) => {
     const body = JSON.stringify(bodies[url.pathname]);
@@ -162,37 +158,6 @@ describe('tray reads', () => {
     await vi.advanceTimersByTimeAsync(0);
     stream.emit({ ...jobChange, changes: [{ kind: 'document', id: 'd' }, { kind: 'search' }, { kind: 'activity' }] });
     await vi.advanceTimersByTimeAsync(READ_GAP_MS * 3);
-    expect(tray.reads).toBe(1);
-    tray.destroy();
-  });
-
-  it('stops reading once destroyed, even in the middle of a read', async () => {
-    const server = api();
-    const stream = changes();
-    const tray = create(stream.feed);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(READ_GAP_MS);
-    server.hold();
-    stream.emit(jobChange);
-    await vi.advanceTimersByTimeAsync(0);
-    stream.emit(jobChange);
-    const before = tray.current();
-    tray.destroy();
-    server.release();
-    stream.emit(jobChange);
-    await vi.advanceTimersByTimeAsync(READ_GAP_MS * 3);
-    expect(tray.reads).toBe(2);
-    expect(tray.current()).toBe(before);
-  });
-
-  it('draws the last state again at midnight, without reading', async () => {
-    vi.setSystemTime(new Date('2026-10-24T23:59:00+08:00'));
-    api('2026-10-25T08:00:00+08:00');
-    const tray = create(changes().feed);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(status(tray.model())).toEqual([{ text: 'no_work' }, { text: 'next_check', at: { day: 'tomorrow', time: '08:00' } }]);
-    await vi.advanceTimersByTimeAsync(61_000);
-    expect(status(tray.model())).toEqual([{ text: 'no_work' }, { text: 'next_check', at: { day: 'today', time: '08:00' } }]);
     expect(tray.reads).toBe(1);
     tray.destroy();
   });

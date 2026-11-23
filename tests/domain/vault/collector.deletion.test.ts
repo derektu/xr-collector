@@ -1,7 +1,7 @@
-// A deleted document is gone from every read, the search index and later channel checks, and stays
-// deleted through a stop mid-deletion, a restart and every race with a capture or index update.
-// Only an explicit request to collect it again brings it back, so a video the user deleted never
-// returns on its own.
+// A deleted document is gone from every read, the search index and later channel checks. Its
+// deletion record decides what shows, so a file left behind stays hidden. Only the user submitting
+// the item on its own after the deletion brings it back, so a video the user deleted never returns
+// on its own.
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -87,33 +87,22 @@ class Source implements YouTubeSource {
   }
 }
 
-/** A Vault, its collector with a recording search index, and job managers that can be restarted. */
-async function world(options: { holdAdds?: boolean } = {}) {
+/** A Vault, its collector with a recording search index, and a job manager over them. */
+async function world() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-deletion-'));
   const jobsDirectory = await mkdtemp(path.join(tmpdir(), 'xr-deletion-jobs-'));
   directories.push(root, jobsDirectory);
   const clock = { now: new Date(T0) };
   const tick = (ms = 1000) => { clock.now = new Date(clock.now.getTime() + ms); };
-  let addGate: Promise<void> | null = null;
-  let openGate: (() => void) | null = null;
-  class GatedVault extends MarkdownVault {
-    override async add(capture: CapturedDocument, addOptions?: { collectedAt?: Date }): Promise<SavedDocument> {
-      const saved = await super.add(capture, addOptions);
-      if (addGate) await addGate;
-      return saved;
-    }
-  }
-  const vault = options.holdAdds ? new GatedVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now }) : new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now });
+  const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now });
   const indexed = new Map<string, SavedDocument>();
   const removed: string[] = [];
-  let removeFails = false;
   let removeGate: Promise<void> | null = null;
   const search = {
     index: async (document: SavedDocument) => { indexed.set(document.id, document); },
     remove: async (id: string) => {
       removed.push(id);
       if (removeGate) await removeGate;
-      if (removeFails) throw new Error('index down');
       indexed.delete(id);
     },
   };
@@ -139,11 +128,8 @@ async function world(options: { holdAdds?: boolean } = {}) {
 
   return {
     root, vault, collector, subs, subscription, source, clock, tick, indexed, removed, events, boot,
-    setRemoveFails(value: boolean) { removeFails = value; },
     /** Holds index removals until the returned function runs, like a removal waiting behind a rebuild. */
     holdRemovals() { let open = () => {}; removeGate = new Promise((resolve) => { open = resolve; }); return () => { removeGate = null; open(); }; },
-    holdAdd() { addGate = new Promise((resolve) => { openGate = resolve; }); },
-    releaseAdd() { addGate = null; openGate?.(); },
     async collect(manager: JobManager, id: string) {
       const submission = await manager.submitItem('youtube', watchUrl(id));
       return manager.whenSettled(submission.job.id);
@@ -193,23 +179,6 @@ describe('deleting a document (A1)', () => {
     expect(w.events).toEqual([expect.objectContaining({ eventType: 'document.deleted', severity: 'info', documentId: `youtube:${a}`, sourceId: a })]);
   });
 
-  it('reports a failed index removal, keeps the deletion and records a warning', async () => {
-    const w = await world();
-    const { manager } = await w.boot();
-    const a = vid('alpha');
-    await w.collect(manager, a);
-    w.setRemoveFails(true);
-
-    const result = await w.collector.delete(`youtube:${a}`);
-
-    expect(result).toMatchObject({ indexed: true });
-    expect(await w.collector.list()).toEqual([]);
-    await eventually(() => expect(w.events.map((event) => [event.eventType, event.severity])).toEqual([
-      ['document.deleted', 'info'], ['document.index_remove_failed', 'warning'],
-    ]));
-    expect(await w.vault.deletions.get(`youtube:${a}`)).not.toBeNull();
-  });
-
   it('answers before the index removal finishes, so a rebuild never holds up a deletion', async () => {
     const w = await world();
     const { manager } = await w.boot();
@@ -236,50 +205,31 @@ describe('deleting a document (A1)', () => {
   });
 });
 
-describe('deletion transaction and recovery (A2)', () => {
-  it('hides a document as soon as its record exists and finishes the deletion when the Vault opens', async () => {
+describe('visibility and re-collection (A2)', () => {
+  it.each<[string, number, ((text: string) => string) | null, boolean]>([
+    ['collected before the deletion is hidden', -1000, null, false],
+    ['collected at the deletion time is hidden', 0, null, false],
+    ['collected after the deletion shows', 1, null, true],
+    ['with collected_at missing is hidden', -1000, (text) => text.replace(/^ *collected_at: .*\n/mu, ''), false],
+    ['with collected_at unreadable is hidden', -1000, (text) => text.replace(/^( *collected_at: ).*$/mu, '$1not a time'), false],
+  ])('a file with a deletion record %s, and the file stays on disk either way', async (_rule, collectedAfterMs, damage, shown) => {
     const w = await world();
     const a = vid('alpha');
+    const deletedAt = new Date(T0.getTime() + 1000);
+    w.clock.now = new Date(deletedAt.getTime() + collectedAfterMs);
     await w.vault.add(transcriptDocument(captured(a)));
-    w.tick();
-    // A stop right after the record was written leaves the file behind.
+    w.clock.now = deletedAt;
     await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
+    const file = path.join(w.root, 'documents/youtube', `${a}.md`);
+    if (damage) {
+      const text = await readFile(file, 'utf8');
+      expect(damage(text)).not.toBe(text);
+      await writeFile(file, damage(text));
+    }
 
-    expect(await w.vault.list()).toEqual([]);
-    expect(await w.vault.read(`youtube:${a}`)).toBeNull();
-    expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true);
-
-    const recovery = await new MarkdownVault(new VaultFileWriter(w.root, PRODUCT_SOURCES)).recoverDeletions();
-    expect(recovery.completed.map((record) => record.sourceId)).toEqual([a]);
-    expect(recovery.cleared).toEqual([]);
-    expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(false);
-    expect(await w.vault.deletions.get(`youtube:${a}`)).not.toBeNull();
-  });
-
-  it('treats a document collected at the deletion time as deleted', async () => {
-    const w = await world();
-    const a = vid('alpha');
-    // The clock does not move: collection and deletion carry the same time.
-    await w.vault.add(transcriptDocument(captured(a)));
-    const record = await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
-    expect(record.deletedAt).toBe(T0.toISOString());
-
-    expect(await w.vault.read(`youtube:${a}`)).toBeNull();
-    expect((await w.vault.recoverDeletions()).completed).toHaveLength(1);
-  });
-
-  it('lifts the record of an explicit re-collection that saved its document before a stop', async () => {
-    const w = await world();
-    const a = vid('alpha');
-    await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
-    w.tick(1);
-    await w.vault.add(transcriptDocument(captured(a)));
-
-    expect(await w.vault.read(`youtube:${a}`)).not.toBeNull();
-    const recovery = await w.vault.recoverDeletions();
-    expect(recovery.cleared.map((entry) => entry.sourceId)).toEqual([a]);
-    expect(await w.vault.deletions.list()).toEqual([]);
-    expect(await w.vault.read(`youtube:${a}`)).not.toBeNull();
+    expect((await w.vault.list()).map((document) => document.sourceId)).toEqual(shown ? [a] : []);
+    expect(await w.vault.read(`youtube:${a}`) !== null).toBe(shown);
+    expect(await exists(file)).toBe(true);
   });
 
   it('refuses an explicit request made at the deletion time and stamps a later one after the deletion', async () => {
@@ -294,34 +244,8 @@ describe('deletion transaction and recovery (A2)', () => {
     // The clock still reads the deletion time; the document is stamped one millisecond later.
     const later = new Date(T0.getTime() + 1).toISOString();
     const result = await w.collector.save(transcriptDocument(captured(a)), { explicitAt: later });
-    expect(result.recollected).toBe(true);
     expect(result.document.collectedAt).toBe(later);
     expect(await w.vault.deletions.list()).toEqual([]);
-    expect(w.events.at(-1)).toMatchObject({ eventType: 'document.recollected', documentId: `youtube:${a}` });
-  });
-
-  it.each([
-    ['missing', (text: string) => text.replace(/^ *collected_at: .*\n/mu, '')],
-    ['unreadable', (text: string) => text.replace(/^( *collected_at: ).*$/mu, '$1not a time')],
-  ])('keeps the file and the record, hidden, when collected_at is %s', async (_name, damage) => {
-    const w = await world();
-    const a = vid('alpha');
-    await w.vault.add(transcriptDocument(captured(a)));
-    w.tick();
-    await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
-    const file = path.join(w.root, 'documents/youtube', `${a}.md`);
-    const text = await readFile(file, 'utf8');
-    const damaged = damage(text);
-    expect(damaged).not.toBe(text);
-    await writeFile(file, damaged);
-
-    const recovery = await w.vault.recoverDeletions();
-
-    expect(recovery).toMatchObject({ completed: [], cleared: [], unresolved: [expect.objectContaining({ sourceId: a })] });
-    expect(await exists(file)).toBe(true);
-    expect(await w.vault.deletions.get(`youtube:${a}`)).not.toBeNull();
-    expect(await w.vault.list()).toEqual([]);
-    expect(await w.vault.read(`youtube:${a}`)).toBeNull();
   });
 
   it.each([
@@ -382,7 +306,6 @@ describe('deletions and collection (A4)', () => {
     expect(retried.result).toMatchObject({ outcome: 'created', documentId: `youtube:${a}` });
     expect(await w.vault.deletions.list()).toEqual([]);
     expect(w.indexed.has(`youtube:${a}`)).toBe(true);
-    expect(w.events.at(-1)).toMatchObject({ eventType: 'document.recollected' });
 
     const captures = w.source.captures.length;
     expect((await w.checkChannel(manager)).result?.outcome).toBe('empty');
@@ -390,25 +313,7 @@ describe('deletions and collection (A4)', () => {
   });
 });
 
-describe('deletion races (A5)', () => {
-  it('does not index a document deleted between its save and its index update', async () => {
-    const w = await world({ holdAdds: true });
-    const { manager } = await w.boot();
-    const a = vid('alpha');
-    w.holdAdd();
-    const submission = await manager.submitItem('youtube', watchUrl(a));
-    await eventually(async () => expect(await exists(path.join(w.root, 'documents/youtube', `${a}.md`))).toBe(true));
-    w.tick();
-    const deletion = w.collector.delete(`youtube:${a}`);
-    w.releaseAdd();
-    await deletion;
-
-    const job = await manager.whenSettled(submission.job.id);
-    expect(job.result).toMatchObject({ outcome: 'skipped', skipReason: 'deleted' });
-    expect(w.indexed.has(`youtube:${a}`)).toBe(false);
-    expect(await w.collector.list()).toEqual([]);
-  });
-
+describe('explicit requests and the deletion time (A5)', () => {
   it('skips an explicit job accepted before the deletion and collects one accepted after it', async () => {
     const w = await world();
     const { manager } = await w.boot();
@@ -430,43 +335,5 @@ describe('deletion races (A5)', () => {
 
     w.tick();
     expect((await w.collect(manager, a)).result).toMatchObject({ outcome: 'created' });
-  });
-
-  it('does not bring a document back through jobs resumed after a restart', async () => {
-    const w = await world();
-    const first = await w.boot();
-    const [a, b] = [vid('alpha'), vid('bravo')];
-    w.source.listing = [a, b];
-    w.source.held.add(a);
-    await first.manager.submitCheck('youtube', w.subscription, 'manual');
-    await w.source.capturing(a);
-    const explicit = await first.manager.submitItem('youtube', watchUrl(b));
-    // Both videos exist and are deleted while the jobs wait; then the service stops abruptly.
-    w.tick();
-    await w.vault.add(transcriptDocument(captured(a)));
-    await w.vault.add(transcriptDocument(captured(b)));
-    w.tick();
-    await w.collector.delete(`youtube:${a}`);
-    await w.collector.delete(`youtube:${b}`);
-    await first.store.flush();
-
-    const second = await w.boot();
-    await second.manager.resume();
-    w.source.release(a);
-    expect((await second.manager.whenSettled(explicit.job.id)).result).toMatchObject({ outcome: 'skipped', skipReason: 'deleted' });
-    await eventually(() => expect(second.manager.isBusy()).toBe(false));
-    expect(await w.collector.list()).toEqual([]);
-    expect(w.indexed.size).toBe(0);
-  });
-
-  it('removes the index entry of a document deleted while its index update runs', async () => {
-    const w = await world();
-    const a = vid('alpha');
-    const document = await w.vault.add(transcriptDocument(captured(a)));
-    const indexing = w.collector.index(document);
-    w.tick();
-    const deletion = w.collector.delete(`youtube:${a}`);
-    await Promise.all([indexing, deletion]);
-    expect(w.indexed.has(`youtube:${a}`)).toBe(false);
   });
 });

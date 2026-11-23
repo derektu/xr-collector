@@ -40,7 +40,7 @@ Preconditions:
 - 選單本身是作業系統畫的，Playwright 截不到；選單內容以 `trayMenu` 斷言，圖示與選單外觀由實機目視確認。
 - Windows 的系統匣與提示需要登入的桌面；SSH 的 session 0 沒有系統匣。
 - `notifications(app)` 只證明 App 發出了 Windows 關窗提示，不證明畫面上出現。版本更新在所有平台都不送 OS notification。Windows 只為 App 身分與開始選單捷徑相符的程式顯示關窗提示，開發版的 electron.exe 沒有這個捷徑，所以提示是否出現只能用安裝版（`npm run package:win` 的安裝檔）實機目視。
-- 選單只在相關的變動事件後讀 API，兩次讀取至少間隔 1 秒，閒置時不讀；午夜時用上次讀到的狀態重畫，不讀 API。`trayMenu` 先讀一次才回傳，證明不了選單會自己更新；要驗證這一點用 `trayShown`。
+- 選單只在相關的變動事件後讀 API，兩次讀取至少間隔 1 秒，閒置時不讀。`trayMenu` 先讀一次才回傳，證明不了選單會自己更新；要驗證這一點用 `trayShown`。
 
 ## Regression flows
 

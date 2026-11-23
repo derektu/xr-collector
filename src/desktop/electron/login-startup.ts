@@ -1,10 +1,7 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { LoginStartupStatus } from '../../shared/api/device-types.js';
 import { loginStartupStatus, type LoginStartupAccess } from '../../shared/api/login-startup.js';
-import { replaceFile } from '../../shared/lib/json-file.js';
 
 export const LOGIN_STARTUP_ARGUMENT = '--login-startup';
 // On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
@@ -34,29 +31,18 @@ export interface LoginItemAdapter {
   set(options: { openAtLogin: boolean; enabled?: boolean; path?: string; args?: string[]; name?: string; type?: 'mainAppService' }): void;
 }
 
-interface RegistrationRecord {
-  version: 1;
-  path: string;
-  args: string[];
-}
-
 const WINDOWS_ARGS = [LOGIN_STARTUP_ARGUMENT];
 
 export class DesktopLoginStartup implements LoginStartupAccess {
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly adapter: LoginItemAdapter, private readonly recordPath: string) {}
+  constructor(private readonly adapter: LoginItemAdapter) {}
 
   async status(): Promise<LoginStartupStatus> {
     if (!this.adapter.isPackaged || !['darwin', 'win32'].includes(this.adapter.platform)) return unavailableStatus();
     try {
       if (this.adapter.platform === 'darwin') return macStatus(this.adapter.get({ type: 'mainAppService' }));
-      const current = windowsStatus(this.adapter.get(this.currentWindowsQueryOptions()), this.adapter.executablePath);
-      if (!current.enabled) {
-        const remembered = await this.readRecord();
-        if (remembered && !samePath(remembered.path, this.adapter.executablePath)) return loginStartupStatus('relocated');
-      }
-      return current;
+      return windowsStatus(this.adapter.get(this.currentWindowsQueryOptions()), this.adapter.executablePath);
     } catch (cause) {
       throw loginFailure('無法讀取作業系統的登入自啟狀態。', cause);
     }
@@ -71,7 +57,6 @@ export class DesktopLoginStartup implements LoginStartupAccess {
         if (this.adapter.platform === 'darwin') {
           this.adapter.set({ openAtLogin: enabled, type: 'mainAppService' });
         } else {
-          if (!enabled) await this.disableRememberedRegistration();
           this.adapter.set({ openAtLogin: enabled, enabled, ...this.currentWindowsOptions(), name: LOGIN_STARTUP_NAME });
         }
         const result = await this.status();
@@ -83,53 +68,10 @@ export class DesktopLoginStartup implements LoginStartupAccess {
             ? '作業系統沒有啟用登入自啟；請到系統設定允許 XR Collector。'
             : '作業系統仍顯示登入自啟已開啟，請到系統設定關閉 XR Collector。');
         }
-        if (!enabled && !await this.registrationWasRemoved()) {
-          throw new CollectorError('login_startup_failed', '作業系統仍保留 XR Collector 的登入項目，請到系統設定移除。');
-        }
-        if (this.adapter.platform === 'win32') {
-          if (enabled) await this.writeRecord({ version: 1, path: this.adapter.executablePath, args: WINDOWS_ARGS });
-          else {
-            await rm(this.recordPath, { force: true });
-            return this.status();
-          }
-        }
         return result;
       } catch (cause) {
         if (cause instanceof CollectorError) throw cause;
         throw loginFailure('無法更新登入自啟設定，請稍後再試。', cause);
-      }
-    });
-  }
-
-  async repairMovedRegistration(): Promise<{ repaired: boolean; status: LoginStartupStatus }> {
-    return this.serial(async () => {
-      let removed: RegistrationRecord | null = null;
-      try {
-        const current = await this.status();
-        if (this.adapter.platform !== 'win32' || !this.adapter.isPackaged || current.enabled) return { repaired: false, status: current };
-        const remembered = await this.readRecord();
-        if (!remembered || samePath(remembered.path, this.adapter.executablePath)) return { repaired: false, status: current };
-        const old = this.adapter.get(this.windowsQueryOptions(remembered.path, remembered.args));
-        const owned = ownedWindowsItem(old, remembered.path);
-        if (!owned?.enabled || !old.openAtLogin) return { repaired: false, status: current };
-        this.adapter.set({ openAtLogin: false, enabled: false, path: remembered.path, args: remembered.args, name: LOGIN_STARTUP_NAME });
-        removed = remembered;
-        this.adapter.set({ openAtLogin: true, enabled: true, ...this.currentWindowsOptions(), name: LOGIN_STARTUP_NAME });
-        const repaired = await this.status();
-        if (!repaired.enabled) throw new Error('read-back stayed disabled');
-        await this.writeRecord({ version: 1, path: this.adapter.executablePath, args: WINDOWS_ARGS });
-        return { repaired: true, status: repaired };
-      } catch (cause) {
-        if (removed) {
-          try {
-            this.adapter.set({ openAtLogin: true, enabled: true, path: removed.path, args: removed.args, name: LOGIN_STARTUP_NAME });
-            const restored = this.adapter.get(this.windowsQueryOptions(removed.path, removed.args));
-            const owned = ownedWindowsItem(restored, removed.path);
-            if (!restored.openAtLogin || !owned?.enabled) throw new Error('old registration read-back stayed disabled');
-          } catch {}
-        }
-        if (cause instanceof CollectorError) throw cause;
-        throw loginFailure('XR Collector 已搬到新位置，但無法修復登入自啟；請重新開啟設定。', cause);
       }
     });
   }
@@ -139,59 +81,7 @@ export class DesktopLoginStartup implements LoginStartupAccess {
   }
 
   private currentWindowsQueryOptions() {
-    return this.windowsQueryOptions(this.adapter.executablePath, WINDOWS_ARGS);
-  }
-
-  private windowsQueryOptions(executablePath: string, args: string[]) {
-    return { path: `"${executablePath}"`, args };
-  }
-
-  private async registrationWasRemoved(): Promise<boolean> {
-    if (this.adapter.platform === 'darwin') {
-      return this.adapter.get({ type: 'mainAppService' }).status === 'not-registered';
-    }
-    const remembered = await this.readRecord();
-    const registrations = [
-      this.currentWindowsQueryOptions(),
-      ...(remembered && !samePath(remembered.path, this.adapter.executablePath)
-        ? [this.windowsQueryOptions(remembered.path, remembered.args)] : []),
-    ];
-    return registrations.every((registration) => {
-      const settings = this.adapter.get(registration);
-      return Array.isArray(settings.launchItems)
-        && !settings.launchItems.some((item) => item.name === LOGIN_STARTUP_NAME && item.scope === 'user');
-    });
-  }
-
-  private async disableRememberedRegistration(): Promise<void> {
-    const remembered = await this.readRecord();
-    if (remembered && !samePath(remembered.path, this.adapter.executablePath)) {
-      this.adapter.set({ openAtLogin: false, enabled: false, path: remembered.path, args: remembered.args, name: LOGIN_STARTUP_NAME });
-    }
-  }
-
-  private async readRecord(): Promise<RegistrationRecord | null> {
-    try {
-      const value = JSON.parse(await readFile(this.recordPath, 'utf8')) as Partial<RegistrationRecord>;
-      return value.version === 1 && typeof value.path === 'string' && Array.isArray(value.args)
-        && value.args.every((argument) => typeof argument === 'string')
-        ? { version: 1, path: value.path, args: value.args } : null;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return null;
-      throw error;
-    }
-  }
-
-  private async writeRecord(record: RegistrationRecord): Promise<void> {
-    await mkdir(path.dirname(this.recordPath), { recursive: true });
-    const temporary = `${this.recordPath}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
-      await replaceFile(temporary, this.recordPath);
-    } catch (error) {
-      await rm(temporary, { force: true });
-      throw error;
-    }
+    return { path: `"${this.adapter.executablePath}"`, args: WINDOWS_ARGS };
   }
 
   private async serial<T>(operation: () => Promise<T>): Promise<T> {

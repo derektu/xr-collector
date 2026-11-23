@@ -8,7 +8,7 @@ import { storedDocumentStatus } from '../../shared/documents/document-status.js'
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { VaultFiles } from '../../shared/vault/vault-files.js';
 import type { CapturedDocument } from '../../shared/sources/source-contract.js';
-import { collectedAtReadable, collectedBeforeDeletion } from '../../shared/documents/deletion-rule.js';
+import { collectedBeforeDeletion } from '../../shared/documents/deletion-rule.js';
 import { documentId } from '../../shared/documents/document-id.js';
 import { DeletionLedger } from './deleted-documents.js';
 import { documentKeyFromId, documentKeyFromPath, documentPath } from './document-paths.js';
@@ -96,12 +96,6 @@ function toSavedDocument(sources: SourceRegistry, metadata: StoredMetadata, body
 
 export interface MarkdownVaultOptions {
   now?: () => Date;
-}
-
-export interface DeletionRecovery {
-  completed: DeletionRecord[];
-  cleared: DeletionRecord[];
-  unresolved: DeletionRecord[];
 }
 
 export class MarkdownVault implements DocumentVault {
@@ -227,25 +221,6 @@ export class MarkdownVault implements DocumentVault {
     const key = documentKeyFromId(this.sources, id);
     if (!key) return;
     await this.files.remove(documentPath(key));
-  }
-
-  async recoverDeletions(): Promise<DeletionRecovery> {
-    const recovery: DeletionRecovery = { completed: [], cleared: [], unresolved: [] };
-    for (const record of await this.deletions.list()) {
-      const id = documentId(record);
-      const document = await this.readStored(id);
-      if (!document) continue;
-      if (!collectedAtReadable(document.collectedAt)) {
-        recovery.unresolved.push(record);
-      } else if (collectedBeforeDeletion(document.collectedAt, record.deletedAt)) {
-        await this.remove(id);
-        recovery.completed.push(record);
-      } else {
-        await this.deletions.clear(id);
-        recovery.cleared.push(record);
-      }
-    }
-    return recovery;
   }
 
   async portableDeletions(): Promise<DeletionRecord[]> {
