@@ -18,6 +18,7 @@ import { transcriptOf } from '../../../support/youtube-documents.js';
 import { withYouTube } from '../../../support/youtube-sources.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 // The activity and job query routes: device data readable before a Vault is chosen, the summary,
 // group and retry routes with their statuses, and parameter validation. The rules behind the pages
@@ -152,7 +153,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
 
   it('answers the activity, job summary and retry routes for an authorized Agent, and rejects malformed queries', async () => {
     const { collector, jobs, activity } = services([new CollectorError('no_subtitles', '這支影片沒有可取得的既有字幕。')]);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, agentToken: 'agent-token-for-tests' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, activity, agentAuthorize: acceptsBearer('agent-token-for-tests') });
     cleanups.push(() => app.close());
     const headers = { authorization: 'Bearer agent-token-for-tests' };
     expect((await app.inject({ method: 'GET', url: '/api/activity' })).statusCode).toBe(401);

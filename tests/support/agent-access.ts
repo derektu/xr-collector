@@ -12,3 +12,6 @@ export async function startAgentAccess(options: AgentSettingsOptions & AgentServ
   await startAgentListener(service, server);
   return service;
 }
+
+/** Accepts exactly `Bearer <token>`, as an opened Agent connection does with its token. */
+export const acceptsBearer = (token: string) => (header: string | undefined): boolean => header === `Bearer ${token}`;

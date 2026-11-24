@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { BuildInfo } from '../../../../src/shared/api/update-types.js';
 import { createHttpApp } from '../../../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
@@ -22,7 +23,7 @@ describe('build information HTTP contract', () => {
   it('gives UI and authorized Agent the same immutable artifact while the Vault is not ready', async () => {
     const source = { ...info };
     const ui = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: source, notReady: () => '尚未設定 Vault。' });
-    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: source, notReady: () => '尚未設定 Vault。', agentToken: 'test-secret' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, buildInfo: source, notReady: () => '尚未設定 Vault。', agentAuthorize: acceptsBearer('test-secret') });
     apps.push(ui, agent);
     source.version = '9.9.9';
     const response = await ui.inject('/api/device/build-info');

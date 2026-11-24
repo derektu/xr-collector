@@ -20,6 +20,7 @@ import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js'
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -46,7 +47,7 @@ async function world() {
     sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
-  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
+  const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentAuthorize: acceptsBearer('agent-token') });
   const get = async (url: string) => {
     const response = await app.inject({ method: 'GET', url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };

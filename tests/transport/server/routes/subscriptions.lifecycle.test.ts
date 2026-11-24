@@ -18,6 +18,7 @@ import { youtubePlugin } from '../../../../src/domain/sources/youtube/server.js'
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -50,7 +51,7 @@ async function world(options: { failDeleting?: (id: string) => boolean } = {}) {
       return collector.delete(id);
     },
   });
-  const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentToken: 'agent-token' });
+  const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, subscriptions: [channels], agentAuthorize: acceptsBearer('agent-token') });
   const send = async (method: 'GET' | 'DELETE', url: string) => {
     const response = await agent.inject({ method, url, headers: { authorization: 'Bearer agent-token' } });
     return { status: response.statusCode, body: response.json() };

@@ -23,6 +23,7 @@ import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { video } from '../../../support/exchange-fixtures.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../../support/real-engine.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -84,7 +85,7 @@ async function setup(search?: Pick<TranscriptSearch, 'index'>, clock: { now: Dat
 }
 
 async function app(collector: Collector, search?: TranscriptSearch) {
-  const created = await createHttpApp({ sources: PRODUCT_SOURCES, collector, ...(search ? { search } : {}), agentToken: TOKEN });
+  const created = await createHttpApp({ sources: PRODUCT_SOURCES, collector, ...(search ? { search } : {}), agentAuthorize: acceptsBearer(TOKEN) });
   cleanup.push(() => created.close());
   return created;
 }

@@ -21,6 +21,7 @@ import { productSourcesWith } from '../../../support/product-sources.js';
 import { SyntheticYouTube } from '../../../support/synthetic-youtube.js';
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 // The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
@@ -87,7 +88,7 @@ async function world(connectivity?: ConnectivityAccess) {
   scheduler = new CollectionScheduler(services, new MemoryScheduleStore(), { now, pollIntervalMs: 24 * 60 * 60_000 });
   const options = { sources: SOURCES, collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates, ...(connectivity ? { connectivity } : {}) };
   const ui = await createHttpApp(options);
-  const agent = await createHttpApp({ ...options, agentToken: TOKEN });
+  const agent = await createHttpApp({ ...options, agentAuthorize: acceptsBearer(TOKEN) });
   const send = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown, app: FastifyInstance = agent) => {
     const response = await app.inject({
       method, url, headers: app === agent ? { authorization: `Bearer ${TOKEN}` } : {},
