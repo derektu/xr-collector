@@ -31,7 +31,6 @@ const CHECKS = [
   { applies: () => true, check: checkNpm },
   { applies: () => true, check: checkGit },
   { applies: () => true, check: checkInstalledDependencies },
-  { applies: ({ target }) => target === 'darwin-arm64', check: checkXcodeTools },
   { applies: ({ report }) => report, check: checkRuntimeCache },
   { applies: ({ report, target }) => report && target === 'darwin-arm64', check: checkMacSigning },
 ];
@@ -123,12 +122,6 @@ async function checkInstalledDependencies({ root }) {
   return ok('npm dependencies', 'installed');
 }
 
-async function checkXcodeTools({ run }) {
-  const label = 'Xcode Command Line Tools';
-  try { await run('xcrun', ['--find', 'swiftc']); } catch { return missing(label, 'swiftc is unavailable', 'xcode-select --install'); }
-  return ok(label, 'swiftc available');
-}
-
 async function checkRuntimeCache({ target, dependencies }) {
   const pieces = [
     { name: 'yt-dlp and Deno', prepare: (outputDir) => (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target, cacheOnly: true, outputDir }) },
@@ -151,7 +144,7 @@ async function checkRuntimeCache({ target, dependencies }) {
   return note(label, `not prepared: ${absent.join(', ')}`, prepareRuntimeCommand(target));
 }
 
-async function checkMacSigning({ root, dependencies }) {
+async function checkMacSigning({ root, run, dependencies }) {
   const label = 'Mac Developer ID signing';
   const signingRoot = path.join(root, 'keys', 'mac');
   const environmentFile = path.join(signingRoot, '.env');
@@ -171,6 +164,7 @@ async function checkMacSigning({ root, dependencies }) {
   } catch (error) {
     return missing(label, error.detail ?? error.message, error.fix ?? 'Fix the p12 in keys/mac, or remove keys/mac/.env to build ad-hoc packages only.');
   }
+  try { await run('xcrun', ['--find', 'notarytool']); } catch { return missing(label, 'notarytool is unavailable to notarize', 'xcode-select --install'); }
   return ok(label, `valid identity for team ${configuration.teamId}`);
 }
 

@@ -651,7 +651,7 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
       await mkdir(path.dirname(path.join(base, relative)), { recursive: true });
       await writeFile(path.join(base, relative), bytes, { mode: 0o755 });
     }
-    for (const [relative, bytes] of [['meilisearch', machO('meili')], ['xr-mac-update-helper', machO('helper')]] as const) await writeFile(path.join(base, relative), bytes, { mode: 0o755 });
+    await writeFile(path.join(base, 'meilisearch'), machO('meili'), { mode: 0o755 });
   }
   const pins = JSON.parse(await readFile('scripts/runtime-dependency-pins.json', 'utf8')).targets['darwin-arm64'];
   const identity = (bytes: Buffer) => ({ bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
@@ -697,11 +697,11 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
   const signed = await signStagedMacRuntimes({ appPath: path.join(root, 'XR.app'), sourceBin, identitySha1: 'A'.repeat(40), expectedTeamId: 'ABCDE12345', keychain: '/tmp/keychain' }, { run, prepareRuntimeDependencies: reconstructRuntimeDependencies });
   expect(signCalls.at(-1)).toBe(path.join(appBin, 'yt-dlp/_internal/Python.framework'));
   // Leaf files are signed concurrently; the framework starts only after every leaf has finished.
-  expect(maxSignsInFlight).toBe(4);
-  expect(leavesFinishedBeforeFramework).toBe(4);
-  expect(signCalls.slice(0, -1).sort()).toEqual(['meilisearch', 'xr-mac-update-helper', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']
+  expect(maxSignsInFlight).toBe(3);
+  expect(leavesFinishedBeforeFramework).toBe(3);
+  expect(signCalls.slice(0, -1).sort()).toEqual(['meilisearch', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']
     .map((relative) => path.join(appBin, relative)).sort());
-  expect(Object.keys(signed).sort()).toEqual(['deno', 'meilisearch', 'xr-mac-update-helper', 'yt-dlp/_internal/Python.framework', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']);
+  expect(Object.keys(signed).sort()).toEqual(['deno', 'meilisearch', 'yt-dlp/_internal/Python.framework', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']);
   expect(await readlink(path.join(appBin, 'yt-dlp/_internal/Python.framework/Versions/Current'))).toBe('3.14');
   expect(await readlink(path.join(appBin, 'yt-dlp/_internal/Python.framework/Python'))).toBe('Versions/Current/Python');
   expect(signed.meilisearch).toMatchObject({ teamId: 'ABCDE12345' });

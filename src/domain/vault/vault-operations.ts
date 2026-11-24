@@ -15,7 +15,7 @@ import { MarkdownVault } from './markdown-vault.js';
 import { createNewVault, newVaultFolder } from './new-vault.js';
 import type { OpenedVault } from './opened-vault.js';
 import {
-  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal, type UpdateLease,
+  VaultOperationLock, type OperationCompletion, type OperationReporter, type OperationTerminal,
 } from './operation-lock.js';
 import { backupFileName, checkExportFile, checkPackageFile, exportFileName, isSameFolder } from './transfer-files.js';
 import { inspectVaultDirectory, notAVault } from './vault-directory.js';
@@ -116,9 +116,6 @@ export class VaultOperations {
 
   /** Takes a write lease for one request, or throws while an operation runs; returns the release. */
   enterWrite(): () => void { return this.lock.enterWrite(); }
-
-  /** Excludes operations and new writes, then waits for current writes and collection to settle. */
-  prepareUpdate(signal: AbortSignal): Promise<UpdateLease> { return this.lock.prepareUpdate(signal); }
 
   /** Resolves once the operation under way has published its final state and the job records it changed are written. */
   async finished(): Promise<void> {

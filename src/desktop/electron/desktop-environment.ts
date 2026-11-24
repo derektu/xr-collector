@@ -1,22 +1,12 @@
-import {
-  appIdFromPackageMetadata,
-  updateRepositoryFromPackageMetadata,
-  GenericIndexSource,
-  GitHubReleasesSource,
-  type UpdateSource,
-} from '../../domain/updates/index.js';
-
 type Environment = Readonly<Record<string, string | undefined>>;
 
-export function windowsAppId(packageMetadata: unknown): string {
-  return appIdFromPackageMetadata(packageMetadata);
-}
+const PRODUCTION_APP_ID = 'com.moneydj.xrcollector';
 
-export function updateSourceFor(env: Environment, packageMetadata: unknown, request: typeof fetch): UpdateSource {
-  const repository = updateRepositoryFromPackageMetadata(packageMetadata);
-  return env.XR_COLLECTOR_UPDATE_BASE_URL
-    ? new GenericIndexSource(env.XR_COLLECTOR_UPDATE_BASE_URL, request)
-    : new GitHubReleasesSource(repository, request);
+/** The appId electron-builder packaged this App under: a validation package carries its own in package.json. */
+export function appIdOf(packageMetadata: unknown): string {
+  const appId = packageMetadata && typeof packageMetadata === 'object'
+    ? (packageMetadata as Record<string, unknown>).xrCollectorAppId : undefined;
+  return typeof appId === 'string' ? appId : PRODUCTION_APP_ID;
 }
 
 export function windowSize(env: Environment): { width: number; height: number } {

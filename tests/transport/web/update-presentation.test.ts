@@ -21,11 +21,11 @@ describe('sidebarUpdate', () => {
     expect(sidebarUpdate(status('available', { offer }))).toBe('available');
   });
 
-  it.each(['downloading', 'verifying', 'ready', 'waiting', 'installing'] as const)('names the real %s step', (phase) => {
+  it.each(['downloading', 'ready', 'installing'] as const)('names the real %s step', (phase) => {
     expect(sidebarUpdate(status(phase, { offer, ready: offer }))).toBe(phase);
   });
 
-  it.each(['ready', 'waiting', 'installing'] as const)('keeps %s quiet without a ready download', (phase) => {
+  it.each(['ready', 'installing'] as const)('keeps %s quiet without a ready download', (phase) => {
     expect(sidebarUpdate(status(phase, { offer }))).toBeNull();
   });
 

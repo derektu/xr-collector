@@ -1,7 +1,7 @@
 // Guards the developer, not the user: `npm run doctor:build` and the check before packaging
-// name each missing build prerequisite (host, Node, npm, Git, swiftc, dependencies) with its fix,
+// name each missing build prerequisite (host, Node, npm, Git, dependencies) with its fix,
 // and packaging stops before any work while one is missing. The runtime cache and Developer ID
-// state are reported without failing the check.
+// state, including the notarytool notarization needs, are reported without failing the check.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -38,7 +38,7 @@ function machine(responses: Responses) {
 
 const MAC_TOOLS: Responses = {
   'git --version': 'git version 2.50.1\n',
-  'xcrun --find swiftc': '/usr/bin/swiftc\n',
+  'xcrun --find notarytool': '/usr/bin/notarytool\n',
 };
 const WINDOWS_TOOLS: Responses = {
   'git --version': 'git version 2.45.0.windows.1\n',
@@ -66,18 +66,13 @@ it('picks the native package target of the build machine and rejects other platf
   expect(() => hostBuildTarget('linux')).toThrow(/macOS \(Apple Silicon\) or Windows x64/u);
 });
 
-it('passes a ready Mac with Git and swiftc, and a ready Windows machine with only Git', async () => {
-  expect(statuses(await check('darwin-arm64'))).toEqual({
-    Host: 'ok', Node: 'ok', npm: 'ok', Git: 'ok', 'npm dependencies': 'ok', 'Xcode Command Line Tools': 'ok',
-  });
-  expect(statuses(await check('win32-x64'))).toEqual({
-    Host: 'ok', Node: 'ok', npm: 'ok', Git: 'ok', 'npm dependencies': 'ok',
-  });
+it('passes a ready Mac or Windows machine with Git, without the notarization tools an ad-hoc build does not use', async () => {
+  const ready = { Host: 'ok', Node: 'ok', npm: 'ok', Git: 'ok', 'npm dependencies': 'ok' };
+  expect(statuses(await check('darwin-arm64', { tools: { 'git --version': 'git version 2.50.1\n' } }))).toEqual(ready);
+  expect(statuses(await check('win32-x64'))).toEqual(ready);
 });
 
-it('requires swiftc on a Mac and Git everywhere', async () => {
-  expect(byLabel(await check('darwin-arm64', { tools: { ...MAC_TOOLS, 'xcrun --find swiftc': new Error('no developer tools') } }), 'Xcode'))
-    .toMatchObject({ status: 'missing', fix: 'xcode-select --install' });
+it('requires Git everywhere', async () => {
   expect(byLabel(await check('win32-x64', { tools: { 'git --version': new Error('not found') } }), 'Git'))
     .toMatchObject({ status: 'missing', fix: expect.stringContaining('git-scm.com') });
 });
@@ -94,14 +89,14 @@ it('fails a wrong Node major or architecture, notes a patch mismatch and accepts
 it('stops packaging before any work with only the missing items', async () => {
   const dependencies = {
     projectRoot: await checkout(),
-    run: machine({ 'git --version': 'git version 2.50.1\n', 'xcrun --find swiftc': new Error('no developer tools') }),
+    run: machine({ 'git --version': 'git version 2.50.1\n' }),
     probePhysicalHost: async () => MAC_HOST,
-    nodeVersion: '22.22.3',
+    nodeVersion: '24.1.0',
     environment: { npm_execpath: '/npm-cli.js' },
   };
   const failure = await assertBuildEnvironment({ target: 'darwin-arm64' }, dependencies).catch((error: Error) => error);
   expect(failure.message).toMatch(/cannot build darwin-arm64 packages yet/u);
-  expect(failure.message).toContain('swiftc is unavailable');
+  expect(failure.message).toContain('.nvmrc pins 22.22.3');
   expect(failure.message).not.toContain('Git');
   expect(failure.message).toContain('npm run doctor:build');
 });
@@ -133,8 +128,9 @@ it('reports the runtime cache and Mac signing state without failing on either', 
   expect(byLabel(ready, 'Runtime cache')).toMatchObject({ status: 'ok', detail: 'yt-dlp and Deno, Meilisearch prepared' });
   expect(byLabel(ready, 'Mac Developer ID')).toMatchObject({ status: 'missing', detail: 'Signing environment is missing APPLE_TEAM_ID.' });
 
-  const signing = (checkDeveloperIdIdentity: () => Promise<unknown>) => check('darwin-arm64', {
+  const signing = (checkDeveloperIdIdentity: () => Promise<unknown>, tools = MAC_TOOLS) => check('darwin-arm64', {
     report: true,
+    tools,
     overrides: {
       prepareRuntimeDependencies: async () => undefined,
       prepareMeilisearch: async () => undefined,
@@ -151,6 +147,8 @@ it('reports the runtime cache and Mac signing state without failing on either', 
   });
   expect(await signing(async () => { throw new Error('security exited with status 51'); }))
     .toMatchObject({ status: 'missing', detail: 'security exited with status 51', fix: expect.stringContaining('keys/mac') });
+  expect(await signing(async () => ({ sha1: 'A'.repeat(40), teamId: 'ABCDE12345' }), { 'git --version': 'git version 2.50.1\n' }))
+    .toMatchObject({ status: 'missing', detail: 'notarytool is unavailable to notarize', fix: 'xcode-select --install' });
 
   const windows = await check('win32-x64', {
     report: true,
@@ -193,11 +191,11 @@ it.skipIf(process.platform === 'win32')('prints the path, holder and delete comm
 it('prints each item with its fix', () => {
   expect(formatResults([
     { status: 'ok', label: 'Git', detail: '2.50.1' },
-    { status: 'missing', label: 'Xcode Command Line Tools', detail: 'swiftc is unavailable', fix: 'xcode-select --install' },
+    { status: 'missing', label: 'Mac Developer ID signing', detail: 'notarytool is unavailable to notarize', fix: 'xcode-select --install' },
     { status: 'note', label: 'Runtime cache', detail: 'not prepared: yt-dlp and Deno', fix: 'npm run prepare:runtime -- mac' },
   ])).toBe([
     '  ok      Git: 2.50.1',
-    '  missing Xcode Command Line Tools: swiftc is unavailable',
+    '  missing Mac Developer ID signing: notarytool is unavailable to notarize',
     '          fix: xcode-select --install',
     '  note    Runtime cache: not prepared: yt-dlp and Deno',
     '          next: npm run prepare:runtime -- mac',

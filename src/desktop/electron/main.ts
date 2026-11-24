@@ -4,52 +4,40 @@ import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, powerMonitor, shell } from 'electron';
 import { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import { internetProbe } from '../../domain/jobs/index.js';
-import type { BuildInfo } from '../../shared/api/update-types.js';
 import { createSourcePlugins } from '../../app/plugins/index.js';
 import { DESKTOP_AGENT_PORT, bundledResources } from '../../app/runtime/index.js';
-import {
-  loadBuildInfo,
-  UpdateService,
-  UnavailableInstaller,
-  acknowledgeMacUpdateShutdown,
-  MacNativeInstaller,
-  rollBackFailedMacLaunch,
-  WindowsNativeInstaller,
-  type NativeInstaller,
-  type UpdateApplyRequest,
-} from '../../domain/updates/index.js';
+import { loadBuildInfo, UpdateService } from '../../domain/updates/index.js';
 import { startCollectorServer, type CollectorServer } from '../../transport/server/index.js';
 import { backupFolder, exportFolder } from '../../domain/vault/index.js';
 import { CloseHintRecord, hintStillRunning } from './close-hint.js';
 import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
 import { DesktopLoginStartup, type LoginItemAdapter } from './login-startup.js';
-import { runUpdateCoordinator } from './update-coordinator.js';
+import { desktopUpdater, type DesktopUpdater } from './app-updater.js';
 import { startUpdateCheckScheduler } from './update-check-scheduler.js';
 import { ElectronSystemNotifications } from './system-notifications.js';
 import { claimLaunch } from './desktop-launch.js';
 import { registerDesktopDialogs } from './desktop-dialogs.js';
-import { updateSourceFor, windowsAppId, windowSize } from './desktop-environment.js';
+import { appIdOf, windowSize } from './desktop-environment.js';
 import { MainWindow } from './main-window.js';
 import { registerPageChannels } from './page-channels.js';
 import { exposeValidationControl } from './validation-control.js';
 import { watchSleep } from './sleep-watch.js';
-import { beforeQuitAction, type ShutdownOwner } from './shutdown-owner.js';
 
 let runtime: CollectorServer | null = null;
 let tray: AppTray | null = null;
 let closeHint: CloseHintRecord | null = null;
 let updateService: UpdateService | null = null;
 let updateCheckScheduler: ReturnType<typeof startUpdateCheckScheduler> | null = null;
-let shutdownOwner: ShutdownOwner = 'none';
-let startupBuildInfo: BuildInfo | null = null;
+let updater: DesktopUpdater | null = null;
+let installAfterQuit = false;
 let isQuitting = false;
 const collectionPause = new CollectionPause();
 let stopSleepWatch: (() => void) | null = null;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
-const packageMetadata: unknown = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8'));
+const appId = appIdOf(JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')));
 
 const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
 if (validationHidden) app.dock?.hide();
@@ -58,7 +46,7 @@ const validationNotifications: { id?: string; title: string; content: string }[]
 
 // Windows shows an app's notifications only when its Start menu shortcut carries the same AppUserModelID.
 // https://www.electronjs.org/docs/latest/tutorial/notifications#windows
-if (process.platform === 'win32') app.setAppUserModelId(windowsAppId(packageMetadata));
+if (process.platform === 'win32') app.setAppUserModelId(appId);
 
 const resources = bundledResources(app.isPackaged
   ? { packaged: true, resourcesPath: process.resourcesPath }
@@ -110,7 +98,7 @@ app.whenReady().then(async () => {
     get: (options) => app.getLoginItemSettings(options),
     set: (options) => app.setLoginItemSettings(options),
   };
-  const loginStartup = new DesktopLoginStartup(loginItemAdapter);
+  const loginStartup = new DesktopLoginStartup(loginItemAdapter, appId);
   registerPageChannels({
     ipc: ipcMain,
     theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json')),
@@ -135,22 +123,26 @@ app.whenReady().then(async () => {
     program: resources.program,
   });
   const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
-  startupBuildInfo = buildInfo;
-  const updateRequest: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
-  const updateSource = updateSourceFor(process.env, packageMetadata, updateRequest);
-  const nativeInstaller: NativeInstaller = process.platform === 'darwin'
-    ? new MacNativeInstaller({ packaged: app.isPackaged, helper: resources.macUpdateHelper, executablePath: process.execPath, current: buildInfo })
-    : process.platform === 'win32' ? new WindowsNativeInstaller(app.isPackaged) : new UnavailableInstaller();
+  updater = desktopUpdater({
+    packaged: app.isPackaged,
+    platform: process.platform,
+    feedUrl: process.env.XR_COLLECTOR_UPDATE_BASE_URL,
+    installFailed: (error) => { void reopenAfterFailedInstall(error); },
+  });
   const startupUpdateEvents: Array<{ severity: 'info' | 'warning' | 'error'; type: EventType; message: string; code?: string }> = [];
   updateService = await UpdateService.open({
-    identity: { version: buildInfo.version, target: buildInfo.target },
-    currentBuildId: buildInfo.buildId,
-    source: updateSource, installer: nativeInstaller, directory: path.join(app.getPath('userData'), 'updates'), request: updateRequest,
+    updater,
+    currentVersion: app.getVersion(),
+    target: buildInfo.target,
+    directory: path.join(app.getPath('userData'), 'updates'),
     event: (severity, type, message, code) => {
       if (runtime) runtime.recordDeviceEvent(severity, type, message, code);
       else startupUpdateEvents.push({ severity, type, message, ...(code ? { code } : {}) });
     },
-    apply: (request) => { void coordinateUpdate(request, nativeInstaller); },
+    restartToInstall: () => {
+      installAfterQuit = true;
+      app.quit();
+    },
   });
   runtime = await startCollectorServer({
     buildInfo,
@@ -202,8 +194,7 @@ app.whenReady().then(async () => {
     });
   }
   launch.startupFinished();
-  await updateService.confirmLaunch((error) => console.error('Unable to confirm update launch', error));
-  if (nativeInstaller.available) {
+  if (updater.available) {
     updateCheckScheduler = startUpdateCheckScheduler({
       check: () => updateService?.check() ?? Promise.resolve(),
       lastAttemptAt: () => updateService?.status().lastCheckAttemptAt ?? null,
@@ -212,20 +203,14 @@ app.whenReady().then(async () => {
   }
 }).catch(async (error) => {
   console.error(error);
-  let safelyStopped = true;
   try {
     await updateService?.close();
     await runtime?.close();
     runtime = null;
   } catch (cleanupError) {
-    safelyStopped = false;
-    console.error('Unable to safely stop failed startup before update rollback', cleanupError);
+    console.error('Unable to stop the failed startup', cleanupError);
   }
-  const rolledBack = safelyStopped && app.isPackaged && process.platform === 'darwin' && startupBuildInfo
-    ? await rollBackFailedMacLaunch(resources.macUpdateHelper, startupBuildInfo, () => { isQuitting = true; app.exit(1); })
-      .catch((rollbackError) => { console.error('Unable to roll back failed macOS startup', rollbackError); return false; })
-    : false;
-  if (!rolledBack) app.quit();
+  app.quit();
 });
 
 // Electron quits the app once every window has closed unless something listens for window-all-closed.
@@ -241,35 +226,16 @@ function continueAfterSleep(): void {
   void updateCheckScheduler?.wake().catch((error: unknown) => console.error('Unable to check for updates after wake', error));
 }
 
-async function coordinateUpdate(request: UpdateApplyRequest, installer: NativeInstaller): Promise<void> {
-  const activeRuntime = runtime;
-  if (!activeRuntime) return request.failed('update_apply_failed', 'Collector 服務尚未就緒。');
-  await runUpdateCoordinator(request, installer, activeRuntime, {
-    shutdownOwned: () => { shutdownOwner = 'update'; },
-    completed: () => { updateCheckScheduler?.stop(); updateCheckScheduler = null; runtime = null; isQuitting = true; app.quit(); },
-    terminalFailure: async (error) => {
-      shutdownOwner = 'none'; runtime = null; isQuitting = true;
-      updateCheckScheduler?.stop();
-      updateCheckScheduler = null;
-      tray?.destroy(); tray = null;
-      const notice: Electron.MessageBoxOptions = {
-        type: 'error', title: 'App 更新未安裝', message: 'App 更新沒有安裝。',
-        detail: `Collector 無法安全完成本次停止，將結束程式。請重新開啟 XR Collector 後再試。\n\n${error.message}`,
-        buttons: ['結束 XR Collector'], defaultId: 0, noLink: true,
-      };
-      const window = mainWindow.current;
-      await (window ? dialog.showMessageBox(window, notice) : dialog.showMessageBox(notice)).catch(() => undefined);
-      mainWindow.destroy();
-      app.exit(1);
-    },
-  });
+async function reopenAfterFailedInstall(error: unknown): Promise<void> {
+  await updateService?.recordInstallFailure(error).catch((error: unknown) => console.error('Unable to record the failed update install', error));
+  app.relaunch();
+  app.exit(0);
 }
 
 app.on('before-quit', (event) => {
-  const action = beforeQuitAction(shutdownOwner, runtime);
-  if (action.kind === 'quit') return;
+  const activeRuntime = runtime;
+  if (!activeRuntime) return;
   event.preventDefault();
-  if (action.kind === 'wait-for-update') return;
   isQuitting = true;
   stopSleepWatch?.();
   stopSleepWatch = null;
@@ -278,19 +244,21 @@ app.on('before-quit', (event) => {
   tray?.destroy();
   tray = null;
   mainWindow.destroy();
-  const activeRuntime = action.runtime;
   runtime = null;
   void (async () => {
     try {
       await updateService?.close();
       await activeRuntime.close();
-      if (app.isPackaged && process.platform === 'darwin' && startupBuildInfo) {
-        await acknowledgeMacUpdateShutdown(startupBuildInfo);
-      }
     } catch (error) {
       console.error('Unable to safely close before quitting', error);
-    } finally {
-      app.quit();
+      if (installAfterQuit) {
+        await reopenAfterFailedInstall(error);
+        return;
+      }
     }
+    // The NSIS installer that quitAndInstall starts ends every process running from the install folder, forcibly after about two seconds.
+    // https://github.com/electron-userland/electron-builder/blob/electron-builder%4026.15.3/packages/app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh
+    if (installAfterQuit && updater) updater.quitAndInstall();
+    else app.quit();
   })();
 });

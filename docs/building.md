@@ -12,9 +12,7 @@ XR Collector 是 Node.js／TypeScript 專案：Fastify 提供 API 與 Web UI，E
 | Node.js 22.22.3 | [nvm](https://github.com/nvm-sh/nvm)：`nvm install` 讀取 repo 的 `.nvmrc` | [nvm-windows](https://github.com/coreybutler/nvm-windows)：`nvm install 22.22.3 64`，再以系統管理員執行 `nvm use 22.22.3` |
 | GitHub CLI（只有發布需要） | `brew install gh` | [GitHub CLI](https://cli.github.com) 的 Windows 安裝檔，或 `winget install GitHub.cli` |
 
-Mac 的 Xcode Command Line Tools 同時提供 `swiftc`，用來編譯 App 內附的 macOS 更新 helper。Windows 不需要 Visual Studio 或其他 C++ 工具。
-
-`swiftc` 使用 `xcrun --show-sdk-path` 選出的 SDK，也就是 `/Library/Developer/CommandLineTools/SDKs/` 裡版本最新的一份。這個目錄留有比編譯器新的 SDK（例如裝過 beta 版工具留下的 `MacOSX27.0.sdk`）時，打包停在「macOS update helper」，錯誤是 `this SDK is not supported by the compiler`。刪除那份 SDK 與指向它的 symlink，或重新安裝 Command Line Tools，讓 `xcrun --show-sdk-path` 指向和 `swiftc --version` 相符的版本。
+Windows 不需要 Visual Studio 或其他 C++ 工具。
 
 Mac 的 Node 是原生 arm64（不經 Rosetta），Windows 的 Node 是 x64。`node -p process.arch` 應印出 `arm64`（Mac）或 `x64`（Windows）。Windows 可以是 x64 硬體，也可以是 ARM64 硬體上以 x64 模擬執行的 Node，兩者建置的安裝包都可以發布；artifact manifest 記錄建置機的 host 與 process 架構。
 
@@ -43,9 +41,8 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 | Host | Apple Silicon 上的 arm64 Node | x64 Node；ARM64 硬體上的 x64 模擬是 `ok` 並註明 emulated |
 | Node／npm／Git | Node 主版本符合 `.nvmrc`（patch 不同標為 `note`），Git 可用 | 同左 |
 | npm 套件 | 已執行 `npm ci` | 同左 |
-| Xcode Command Line Tools | `swiftc` 可用 | 不適用 |
 | Runtime cache | 只報告狀態：未準備時列出 `prepare:runtime` 指令 | 同左 |
-| Developer ID 簽章 | 有 `keys/mac/.env` 時檢查設定與檔案權限，並把 p12 匯入用完即刪的暫時 keychain，確認該 Team 恰有一個有效的 Developer ID Application 身分；不改動使用者的 keychain 與搜尋清單。沒有 `.env` 時只能建 ad-hoc 包 | 不適用 |
+| Developer ID 簽章 | 有 `keys/mac/.env` 時檢查設定與檔案權限，並把 p12 匯入用完即刪的暫時 keychain，確認該 Team 恰有一個有效的 Developer ID Application 身分，以及公證用的 `xcrun notarytool` 可用；不改動使用者的 keychain 與搜尋清單。沒有 `.env` 時只能建 ad-hoc 包 | 不適用 |
 
 `prepare:runtime` 與 `package:*` 開工前執行同一套檢查（不含 runtime cache 與簽章狀態），缺少時立即停止並列出修正方式。
 
@@ -59,10 +56,9 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 
 ### 隨附資源的位置
 
-App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno 與 Mac 更新小幫手）、搜尋詞庫、Agent Skill 與系統匣圖示。開發版從 checkout 讀取 `resources/bin/<mac|win>`、`resources/search`、`resources/tray` 與 `skills`；安裝包從 App 的 resources 資料夾讀取 `bin`、`search`、`tray` 與 `skills`，由 `electron-builder.yml` 放進去。`tests/app/runtime/bundled-resources.test.ts` 檢查兩邊的位置一致。
+App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno）、搜尋詞庫、Agent Skill 與系統匣圖示。開發版從 checkout 讀取 `resources/bin/<mac|win>`、`resources/search`、`resources/tray` 與 `skills`；安裝包從 App 的 resources 資料夾讀取 `bin`、`search`、`tray` 與 `skills`，由 `electron-builder.yml` 放進去。`tests/app/runtime/bundled-resources.test.ts` 檢查兩邊的位置一致。
 
 - 開發版可用環境變數指定其他位置的檔案：`XR_COLLECTOR_MEILISEARCH`、`XR_COLLECTOR_YTDLP`、`XR_COLLECTOR_DENO` 指定程式，`XR_COLLECTOR_SEARCH_LEXICON` 指定搜尋詞庫。安裝包不讀這些變數，一律用自己附帶的檔案。
-- Mac 更新小幫手只隨 Mac 安裝包附帶，由 `package:mac` 建置。開發版要先執行 `node scripts/build-mac-update-helper.mjs`，checkout 的 `resources/bin/mac` 才有它。
 - `resources/tray` 的系統匣圖示由 `node scripts/render-tray-icons.mjs` 產生，圖示改了要重新執行並一起提交圖檔。
 
 ## 功能開發
@@ -132,10 +128,10 @@ CI 不建置正式安裝包。各層驗證在哪裡執行見 [專案驗證設定
 | `npm run package:mac` | DMG 與 ZIP，在 `release/` |
 | `npm run package:win` | NSIS 安裝檔，在 `release/` |
 
-打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），執行期間持有整個 checkout 的獨占鎖（`.local/package-app.lock`），所有入口都使用 `--publish never`。打包程序被強制結束時鎖會留下；下次打包報錯，指出留下鎖的程序、鎖的路徑與刪除指令。確認沒有打包在跑後刪掉該資料夾再打包。Developer ID 簽章共用的 keychain 搜尋清單鎖也是同樣的處理。完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256，任一不一致都不交付。每次建置另在 `release/` 寫出兩份檔案：
+打包前先執行 `prepare:runtime`；打包只從 runtime cache 安裝，不下載，缺少時指出要執行的指令。打包要求乾淨的 checkout（沒有未 commit 的修改），執行期間持有整個 checkout 的獨占鎖（`.local/package-app.lock`），所有入口都使用 `--publish never`。打包程序被強制結束時鎖會留下；下次打包報錯，指出留下鎖的程序、鎖的路徑與刪除指令。確認沒有打包在跑後刪掉該資料夾再打包。Developer ID 簽章共用的 keychain 搜尋清單鎖也是同樣的處理。完成後從實際的 `app.asar` 與 resources 讀回並核對版本、commit、runtime 與 SHA-256，任一不一致都不交付；App 內 `app-update.yml` 指向的更新 repository 也一併核對。每次建置另在 `release/` 留下兩份檔案：
 
-- 該平台的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，記錄版本、完整 commit、BuildInfo，以及安裝檔與更新檔的檔名、大小與 SHA-256。它和安裝檔一起上傳，App 靠它找到自己平台的更新檔。
-- artifact manifest：`XR-Collector-<版本>-<target>-artifacts.json`，記錄這次建置的所有產物、runtime、簽章、工具版本與建置機架構，留在建置機，不上傳。
+- 該平台的更新 feed：electron-builder 產生的 `latest-mac.yml` 或 `latest.yml`，記錄版本與更新檔的檔名、大小與 sha512。打包核對 feed 的版本是這次的版本、指向的檔案都在這次的產物中。它和安裝檔一起上傳，App 的 electron-updater 靠它找到自己平台的更新檔（見 [更新來源](update-source.md)）。
+- artifact manifest：`XR-Collector-<版本>-<target>-artifacts.json`，記錄這次建置要上傳的所有產物與 SHA-256、runtime、簽章、工具版本與建置機架構，留在建置機，不上傳。
 
 Windows 的 Meilisearch 依賴 Microsoft Visual C++ runtime 的 `vcruntime140.dll`。repo 在 `resources/windows/` 放一份釘住版本的 DLL，`package:win` 核對它的 SHA-256、檔案版本與 Microsoft 簽章後放在 Meilisearch 旁邊，因此安裝到沒有 Visual C++ Redistributable 的 Windows 也能啟動搜尋。
 
@@ -173,14 +169,14 @@ Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy�
 
 一個版本是一個 GitHub Release，tag 是 `v` 加上 `package.json` 的版本（例如 `v0.1.0`）。Mac 與 Windows 各在自己的建置機，從同一個乾淨 commit 打包，再以 `npm run release:upload` 上傳到這個 tag 的 draft Release。兩個平台可以由不同的人、在不同時間、以任意順序上傳；兩個平台都到齊後，以 `gh release edit` 公開。CI 不提供安裝包。
 
-每個平台上傳三類檔案：
+每個平台上傳 artifact manifest 列出的檔案：
 
-| 平台 | 安裝檔 | App 內更新檔 | release index |
+| 平台 | 安裝檔 | App 內更新檔 | 更新 feed |
 | --- | --- | --- | --- |
-| Mac | `XR-Collector-<版本>-mac-arm64.dmg` | `XR-Collector-<版本>-mac-arm64.zip` | `release-darwin-arm64.json` |
-| Windows | `XR-Collector-<版本>-win-x64-setup.exe`（同時是更新檔） | 同左 | `release-win32-x64.json` |
+| Mac | `XR-Collector-<版本>-mac-arm64.dmg` | `XR-Collector-<版本>-mac-arm64.zip` | `latest-mac.yml` |
+| Windows | `XR-Collector-<版本>-win-x64-setup.exe`（同時是更新檔） | 同左 | `latest.yml` |
 
-App 從 GitHub 最新的穩定 Release（不是 draft、不是 prerelease）讀取自己平台的 release index，再下載 index 指定的更新檔並核對大小與 SHA-256。Release 沒有某個平台的 index 時，那個平台的 App 回報已是最新版。index 的格式見 [更新來源](update-source.md)。blockmap 與 artifact manifest 不上傳。
+另有各檔案的 `.blockmap`，electron-updater 從下一次更新起用它做差分下載。App 從 GitHub 最新的穩定 Release（不是 draft、不是 prerelease）讀取自己平台的 feed，再下載 feed 指定的更新檔並核對 sha512。Release 沒有某個平台的 feed 時，那個平台的 App 回報已是最新版。artifact manifest 不上傳。
 
 ### 第一次：登入 GitHub CLI
 
@@ -216,9 +212,10 @@ gh auth status
 
 `release:upload` 只上傳這台機器 `release/` 裡本平台的檔案，目標 repository 是安裝包內建的更新 repository（正式包是 `derektu/xr-collector`）。它依序確認：
 
-- checkout 沒有未 commit 的修改，HEAD 是 release index 記錄的建置 commit；
+- artifact manifest 是這個版本與平台，而且列有本平台的 feed；
+- checkout 沒有未 commit 的修改，HEAD 是 artifact manifest 記錄的建置 commit；
 - 本機若有同名 tag，它指向 HEAD；
-- 安裝檔與更新檔的大小與 SHA-256 等於 release index；
+- 每個要上傳的檔案的大小與 SHA-256 等於 artifact manifest；
 - GitHub 上的 tag 指向 HEAD。tag 不存在時，以 HEAD 在 GitHub 建立；GitHub 沒有這個 commit 時停止，要先 push；
 - 這個 tag 只有一個 Release，而且是 draft。Release 不存在時建立 draft；已公開時停止。
 
@@ -241,19 +238,19 @@ npm ci && npm run prepare:runtime -- win && npm run package:win && npm run relea
 
 ### 公開
 
-兩個平台都上傳後，先確認 draft 收齊兩份 release index：
+兩個平台都上傳後，先確認 draft 收齊兩份 feed（`latest-mac.yml`、`latest.yml`）：
 
 ```sh
 gh release view v0.1.0 --repo derektu/xr-collector --json isDraft,assets --jq '.isDraft, [.assets[].name]'
 ```
 
-寫好版本說明（Markdown，App 內「版本說明」顯示的就是這段文字），再公開並設為 Latest：
+寫好版本說明（顯示在 GitHub 的 Release 頁面；App 只顯示版本號），再公開並設為 Latest：
 
 ```sh
 gh release edit v0.1.0 --repo derektu/xr-collector --draft=false --latest --notes-file release-notes.md
 ```
 
-公開後，已安裝的 App 在下一次檢查更新時看到這一版。GitHub 對 Latest Release 的回應最多快取 60 秒，App 也沿用這個快取，所以公開後一分鐘內的檢查可能仍回報已是最新版。`release:upload` 不會公開 Release，也不會上傳到已公開的 Release；公開之後若要換掉某個平台的檔案，就發布下一個版本。
+公開後，已安裝的 App 在下一次檢查更新時看到這一版。`release:upload` 不會公開 Release，也不會上傳到已公開的 Release；公開之後若要換掉某個平台的檔案，就發布下一個版本。
 
 ### Mac 版的 Developer ID 憑證
 

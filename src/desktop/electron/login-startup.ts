@@ -4,9 +4,6 @@ import type { LoginStartupStatus } from '../../shared/api/device-types.js';
 import { loginStartupStatus, type LoginStartupAccess } from '../../shared/api/login-startup.js';
 
 export const LOGIN_STARTUP_ARGUMENT = '--login-startup';
-// On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
-// https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
-export const LOGIN_STARTUP_NAME = 'com.moneydj.xrcollector';
 
 interface LaunchItem {
   name: string;
@@ -36,13 +33,13 @@ const WINDOWS_ARGS = [LOGIN_STARTUP_ARGUMENT];
 export class DesktopLoginStartup implements LoginStartupAccess {
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly adapter: LoginItemAdapter) {}
+  constructor(private readonly adapter: LoginItemAdapter, private readonly appId: string) {}
 
   async status(): Promise<LoginStartupStatus> {
     if (!this.adapter.isPackaged || !['darwin', 'win32'].includes(this.adapter.platform)) return unavailableStatus();
     try {
       if (this.adapter.platform === 'darwin') return macStatus(this.adapter.get({ type: 'mainAppService' }));
-      return windowsStatus(this.adapter.get(this.currentWindowsQueryOptions()), this.adapter.executablePath);
+      return windowsStatus(this.adapter.get(this.currentWindowsQueryOptions()), this.appId, this.adapter.executablePath);
     } catch (cause) {
       throw loginFailure('無法讀取作業系統的登入自啟狀態。', cause);
     }
@@ -57,7 +54,9 @@ export class DesktopLoginStartup implements LoginStartupAccess {
         if (this.adapter.platform === 'darwin') {
           this.adapter.set({ openAtLogin: enabled, type: 'mainAppService' });
         } else {
-          this.adapter.set({ openAtLogin: enabled, enabled, ...this.currentWindowsOptions(), name: LOGIN_STARTUP_NAME });
+          // On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
+          // https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
+          this.adapter.set({ openAtLogin: enabled, enabled, ...this.currentWindowsOptions(), name: this.appId });
         }
         const result = await this.status();
         if (enabled && result.state === 'requires_approval') {
@@ -103,15 +102,15 @@ function macStatus(settings: LoginItemSettings): LoginStartupStatus {
   return loginStartupStatus(enabled ? 'enabled' : 'disabled');
 }
 
-function windowsStatus(settings: LoginItemSettings, executablePath: string): LoginStartupStatus {
-  const owned = ownedWindowsItem(settings, executablePath);
+function windowsStatus(settings: LoginItemSettings, appId: string, executablePath: string): LoginStartupStatus {
+  const owned = ownedWindowsItem(settings, appId, executablePath);
   return loginStartupStatus(settings.openAtLogin && owned?.enabled === true ? 'enabled' : 'disabled');
 }
 
-function ownedWindowsItem(settings: LoginItemSettings, executablePath: string): LaunchItem | undefined {
+function ownedWindowsItem(settings: LoginItemSettings, appId: string, executablePath: string): LaunchItem | undefined {
   // On Windows, Electron fills launchItems[].args from Chromium's CommandLine::GetArgs(), which leaves out switches such as --login-startup.
   // https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
-  return settings.launchItems?.find((item) => item.name === LOGIN_STARTUP_NAME
+  return settings.launchItems?.find((item) => item.name === appId
     && item.scope === 'user' && samePath(item.path, executablePath));
 }
 

@@ -1,43 +1,15 @@
-import type { BuildInfo, DeviceUpdateStatus, UpdateOffer, UpdateSelection } from '../../shared/api/update-types.js';
+import type { DeviceUpdateStatus, UpdateOffer, UpdateSelection } from '../../shared/api/update-types.js';
 
-export interface UpdateIdentity { version: string; target: string }
-export interface UpdateSource {
-  readonly id: string;
-  check(identity: UpdateIdentity, signal?: AbortSignal): Promise<UpdateOffer | null>;
-}
-export interface NativeInstaller {
+/** The platform updater the update service drives: electron-updater in the desktop App, a fixture elsewhere. */
+export interface AppUpdater {
+  /** False where this runtime cannot install an update, such as a development launch. */
   readonly available: boolean;
-  validate(offer: UpdateOffer, packageFile: string, signal?: AbortSignal): Promise<void>;
-  prepare(offer: UpdateOffer, packageFile: string, signal: AbortSignal): Promise<PreparedInstall>;
-  confirmLaunch?(launch: LaunchConfirmation): Promise<boolean>;
+  /** The newest release when it is newer than the running version, otherwise null. */
+  check(): Promise<UpdateOffer | null>;
+  /** Downloads and verifies the release the last check found; rejects when `signal` aborts. */
+  download(progress: (transferred: number, total: number) => void, signal: AbortSignal): Promise<void>;
 }
-export interface PreparedInstall {
-  recoveryToken?: string;
-  handoff(): Promise<void>;
-  cancel(): Promise<void>;
-}
-export interface NativeInstallRecovery {
-  token: string;
-  phase: 'succeeded' | 'rolled_back' | 'failed' | 'recovery_required';
-  previousVersion: string;
-  previousBuildId: string;
-  expectedVersion: string;
-  expectedBuildId: string;
-  reason?: string;
-}
-export interface LaunchConfirmation {
-  acknowledge: boolean;
-  record(result: NativeInstallRecovery): Promise<boolean>;
-  report(error: Error): void;
-}
-export interface UpdateApplyRequest {
-  offer: UpdateOffer;
-  packageFile: string;
-  signal: AbortSignal;
-  recordAttempt(recoveryToken?: string): Promise<void>;
-  installing(): void;
-  failed(code: string, message: string): Promise<void>;
-}
+
 export interface UpdateAccess {
   status(): DeviceUpdateStatus;
   check(): Promise<DeviceUpdateStatus>;
@@ -46,4 +18,3 @@ export interface UpdateAccess {
   cancel(): Promise<DeviceUpdateStatus>;
   subscribe?(listener: () => void): () => void;
 }
-export interface PackagedIdentity extends UpdateIdentity { buildInfo: BuildInfo }

@@ -22,7 +22,7 @@ import { Connectivity, type ConnectivityOptions, type JobManager } from '../../d
 import { openJobRecords, type JobRecords } from './job-records.js';
 import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
-import { DeviceVaults, type Collector, type UpdateLease, type VaultOperations } from '../../domain/vault/index.js';
+import { DeviceVaults, type Collector, type VaultOperations } from '../../domain/vault/index.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionScheduler, SubscriptionService } from '../../domain/subscriptions/index.js';
@@ -122,7 +122,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   private stateValue: CollectorRuntimeState;
   private message: string;
   private settingUp = false;
-  private preparingUpdate = false;
   private closing: Promise<void> | null = null;
 
   private constructor(
@@ -331,7 +330,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       throw new CollectorError('vault_already_set', '已經有使用中的知識庫。要建立或開啟其他知識庫，請使用 POST /api/vault/create 或 POST /api/vault/open。');
     }
     if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等待目前的操作完成。');
-    if (this.preparingUpdate) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能變更知識庫。');
     this.settingUp = true;
     try {
       const services = this.services;
@@ -347,36 +345,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     } finally {
       this.settingUp = false;
     }
-  }
-
-  /** Device-level update exclusion, including the no-Vault state. */
-  async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
-    if (signal.aborted) throw signal.reason;
-    if (this.closing || this.preparingUpdate) throw new CollectorError('update_busy', '更新或服務停止已經進行中。');
-    if (this.settingUp) throw new CollectorError('vault_busy', '正在設定知識庫，請等它完成後再更新。');
-    this.preparingUpdate = true;
-    let workspaceLease: UpdateLease | null = null;
-    try {
-      workspaceLease = this.workspaceValue ? await this.workspaceValue.operations.prepareUpdate(signal) : null;
-      if (signal.aborted || this.closing) throw signal.aborted ? signal.reason : new CollectorError('update_busy', '服務正在停止。');
-    }
-    catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
-    let finished = false;
-    return {
-      cancel: () => {
-        if (finished) return; finished = true; workspaceLease?.cancel(); this.preparingUpdate = false;
-      },
-      transferToShutdown: () => {
-        if (finished) throw new CollectorError('update_busy', '更新等待已經結束。');
-        if (signal.aborted || this.closing) {
-          workspaceLease?.cancel(); this.preparingUpdate = false;
-          throw signal.aborted ? signal.reason : new CollectorError('update_busy', '服務正在停止。');
-        }
-        try { workspaceLease?.transferToShutdown(); }
-        catch (error) { workspaceLease?.cancel(); this.preparingUpdate = false; throw error; }
-        finished = true;
-      },
-    };
   }
 
   status(): CollectorRuntimeStatus {

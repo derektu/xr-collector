@@ -9,6 +9,10 @@ files:
   - package.json
   - node_modules/**
 asar: true
+publish:
+  provider: github
+  owner: derektu
+  repo: xr-collector
 mac:
   artifactName: XR-Collector-${version}-mac-${arch}.${ext}
   target:
@@ -36,8 +40,6 @@ mac:
       to: bin/runtime-dependencies.json
     - from: resources/bin/mac/meilisearch
       to: bin/meilisearch
-    - from: resources/bin/mac/xr-mac-update-helper
-      to: bin/xr-mac-update-helper
     - from: .local/package-resources/build-info.json
       to: build-info.json
 win:

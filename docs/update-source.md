@@ -1,62 +1,46 @@
 # App 更新來源
 
-更新服務（`src/domain/updates/`）讀取每個平台各自的 release index：`release-darwin-arm64.json` 或 `release-win32-x64.json`，由 `package:*` 與安裝檔一起產生、隨該平台上傳到 Release。服務只讀自己 `target` 的 index，版本高於目前版本時，以 index 記錄的檔名、大小與 SHA-256 下載更新檔並驗證。
+App 更新整套交給 electron-updater：macOS 用 `MacUpdater`（由 Squirrel.Mac 驗證並替換 App），Windows 用 `NsisUpdater`（執行 NSIS 安裝檔）。更新服務（`src/domain/updates/`）只負責什麼時候檢查、使用者選了哪個版本、安裝前後的紀錄；它透過 `AppUpdater` 介面驅動 electron-updater（`src/desktop/electron/app-updater.ts`），所以服務本身不需要 Electron 也能測試。
 
-檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/desktop/electron/update-check-scheduler.ts`，只在有原生安裝器的平台啟用），使用者也可以在設定頁手動檢查；下載與套用只由使用者觸發。套用前保存安裝嘗試，新版本的 runtime、畫面與原生啟動都確認完成後才記為成功；無法確認時記為 `unknown`，不以程序退出推測成功。
+檢查更新在啟動 30 秒後自動執行一次，之後最多每 24 小時一次（`src/desktop/electron/update-check-scheduler.ts`，只在打包的 Mac 與 Windows App 啟用），使用者也可以在設定頁手動檢查。下載與安裝只由使用者觸發：electron-updater 的 `autoDownload` 與 `autoInstallOnAppQuit` 都關閉，正常結束 App 不會安裝。
 
-套用前先讓知識庫靜止：先停止派出新的收集步驟，排隊的工作才不會在等待期間開始；再等待進行中的知識庫寫入與收集步驟完成。這段期間知識庫寫入與知識庫操作回 `update_busy`。使用者取消或超過兩分鐘時放棄這次安裝，收集與寫入恢復，App 照常使用。準備完成後交給關閉流程：停下的收集與寫入不再恢復，程式關閉資料服務後交給安裝器；關閉或交接失敗時也不恢復原本的服務。
+版本更新不送作業系統通知。可用版本、下載與安裝結果只透過設定頁、側欄、原生選單、系統匣圖示、裝置更新 API 與持久事件呈現。
 
-## Release index
+## Feed
 
-```json
-{
-  "schemaVersion": 1,
-  "version": "0.1.0",
-  "commit": "40 個字元的完整 commit",
-  "target": "win32-x64",
-  "buildInfo": { "kind": "packaged", "version": "0.1.0", "commit": "…", "buildId": "…", "target": "win32-x64", "…": "…" },
-  "installer": { "name": "XR-Collector-0.1.0-win-x64-setup.exe", "bytes": 123456789, "sha256": "64 個字元" },
-  "update": { "name": "XR-Collector-0.1.0-win-x64-setup.exe", "bytes": 123456789, "sha256": "64 個字元" }
-}
-```
+每個平台的 feed 是 electron-builder 打包時產生的 `latest-mac.yml` 或 `latest.yml`，記錄版本、更新檔名、大小與 sha512。打包時 `package:*` 檢查 feed 的版本與檔名對得上這次的產物，`release:upload` 把 feed 連同安裝檔、更新檔與 blockmap 上傳到 Release。Mac 的更新檔是 ZIP（DMG 給使用者下載安裝），Windows 的更新檔與安裝檔是同一個 NSIS 安裝檔。
 
-`installer` 是給使用者下載安裝的檔案，`update` 是 App 內更新下載的檔案：Mac 分別是 DMG 與 ZIP，Windows 都是同一個 NSIS 安裝檔。index 只記錄檔名，不記錄網址，網址由來源依 index 所在的位置決定，所以同一份 index 放在 GitHub Release 或鏡像站都成立。服務要求 index 的 `target` 等於自己的平台、更新檔名符合該版本與平台，且 `buildInfo` 是同一版本與 commit 的 packaged BuildInfo。
+正式來源是 GitHub Releases 的 `derektu/xr-collector`：electron-builder 依 `electron-builder.yml` 的 `publish` 把 provider 寫進 App 內的 `app-update.yml`，electron-updater 從 `github.com/<repository>/releases/latest` 找出最新的穩定 Release（不是 draft、不是 prerelease），再讀它本平台的 feed。App 只顯示新版的版本號，不顯示 Release 的版本說明。
 
-## 來源
+讀不到本平台的 feed（HTTP 404）時，GitHub 與 generic 兩種來源的 electron-updater 都回 `ERR_UPDATER_CHANNEL_FILE_NOT_FOUND`，服務把它當成沒有新版。所以兩個平台可以分批上傳，最新的 Release 還沒有本平台的 feed 時，先上傳的平台不會讓另一個平台的 App 報錯；同樣地，generic feed 的網址打錯或檔案沒放好，也只會顯示「已是最新版」。
 
-正式預設來源透過 GitHub 公開 Releases JSON API 讀取最新的穩定 Release（不是 draft、不是 prerelease），在它的 asset 中尋找自己平台的 index，更新檔的網址取自同一個 Release 的 asset，版本說明取自 Release 的說明文字。Release 的 tag 必須是 `v<index 的版本>`。Release 沒有這個平台的 index 時視為沒有新版，所以兩個平台可以分批上傳，先上傳的平台不會讓另一個平台的 App 報錯。這個來源不解析 HTML、不使用 token。
+本機驗收或鏡像站可設定 `XR_COLLECTOR_UPDATE_BASE_URL`，指向放著 feed 與更新檔的目錄，App 以 electron-updater 的 generic provider 讀它。設定前先檢查網址：必須是 HTTPS，只有 `127.0.0.1` 或 `localhost` 允許 HTTP，不能帶帳密、query 或 fragment；不符合時 App 啟動失敗。Windows 安裝程式透過登入桌面的 shell 重開 App，不保證承繼啟動時的環境變數，所以這個覆寫只適合單次驗收；長期使用其他來源的發行版本，應把來源寫進打包設定。
 
-開發與鏡像環境可設定 `XR_COLLECTOR_UPDATE_BASE_URL`，指向一個以 `/` 結尾的目錄網址：服務讀取其下的 `release-<target>.json`、index 指定的更新檔，以及選用的 `release-notes.md`（不存在時沒有版本說明）。URL 必須是 HTTPS，不能帶帳密、query 或 fragment；只有 `127.0.0.1` 或 `localhost` 允許 HTTP，供隔離驗收使用。
+App 要先能在舊來源找到下一版，才能透過更新改用新來源。搬移來源時，舊位置至少要在一個發布週期內繼續提供 feed，或先發布一個 `app-update.yml` 已指向新來源的版本，再關閉舊來源。
 
-來源在 Electron 啟動入口組裝（`src/desktop/electron/desktop-environment.ts`），`XR_COLLECTOR_UPDATE_BASE_URL` 是啟動時的覆寫。Windows installer 透過登入桌面的 shell 重開 App，不保證承繼啟動時的環境變數，所以需要長期使用其他來源的發行版本，應在組裝入口改用該來源，而不是依賴環境變數。其他來源有兩種接法：
+## 下載
 
-- 在 HTTPS 主機的一個目錄原樣提供各平台的 release index、更新檔與 `release-notes.md`，再把來源指向這個目錄。
-- 實作 `UpdateSource`（`src/domain/updates/types.ts`），把對方 API 的結果轉成不可變的 `UpdateOffer`；下載、雜湊驗證、cache、UI／Agent API 與原生安裝器不受影響。
+使用者選定版本後，electron-updater 下載更新檔並以 feed 的 sha512 驗證，下載中回報進度，可以取消。下載完成才可以安裝。下載新版本時，electron-updater 會換掉已下載的檔案，所以之前可安裝的版本也跟著失效。
 
-App 要先能找到下一份 index，才能透過更新改用新來源。因此搬移來源時，舊位置至少要在一個發布週期內繼續提供 index，或先發布同時認得新來源的過渡版，再關閉舊來源。
+已下載的版本不跨重新啟動保留：App 重新啟動後，要重新檢查並下載才能安裝（electron-updater 會沿用快取中 sha512 相符的檔案，不一定重新傳輸）。
 
-版本更新不送作業系統通知。可用版本、下載、等待與安裝結果只透過設定頁、側欄、原生選單、系統匣圖示、裝置更新 API 與持久事件呈現。
+## 安裝
 
-## 原生安裝與回復
+使用者按下安裝後：
 
-下載與驗證屬於 `UpdateService`，原生安裝器只接手已驗證的檔案，不自己探索或下載。
+1. 服務把要安裝的版本寫進 `<userData>/updates/state.json`。
+2. App 走一般的結束流程：停止排程與系統匣、關閉視窗、關閉 Collector runtime（收集、知識庫寫入與搜尋引擎照一般結束的方式停下）。
+3. runtime 關閉後才呼叫 `quitAndInstall`。Windows 的 NSIS 安裝程式一啟動就會結束安裝資料夾裡所有還在執行的程序，所以必須等 runtime 與搜尋引擎都關閉。macOS 由 Squirrel.Mac 驗證更新檔的簽章，ShipIt 替換 App 後啟動新版。
+4. runtime 無法正常關閉，或安裝程式沒有接手（例如 Squirrel 拒絕簽章）時，原因寫進同一筆紀錄，App 重新啟動舊版。
 
-### macOS
+下次啟動時，服務比對執行中的版本（`app.getVersion()`）與紀錄中的版本：相同記為「已安裝」，不同記為「未完成」並附上紀錄的原因，各記一筆持久事件，然後清除紀錄。結果顯示在設定頁與裝置更新 API 的 `lastAttempt`，只保留到 App 結束。
 
-macOS 的安裝由 App 內附的 helper（`src/desktop/electron/mac-update-helper.swift`）執行，App 端在 `src/domain/updates/mac-installer.ts`。helper 不具特權：準備與使用者同意都由執行中的 App 負責，helper 不更動 code signing、quarantine、Gatekeeper 或系統原則。兩邊經由 App 旁邊的工作目錄 `.xr-update-<runId>` 溝通。這個目錄只有目前使用者可讀寫，裡面每個檔案都帶這次安裝的 nonce，App 只採信 owner、權限與 nonce 都相符的目錄。目錄同時是這次安裝的 journal：裡面還有尚未處理完的結果時，就不能刪。
+## 限制
 
-1. 準備：App 把更新檔解開到工作目錄、寫入 `request.json`，啟動 helper。helper 回報 `prepared` 才算準備完成；使用者取消時 App 寫入 `abort.json`。
-2. 交接：App 寫入 `handoff.json`，helper 回報 `waiting_for_exit` 後舊版 A 結束。helper 等 A 結束後交換 bundle，啟動新版 B。
-3. 啟動確認：B 啟動時寫入 `ack.json`。runtime 就緒後，B 讀取 helper 的最終結果（`succeeded`、`rolled_back`、`failed` 或 `recovery_required`），先存進安裝紀錄，存檔成功且結果不是 `recovery_required` 時，才請 helper 清除工作目錄。存檔失敗或結果是 `recovery_required` 時保留工作目錄，下次啟動再處理。B 確認就緒前，App 不把更新記為已安裝。helper 先記錄 B 為 `succeeded`，才刪除工作目錄裡 A 的備份；備份刪除失敗時仍保留 B，結果加註 `backupRetained`。
-4. 清除：以 `--cleanup` 請 helper 刪除工作目錄，短暫重試同一個指令。剛結束的 helper 可能在釋放鎖之前才寫下最終結果；每次失敗都保留 journal。helper 從驗證最終結果到遞迴刪完目錄都持有 journal 的鎖，中間不會有 `--recover` 進來；開始刪除後，錯誤處理不再寫入狀態。
-
-同一次安裝同時只有一個 helper 能處理 journal，由 journal 的鎖保證。B 啟動時若 helper 還沒寫出最終結果，B 先等一下再看，仍沒有結果才以 `--recover` 啟動 helper 補完。拿不到鎖、helper 提早結束，都不代表安裝成功。`--recover` 依兩個 bundle 的身分判斷實際交換到哪一步，不看 journal 的最後一筆，因為被中斷的 helper 可能還沒寫下它。App 位置上是已就緒的 B 時，helper 補完這次安裝；B 還沒就緒時回報 `recovery_required`，不退回 A。
-
-B 在確認就緒前啟動失敗時，由 B 自己發起回復：先寫入 `shutdown-safe.json`，表示這個 B 程序已乾淨關閉更新服務與 Collector runtime；再以 `--rollback` 啟動 helper，helper 回報 `rollback_prepared` 後 B 才結束。helper 等這個 B 程序結束，確認回條是它寫的，才把 bundle 換回 A。沒有回條時，helper 回報 `recovery_required`，不強制結束 B、也不還原 A，因為同一個 profile 同時只能有一個 Collector 在執行。`recovery_required` 保留備份，由使用者處理。helper 要結束自己啟動的 B 時，經 `NSRunningApplication` 的 terminate 請 B 走正常的 runtime 關閉流程，不送 signal，讓 B 的搜尋子程序與寫到一半的資料先完成，A 才重新啟動。
-
-### Windows
-
-Windows 由 electron-updater 的 `NsisUpdater` 執行 NSIS 安裝檔（`src/domain/updates/windows-installer.ts`）。服務把已驗證的安裝檔交給 updater 的下載快取，不設定它的 provider。簽章檢查沿用 `NsisUpdater` 的規則，NSIS 開始執行後的安裝結果沒有回呼，由下次啟動核對。
+- 只有 Developer ID 簽章並公證的 Mac 包能做 App 內更新。Squirrel.Mac 以執行中 App 的簽章要求驗證新版，ad-hoc 簽章的包會被拒絕；按下安裝後 App 重開，設定頁顯示 Squirrel 的原因。這類包要手動下載安裝。
+- 新版啟動失敗時不會自動退回舊版。ShipIt 替換完成就算成功，使用者需要重新下載安裝。
+- macOS 上，Squirrel 需要寫入 App 所在的目錄：非 admin 帳號、`/Applications` 不能寫入，或從 DMG、下載資料夾直接執行（App Translocation）時更新失敗，App 重開後顯示原因，使用者手動安裝。
+- Windows 包沒有 Authenticode 簽章，`app-update.yml` 也就沒有 `publisherName`，NsisUpdater 只以 feed 的 sha512 驗證安裝檔。feed 與安裝檔來自同一個 Release，所以這只能偵測傳輸損毀，不能偵測來源被換掉。
 
 ## 驗收身分
 
@@ -65,13 +49,15 @@ Windows 由 electron-updater 的 `NsisUpdater` 執行 NSIS 安裝檔（`src/doma
 ```sh
 XR_COLLECTOR_VALIDATION_BUILD=1 npm run package:mac -- \
   --validation-version 0.1.1 \
-  --validation-app-id com.xrcollector.verify36 \
-  --validation-product-name "XR Update Verify 36" \
+  --validation-app-id com.xrcollector.verify.public \
+  --validation-product-name "XR Update Verify Public" \
   --validation-update-repository derektu/xr-collector-test
 ```
 
-版本、appId 與產品名稱三個參數必須一起提供，且只有設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受；appId 必須以 `com.xrcollector.verify` 開頭，產品名稱必須以 `XR Update Verify ` 開頭。repository 選用，未提供時是正式的 `derektu/xr-collector`。驗收身分與 repository 寫入 ASAR，所以 Windows shell 或 macOS helper 重開 App、沒有原本的環境變數時，仍使用隔離的資料目錄、App 身分與 repository。正式封裝不帶這些參數，也不能含有這些欄位。
+版本、appId 與產品名稱三個參數必須一起提供，且只有設定 `XR_COLLECTOR_VALIDATION_BUILD=1` 才接受；appId 必須以 `com.xrcollector.verify` 開頭，產品名稱必須以 `XR Update Verify ` 開頭。repository 選用，未提供時是正式的 `derektu/xr-collector`。
+
+封裝指令把這些參數轉成 electron-builder 的設定覆寫：`appId`、`productName`、套件中繼資料的 `version` 與 `productName`、`publish` 的 owner 與 repo。所以驗收包有自己的 bundle identifier、自己的資料目錄（Electron 依產品名稱決定 userData），`app-update.yml` 指向驗收的 repository。appId 另外寫進套件中繼資料的 `xrCollectorAppId`，App 由它設定 Windows 的 AppUserModelId 與登入自啟的 Run 項目名稱；正式包沒有這個欄位，App 使用 `com.moneydj.xrcollector`。這些值都在安裝包裡，Windows shell 或 ShipIt 重開 App、沒有原本的環境變數時，仍是同一個身分。正式封裝不帶這些參數，也不能含有 `xrCollectorAppId`。electron-updater 的下載快取目錄（macOS 的 `~/Library/Caches`、Windows 的 `%LOCALAPPDATA%` 下的 `xr-collector-updater`）由 `package.json` 的 `name` 決定，驗收包與正式包共用；快取中的檔案仍要通過 feed 的 sha512 才會被使用。
 
 公開更新驗收使用 `XR Update Verify Public`／`com.xrcollector.verify.public` 這組身分，repository 為 `derektu/xr-collector-test`；驗收 App 不發到正式 repository。
 
-驗收可以使用 loopback 來源，但必須使用正式 schema、真實封裝產物及真實原生安裝路徑；模擬的「安裝成功」不算平台驗收。A、B 使用同一個隔離 profile、Vault 與 Agent port，不指向正式資料。原生重啟驗收優先使用驗收產品的預設 profile，把固定 Agent port 與 Vault 選址寫入該 profile，並由同一個登入使用者安裝與更新。以 `XR_COLLECTOR_PROFILE` 覆寫 profile 時，須實測該平台的交接確實保留環境變數；Windows shell 不保留。中斷 helper 後，先等待並盤點作業系統已排隊的啟動，再決定是否手動啟動。
+驗收可以使用 loopback 的 generic feed，但必須使用真實封裝產物與真實的 electron-updater 安裝路徑；Mac 必須是 Developer ID 包。ShipIt 與 NSIS（`--force-run`）啟動 B 時不帶 A 的環境變數，所以 A、B 都用產品名稱決定的預設資料目錄，不設 `XR_COLLECTOR_PROFILE`；驗收身分的產品名稱已讓這個目錄與正式資料分開。A、B 使用同一個 Vault 與 Agent port，不指向正式資料，並由同一個登入使用者安裝與更新。

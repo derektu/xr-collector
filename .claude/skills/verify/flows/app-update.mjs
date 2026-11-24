@@ -1,16 +1,16 @@
 // App updates through the shared update service: checking without a Vault from the UI and an
-// authorized Agent, downloading with only cancel offered, refusing to apply while busy, an integrity
-// error never publishing a ready update, keeping a ready update while a newer one downloads, the
-// cancellable wait for a safe stop, and, once a Vault exists, the sidebar and the native menu
-// reaching the update panel with the sidebar naming only the current action. A broken update path
-// leaves users on an old build or installs a payload nobody verified.
+// authorized Agent, downloading with only cancel offered and install refused until the download
+// finishes, a failed download never offering an install, a ready update kept beside a newer offer,
+// the sidebar and the native menu reaching the update panel once a Vault exists, and an install that
+// the next start records as installed. A broken update path leaves users on an old build or
+// installs a version they did not choose.
 import { defaultCatalog } from '../scripts/lib/synthetic.mjs';
 
 export const name = 'app-update';
-export const title = 'App 更新的查詢、下載驗證、取消、安全等待與更新入口';
-export const covers = ['update-discovery', 'update-download', 'update-apply-wait', 'update-agent', 'update-no-vault', 'update-navigation'];
+export const title = 'App 更新的查詢、下載、取消、安裝紀錄與更新入口';
+export const covers = ['update-discovery', 'update-download', 'update-install', 'update-agent', 'update-no-vault', 'update-navigation'];
 export const vault = 'none';
-export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', payloadMode: 'valid' } });
+export const catalog = () => ({ ...defaultCatalog(), updates: { enabled: true, version: '0.1.1', currentVersion: '0.1.0', payloadMode: 'valid' } });
 
 export async function run({ instance, page, record, waitFor }) {
   const connection = (await instance.api('/api/device/agent/connection')).connection;
@@ -21,11 +21,10 @@ export async function run({ instance, page, record, waitFor }) {
     return { status: response.status, body: await response.json().catch(() => null) };
   };
   const update = async () => (await instance.api('/api/device/updates')).update;
-  const selection = (offer) => JSON.stringify({ version: offer.version, sha256: offer.payload.sha256 });
-  const cancels = async () => page.getByTestId('update-cancel').getAttribute('data-cancels').catch(() => null);
+  const selection = (offer) => JSON.stringify({ version: offer.version });
   let updateApiAvailable = false;
 
-  await record.scenario('U36-W1', '未建立 Vault 時 UI 與授權 Agent 都可檢查私人更新來源', async ({ expect, shot, note }) => {
+  await record.scenario('U36-W1', '未建立 Vault 時 UI 與授權 Agent 都可檢查更新來源', async ({ expect, shot, note }) => {
     let initialApi;
     try { initialApi = await instance.api('/api/device/updates'); } catch (error) { initialApi = { error: String(error) }; }
     updateApiAvailable = Boolean(initialApi?.update);
@@ -37,118 +36,80 @@ export async function run({ instance, page, record, waitFor }) {
     expect(await page.getByTestId('device-settings-without-vault').isVisible() && await page.getByTestId('update-check').isVisible(),
       '未建立 Vault 仍可進入裝置更新設定並檢查更新', { id: 'u36.no-vault-ui', expected: { vault: '不是 ready', check: true }, actual: setup });
     const checked = await agent('/api/device/updates/check', { method: 'POST' });
-    expect(checked.status === 200 && checked.body.update.phase === 'available', '授權 Agent 經相同 API 找到 0.1.1', {
-      id: 'u36.agent-check', actual: { status: checked.status, phase: checked.body?.update?.phase, version: checked.body?.update?.offer?.version },
-    });
+    expect(checked.status === 200 && checked.body.update.phase === 'available' && checked.body.update.offer?.version === '0.1.1',
+      '授權 Agent 經相同 API 找到 0.1.1', {
+        id: 'u36.agent-check', actual: { status: checked.status, phase: checked.body?.update?.phase, version: checked.body?.update?.offer?.version },
+      });
     await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'available update UI').catch(() => undefined);
     expect(await page.getByTestId('update-download').isVisible(), 'Agent 檢查到的更新出現在畫面的下載入口', { id: 'u36.ui-follows-check' });
-    const status = await update();
-    expect(status.offer?.version === '0.1.1' && status.offer.source.id === 'generic-index' && status.offer.source.indexUrl.endsWith('/updates/release-darwin-arm64.json'), 'GenericIndexSource 讀取本平台的 index', {
-      id: 'u36.generic-source', actual: status.offer && { version: status.offer.version, source: status.offer.source },
-    });
-    await page.getByRole('button', { name: '版本說明' }).click();
-    const notes = await page.getByRole('dialog').count();
-    expect(notes === 1, '版本說明可開啟', { id: 'u36.release-notes', expected: 1, actual: notes });
     await shot('available-no-vault');
-    await page.getByRole('dialog').getByRole('button', { name: '關閉' }).click();
-    note('scope', 'Web 使用真實 UpdateService 與 generic HTTP index；ZIP 是語意 fixture，fake NativeInstaller 只驗證檔案，不證明原生安裝。');
+    note('scope', 'Web 使用真實 UpdateService；fixture updater 照 electron-updater 的方式讀合成的 latest-mac.yml 與 payload，不證明原生安裝。');
   });
-  // A reverse baseline without #36 stops on the product-contract assertion above; it does not
-  // spend time waiting for controls that correctly do not exist in that older checkout.
+  // A reverse baseline without the update API stops on the product-contract assertion above; it does
+  // not spend time waiting for controls that correctly do not exist in that older checkout.
   if (!updateApiAvailable) return;
 
-  await record.scenario('U36-W2', '下載中只顯示取消，忙碌拒絕套用，錯誤後可重試到 ready', async ({ expect, shot }) => {
+  await record.scenario('U36-W2', '下載中只顯示取消、拒絕安裝，下載失敗不提供安裝，重試後可安裝', async ({ expect, shot }) => {
     // The payload stops after 62 % of its bytes until the flow releases it, so the download stays under way.
     await instance.updateCatalog((value) => { value.updates.holdPayload = true; value.updates.payloadMode = 'valid'; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => await cancels() === 'download', 'downloading cancel UI');
-    const actions = { download: await page.getByTestId('update-download').count(), cancels: await cancels() };
-    expect(actions.download === 0 && actions.cancels === 'download', '下載中不再顯示重複下載，只能取消下載',
-      { id: 'u36.downloading-actions', expected: { download: 0, cancels: 'download' }, actual: actions });
+    await page.getByTestId('update-cancel').waitFor();
+    const actions = { download: await page.getByTestId('update-download').count(), cancel: await page.getByTestId('update-cancel').count() };
+    expect(actions.download === 0 && actions.cancel === 1, '下載中不再顯示重複下載，只能取消下載',
+      { id: 'u36.downloading-actions', expected: { download: 0, cancel: 1 }, actual: actions });
     const downloading = await waitFor(async () => {
       const value = await update();
       return value.progress?.percent === 62 && (await instance.held()).payload ? value : null;
     }, 'download held at 62 %').catch(update);
-    expect(downloading.phase === 'downloading' && downloading.progress?.percent === 62, '串流下載回報 62% 進度', {
+    expect(downloading.phase === 'downloading' && downloading.progress?.percent === 62, '下載回報 62% 進度', {
       id: 'u36.progress', actual: { phase: downloading.phase, progress: downloading.progress },
     });
-    const busy = await agent('/api/device/updates/apply', { method: 'POST', body: selection(downloading.offer) });
-    expect(busy.status === 409 && busy.body?.error?.code === 'update_busy', '下載中由授權 Agent 套用會拒絕為 update_busy', {
-      id: 'u36.agent-busy', actual: { status: busy.status, code: busy.body?.error?.code },
+    const refused = await agent('/api/device/updates/apply', { method: 'POST', body: selection(downloading.offer) });
+    expect(refused.status === 409 && refused.body?.error?.code === 'update_not_ready', '下載中由授權 Agent 安裝會拒絕為 update_not_ready', {
+      id: 'u36.agent-not-ready', actual: { status: refused.status, code: refused.body?.error?.code },
     });
     await shot('downloading');
     await page.getByTestId('update-cancel').click();
     await page.getByTestId('update-download').waitFor();
-    expect((await update()).phase === 'available', '取消後回到同一固定 offer，沒有 ready', { id: 'u36.download-cancel' });
+    expect((await update()).phase === 'available', '取消後回到同一版本，沒有可安裝的更新', { id: 'u36.download-cancel' });
 
     await instance.updateCatalog((value) => { value.updates.holdPayload = false; value.updates.payloadMode = 'corrupt'; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => (await update()).phase === 'error', 'integrity error state');
+    await waitFor(async () => (await update()).phase === 'error', 'download error state');
     await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action');
     const failed = await update();
-    expect(failed.phase === 'error' && failed.errorCode === 'update_integrity_failed' && failed.ready === null,
-      '雜湊錯誤不發布 ready，但保留同一 offer 可直接重新下載', {
-        id: 'u36.integrity-error', actual: { phase: failed.phase, code: failed.errorCode, ready: failed.ready },
-      });
-    await shot('integrity-error');
+    expect(failed.phase === 'error' && failed.errorCode === 'update_download_failed' && failed.ready === null
+      && await page.getByTestId('update-apply').count() === 0,
+    'sha512 不符時不提供安裝，同一版本可直接重新下載', {
+      id: 'u36.download-failed', actual: { phase: failed.phase, code: failed.errorCode, ready: failed.ready },
+    });
+    await shot('download-failed');
     await instance.updateCatalog((value) => { value.updates.payloadMode = 'valid'; });
     await page.getByTestId('update-download').click();
     await page.getByTestId('update-apply').waitFor();
     const ready = await update();
     expect(ready.phase === 'ready' && ready.ready?.version === '0.1.1' && ready.progress === null,
-      '大小、SHA-256 與 fixture installer 驗證後才發布 ready', {
-        id: 'u36.ready', actual: { phase: ready.phase, version: ready.ready?.version, progress: ready.progress },
-      });
+      '下載完成後才可重新啟動以安裝', { id: 'u36.ready', actual: { phase: ready.phase, version: ready.ready?.version, progress: ready.progress } });
   });
 
-  await record.scenario('U36-W3', '稍後保留 ready；套用等待可取消且 Web 不宣稱已安裝', async ({ expect, shot, note }) => {
+  await record.scenario('U36-W3', '稍後保留可安裝的版本；檢查到更新的版本時兩者並列', async ({ expect, shot }) => {
     await page.getByTestId('update-later').click();
     await page.getByTestId('update-deferred').waitFor();
     const deferred = { phase: (await update()).phase, apply: await page.getByTestId('update-apply').isVisible() };
-    expect(deferred.phase === 'ready' && deferred.apply, '稍後保留 verified ready，同一頁仍可重新啟動以安裝',
+    expect(deferred.phase === 'ready' && deferred.apply, '稍後保留可安裝的版本，同一頁仍可重新啟動以安裝',
       { id: 'u36.defer-ready', expected: { phase: 'ready', apply: true }, actual: deferred });
 
-    await instance.updateCatalog((value) => { value.updates.version = '0.1.2'; value.updates.holdPayload = true; });
+    await instance.updateCatalog((value) => { value.updates.version = '0.1.2'; });
     await page.getByTestId('update-check').click();
     await waitFor(async () => (await update()).offer?.version === '0.1.2', 'newer offer found');
     await page.getByTestId('update-download').waitFor();
     const newer = await update();
-    expect(newer.phase === 'ready' && newer.ready?.version === '0.1.1' && newer.offer?.version === '0.1.2'
-      && await page.getByTestId('update-apply').isVisible(),
-    '檢查到 0.1.2 時仍固定保留可安裝的 0.1.1，並明確提供新版下載', {
+    expect(newer.ready?.version === '0.1.1' && newer.offer?.version === '0.1.2'
+      && await page.getByTestId('update-apply').isVisible() && await page.getByTestId('update-download').isVisible(),
+    '檢查到 0.1.2 時仍可安裝已下載的 0.1.1，並提供新版下載', {
       id: 'u36.ready-newer-offer', actual: { phase: newer.phase, ready: newer.ready?.version, offer: newer.offer?.version },
     });
     await shot('ready-and-newer');
-    await page.getByTestId('update-download').click();
-    await waitFor(async () => (await update()).progress?.percent === 62, 'newer download progress');
-    const replacing = await update();
-    expect(replacing.phase === 'downloading' && replacing.ready?.version === '0.1.1' && replacing.offer?.version === '0.1.2',
-      '0.1.2 尚未驗證完成時 0.1.1 仍是唯一 ready', {
-        id: 'u36.newer-not-ready-early', actual: { phase: replacing.phase, ready: replacing.ready?.version, offer: replacing.offer?.version },
-      });
-    await page.getByTestId('update-cancel').click();
-    await page.getByTestId('update-apply').waitFor();
-    const retryStatus = { ...(await update()), phase: 'error', errorCode: 'update_apply_failed', message: '準備更新逾時，請重試。' };
-    const retryRoute = '**/api/device/updates';
-    await page.route(retryRoute, (route) => route.fulfill({ status: 200, contentType: 'application/json',
-      body: JSON.stringify({ update: retryStatus }) }));
-    try {
-      await page.reload();
-      await page.getByTestId('update-apply').waitFor();
-      expect(await page.getByTestId('update-apply').isVisible() && await page.getByTestId('update-download').isVisible(),
-        '錯誤後保留 ready 的套用與新版 offer 的下載入口', { id: 'u36.error-retains-actions' });
-      await shot('error-ready-retry');
-      await page.getByTestId('update-apply').click();
-    } finally { await page.unroute(retryRoute); }
-    await waitFor(async () => await cancels() === 'wait', 'waiting cancel UI');
-    const waiting = { phase: (await update()).phase, cancels: await cancels(), apply: await page.getByTestId('update-apply').count() };
-    expect(waiting.phase === 'waiting' && waiting.cancels === 'wait' && waiting.apply === 0,
-      '等待工作時不能再次套用，只能取消等待', { id: 'u36.waiting', expected: { phase: 'waiting', cancels: 'wait', apply: 0 }, actual: waiting });
-    await shot('waiting-no-vault');
-    await page.getByTestId('update-cancel').click();
-    await page.getByTestId('update-apply').waitFor();
-    expect((await update()).phase === 'ready', '取消等待只釋放意圖，驗證完成的更新仍可稍後套用', { id: 'u36.wait-cancel' });
-    note('native-boundary', '此流程停在 waiting 後取消；原生 A→B、installer 與重新啟動另由兩平台 packaged acceptance 證明。');
   });
 
   await instance.api('/api/vault/setup', { method: 'POST', body: JSON.stringify({ action: 'create', location: instance.runDir, name: 'vault' }) });
@@ -187,14 +148,13 @@ export async function run({ instance, page, record, waitFor }) {
     await shot('update-panel-navigation');
   });
 
-  await record.scenario('U36-W5', '側欄只顯示目前真正的更新動作', async ({ expect, shot }) => {
+  await record.scenario('U36-W5', '側欄顯示目前的更新動作；安裝後下次啟動記為已安裝', async ({ expect, shot, note }) => {
     const sidebarPhase = () => page.getByTestId('sidebar-update').getAttribute('data-phase');
     /** The sidebar once it shows `phase`, read back for the check. */
     const sidebarShows = async (phase, label) => {
       await waitFor(async () => await sidebarPhase() === phase, label).catch(() => undefined);
       return sidebarPhase();
     };
-    // The ready 0.1.1 and the 0.1.2 offer from W3 stay; a fresh offer needs a check that finds no ready update.
     const start = await update();
     expect(await sidebarShows(start.phase, 'sidebar follows the update phase') === start.phase, '側欄顯示目前的更新階段',
       { id: 'u36.sidebar-current', expected: start.phase, actual: await sidebarPhase() });
@@ -208,17 +168,26 @@ export async function run({ instance, page, record, waitFor }) {
 
     await instance.updateCatalog((value) => { value.updates.holdPayload = false; });
     await page.getByTestId('update-download').click();
-    await waitFor(async () => (await update()).ready?.version === '0.1.2', '0.1.2 verified');
-    expect(await sidebarShows('ready', 'sidebar ready') === 'ready', '驗證完成後側欄顯示可安裝',
+    await waitFor(async () => (await update()).ready?.version === '0.1.2', '0.1.2 downloaded');
+    expect(await sidebarShows('ready', 'sidebar ready') === 'ready', '下載完成後側欄顯示可安裝',
       { id: 'u36.sidebar-ready', expected: 'ready', actual: await sidebarPhase() });
     await shot('sidebar-ready');
 
     await page.getByTestId('update-apply').click();
-    expect(await sidebarShows('waiting', 'sidebar waiting') === 'waiting', '等待安全停止時側欄顯示等待安裝',
-      { id: 'u36.sidebar-waiting', expected: 'waiting', actual: await sidebarPhase() });
-    await shot('sidebar-waiting');
-    await page.getByTestId('update-cancel').click();
-    await page.getByTestId('update-apply').waitFor();
+    expect(await sidebarShows('installing', 'sidebar installing') === 'installing', '安裝時側欄顯示安裝中',
+      { id: 'u36.sidebar-installing', expected: 'installing', actual: await sidebarPhase() });
+    const installing = { apply: await page.getByTestId('update-apply').count(), download: await page.getByTestId('update-download').count(),
+      check: await page.getByTestId('update-check').count() };
+    expect(Object.values(installing).every((count) => count === 0), '安裝中不再提供更新操作',
+      { id: 'u36.installing-actions', expected: { apply: 0, download: 0, check: 0 }, actual: installing });
+    await shot('sidebar-installing');
+
+    await instance.updateCatalog((value) => { value.updates.currentVersion = '0.1.2'; });
+    await instance.restart({ page });
+    const installed = await update();
+    expect(installed.currentVersion === '0.1.2' && installed.lastAttempt?.outcome === 'installed' && installed.lastAttempt.version === '0.1.2',
+      '以 0.1.2 重新啟動後，安裝結果記為已安裝', { id: 'u36.installed', actual: { currentVersion: installed.currentVersion, lastAttempt: installed.lastAttempt } });
+    note('native-boundary', 'Web 只記錄安裝請求；原生 A→B 由兩平台的打包驗收證明。');
   });
 }
 

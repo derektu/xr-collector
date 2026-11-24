@@ -93,11 +93,11 @@ export const api = {
   async checkForUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
     return (await call(API_ROUTES.checkUpdate, { signal })).update;
   },
-  async downloadUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await call(API_ROUTES.downloadUpdate, { body: { version, sha256 }, signal })).update;
+  async downloadUpdate(version: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await call(API_ROUTES.downloadUpdate, { body: { version }, signal })).update;
   },
-  async applyUpdate(version: string, sha256: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
-    return (await call(API_ROUTES.applyUpdate, { body: { version, sha256 }, signal })).update;
+  async applyUpdate(version: string, signal?: AbortSignal): Promise<DeviceUpdateStatus> {
+    return (await call(API_ROUTES.applyUpdate, { body: { version }, signal })).update;
   },
   async cancelUpdate(signal?: AbortSignal): Promise<DeviceUpdateStatus> {
     return (await call(API_ROUTES.cancelUpdate, { signal })).update;

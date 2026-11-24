@@ -12,11 +12,11 @@
 ## 發布步驟
 
 1. **定版**：在 main 上把 `package.json` 的 `version` 改成要發布的版本，以 PR merge。merge 後的 commit 就是這一版的 commit，記下它的完整 SHA。
-2. **驗收候選**：兩個平台以這個 commit 的 ad-hoc／未簽署包完成安裝與更新驗收（[專案驗證設定](project-validation.md#打包與簽章)）。驗收中需要修改程式時回到第 1 步，以新的 commit 重來。
+2. **驗收候選**：兩個平台以這個 commit 的 ad-hoc／未簽署包完成安裝驗收（[專案驗證設定](project-validation.md#打包與簽章)）。ad-hoc 的 Mac 包不能做 App 內更新，Mac 的更新在第 6 步以前一版的 Developer ID 包驗證。驗收中需要修改程式時回到第 1 步，以新的 commit 重來。
 3. **各平台打包並上傳**：兩位建置者各自 checkout 這個 commit，打包正式版並執行 `npm run release:upload -- v<版本>`。先上傳的人會建立 tag 與 draft，後上傳的人加入同一個 draft。Mac 正式版以 Developer ID 簽章與公證。
-4. **確認 draft**：`gh release view v<版本> --repo <repository> --json isDraft,assets` 列出兩份 release index（`release-darwin-arm64.json`、`release-win32-x64.json`）與兩個平台的安裝檔。
+4. **確認 draft**：`gh release view v<版本> --repo <repository> --json isDraft,assets` 列出兩份更新 feed（`latest-mac.yml`、`latest.yml`）、兩個平台的安裝檔、Mac 的更新檔 ZIP，以及各自的 blockmap。
 5. **公開**：寫好版本說明，以 `gh release edit v<版本> --repo <repository> --draft=false --latest --notes-file <版本說明.md>` 公開。
-6. **公開後檢查**：在沒有登入 GitHub 的瀏覽器下載兩個平台的安裝檔並安裝；以前一版的 App 檢查更新，確認看到這一版、下載並完成安裝。公開後一分鐘內的檢查可能還是舊結果（GitHub 的快取），稍後再檢查。
+6. **公開後檢查**：在沒有登入 GitHub 的瀏覽器下載兩個平台的安裝檔並安裝；以前一版的 App 檢查更新，確認看到這一版、下載並完成安裝，重開後設定頁的版本是這一版、安裝結果是「已安裝」。公開後一分鐘內的檢查可能還是舊結果（GitHub 的快取），稍後再檢查。
 
 draft 只對有 repository 寫入權限的人可見，App 與一般使用者看不到；公開之前，draft 裡的檔案可以補傳或移除。
 
@@ -27,8 +27,8 @@ draft 只對有 repository 寫入權限的人可見，App 與一般使用者看�
 | `release:upload` 說 checkout 有未 commit 的修改，或 HEAD 不是建置的 commit | checkout 發布的 commit，清掉修改與未追蹤的檔案，重新打包再上傳。 |
 | GitHub 沒有這個 commit | 先把 commit push 到發布的 repository。 |
 | tag 已存在但指向別的 commit | 確認發布的 commit。tag 指錯而 Release 還沒公開時，發布者以 `gh release delete v<版本> --repo <repository> --cleanup-tag` 刪除 draft 與 tag，再重新上傳。 |
-| 檔案與 release index 不符 | `release/` 裡的檔案在打包後被改過或混入其他建置；重新打包。 |
-| draft 已有同名但內容不同的檔案 | 另一次建置先上傳了。確認要保留哪一份；要換成這次的建置時，執行訊息中的 `gh release delete-asset`，再重跑上傳。兩個平台的 index 各自記錄自己的 commit，所以換檔時兩個平台都要來自同一個 commit。 |
+| 檔案與 artifact manifest 不符 | `release/` 裡的檔案在打包後被改過或混入其他建置；重新打包。 |
+| draft 已有同名但內容不同的檔案 | 另一次建置先上傳了。確認要保留哪一份；要換成這次的建置時，執行訊息中的 `gh release delete-asset`，再重跑上傳。每個平台的檔案都來自同一個 commit，換檔時也要用這個 commit 的建置。 |
 | 同一個 tag 有兩個 draft | 兩台機器同時建立了 draft。在 GitHub 刪掉沒有檔案或較少檔案的那個，再重跑上傳。 |
 | 上傳後下載核對不符 | 傳輸出錯。以 `gh release delete-asset` 移除那個檔案後重跑。 |
 | Release 已公開才發現問題 | 已公開的 Release 不改檔案。修正後發布下一個版本；必要時以 `gh release edit --prerelease` 先讓 App 不再把這一版當成最新的穩定版。 |

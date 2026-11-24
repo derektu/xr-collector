@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { releaseIndexName } from './package-app.mjs';
+import { updateFeedName } from './package-app.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGETS = { darwin: 'darwin-arm64', win32: 'win32-x64' };
@@ -14,10 +14,12 @@ const TARGETS = { darwin: 'darwin-arm64', win32: 'win32-x64' };
 export class UploadStopped extends Error {}
 
 /**
- * Uploads this machine's package for one platform to the draft GitHub Release of `tag`.
- * It checks that the checkout is the clean commit the package was built from and that the tag
- * points at it, creating the tag and the draft when they do not exist yet. Files already in the
- * draft with the same SHA-256 are skipped; a same-named file with other bytes stops the upload.
+ * Uploads this machine's package for one platform to the draft GitHub Release of `tag`: the files
+ * the package run recorded in its artifact manifest, among them the platform's update feed
+ * (`latest-mac.yml` or `latest.yml`). It checks that the checkout is the clean commit the package
+ * was built from and that the tag points at it, creating the tag and the draft when they do not
+ * exist yet. Files already in the draft with the same SHA-256 are skipped; a same-named file with
+ * other bytes stops the upload.
  * After uploading, every file is downloaded back and hashed. Each platform runs this on its own
  * build machine, in any order, against the same tag. Publishing the draft is left to
  * `gh release edit`.
@@ -36,14 +38,14 @@ export async function uploadRelease({ tag }, dependencies = {}) {
   const target = TARGETS[dependencies.platform ?? process.platform];
   if (!target) throw new UploadStopped('release:upload runs on the Mac or Windows build machine that built the package.');
 
-  const indexPath = path.join(outputDir, releaseIndexName(target));
-  const index = await readJson(indexPath, `${path.relative(root, indexPath)} is missing; run npm run package:${target === 'darwin-arm64' ? 'mac' : 'win'} first.`);
-  if (index.version !== version || index.target !== target) {
-    throw new UploadStopped(`${releaseIndexName(target)} is version ${index.version} for ${index.target}, not ${version} for ${target}.`);
-  }
   const manifestPath = path.join(outputDir, `XR-Collector-${version}-${target}-artifacts.json`);
-  const manifest = await readJson(manifestPath, `${path.relative(root, manifestPath)} is missing; package this version again.`);
-  if (manifest.commit !== index.commit) throw new UploadStopped(`${path.basename(manifestPath)} and ${releaseIndexName(target)} come from different builds.`);
+  const manifest = await readJson(manifestPath, `${path.relative(root, manifestPath)} is missing; run npm run package:${target === 'darwin-arm64' ? 'mac' : 'win'} first.`);
+  if (manifest.version !== version || manifest.target !== target) {
+    throw new UploadStopped(`${path.basename(manifestPath)} is version ${manifest.version} for ${manifest.target}, not ${version} for ${target}.`);
+  }
+  if (!manifest.artifacts?.some((artifact) => artifact.path === updateFeedName(target))) {
+    throw new UploadStopped(`${path.basename(manifestPath)} lists no ${updateFeedName(target)}; package this version again.`);
+  }
   const repository = manifest.packageIdentity?.updateRepository;
   if (typeof repository !== 'string' || !/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new UploadStopped(`${path.basename(manifestPath)} names no update repository.`);
 
@@ -51,23 +53,22 @@ export async function uploadRelease({ tag }, dependencies = {}) {
     throw new UploadStopped('The checkout has uncommitted changes. Upload from a clean checkout of the commit the package was built from.');
   }
   const head = (await git(['rev-parse', 'HEAD'])).trim();
-  if (head !== index.commit) throw new UploadStopped(`HEAD is ${head}, but the package was built from ${index.commit}. Check out that commit or package again.`);
+  if (head !== manifest.commit) throw new UploadStopped(`HEAD is ${head}, but the package was built from ${manifest.commit}. Check out that commit or package again.`);
   const localTag = await optional(() => git(['rev-parse', '--verify', '--quiet', `refs/tags/${tag}^{commit}`]));
   if (localTag !== null && localTag.trim() !== head) throw new UploadStopped(`The local tag ${tag} points at ${localTag.trim()}, not HEAD ${head}.`);
 
-  const files = await Promise.all([...new Set([index.installer.name, index.update.name])].map(async (name) => {
-    const declared = [index.installer, index.update].find((entry) => entry.name === name);
+  const files = await Promise.all(manifest.artifacts.map(async (declared) => {
+    const name = declared.path;
     const filePath = path.join(outputDir, name);
     const actual = await describeFile(filePath).catch((error) => {
       if (error.code === 'ENOENT') throw new UploadStopped(`${name} is missing from ${path.relative(root, outputDir)}.`);
       throw error;
     });
     if (actual.bytes !== declared.bytes || actual.sha256 !== declared.sha256) {
-      throw new UploadStopped(`${name} does not match ${releaseIndexName(target)} (SHA-256 ${actual.sha256}, index ${declared.sha256}).`);
+      throw new UploadStopped(`${name} does not match ${path.basename(manifestPath)} (SHA-256 ${actual.sha256}, manifest ${declared.sha256}).`);
     }
     return { name, filePath, ...actual };
   }));
-  files.push({ name: releaseIndexName(target), filePath: indexPath, ...await describeFile(indexPath) });
 
   try { await gh(['auth', 'status', '--hostname', 'github.com']); }
   catch (error) {
@@ -126,7 +127,7 @@ export async function uploadRelease({ tag }, dependencies = {}) {
   }
   log(`Verified ${files.length} files in draft ${tag} by downloading them back.`);
   const names = new Set(uploaded.assets.map((asset) => asset.name));
-  const platforms = Object.values(TARGETS).filter((entry) => names.has(releaseIndexName(entry)));
+  const platforms = Object.values(TARGETS).filter((entry) => names.has(updateFeedName(entry)));
   log(`Platforms in the draft: ${platforms.join(', ')}.`);
   return { repository, tag, target, uploaded: pending.map((file) => file.name), skipped: files.filter((file) => !pending.includes(file)).map((file) => file.name), platforms };
 }

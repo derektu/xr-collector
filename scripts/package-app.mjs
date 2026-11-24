@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { assertBuildEnvironment } from './build-doctor.mjs';
 import { probePhysicalHost } from './physical-host.mjs';
 import { TARGETS, validateExecutable } from './prepare-meilisearch.mjs';
@@ -114,11 +115,10 @@ export async function packageApplication(options, dependencies = {}) {
     await timer.time('build: write BuildInfo', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/write-build-info.mjs'), '--kind', 'packaged', '--target', options.target,
       ...(options.validationVersion ? ['--version-override', options.validationVersion] : [])]));
     await timer.time('build: stage BuildInfo sidecar', () => (dependencies.stageBuildInfoSidecar ?? stageBuildInfoSidecar)(projectRoot));
-    if (options.target === 'darwin-arm64') await timer.time('build: macOS update helper', () => buildLifecycleRun(process.execPath, [path.join(projectRoot, 'scripts/build-mac-update-helper.mjs')]));
     await timer.time('clear previous artifacts', () => (dependencies.clearPreviousArtifactSet ?? clearPreviousArtifactSet)(outputDir, [
       expectedArtifactPrefix(version, options.target),
       `XR-Collector-${version}-${options.target}`,
-      releaseIndexName(options.target),
+      updateFeedName(options.target),
     ]));
     const signed = signingConfiguration !== null;
     const commonBuilderArgs = [...(signed ? ['--config', 'electron-builder.signed.yml'] : []),
@@ -181,7 +181,7 @@ export async function packageApplication(options, dependencies = {}) {
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
     const verified = await timer.group('verify: packaged App (BuildInfo, runtime, resources)', (child) => verifyPackagedApplication({ outputDir, ...expected,
       signingPolicy: signingReceipt?.policy, verifiedAppIdentity }, { run: verifyRun, timer: child }));
-    const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
+    const artifacts = await findReleaseArtifacts(outputDir, expected, signingReceipt?.policy);
     const { host, toolVersions } = await timer.time('read host and tool versions', async () => ({
       host: await probeHost(),
       toolVersions: {
@@ -276,14 +276,19 @@ export async function stageBuildInfoSidecar(root = projectRoot) {
   return { source, destination, bytes };
 }
 
-/** Validation packages bake their unique product name into ASAR metadata as well as the installer. */
+/**
+ * electron-builder overrides that give a validation package its own version, appId and product
+ * name, so Electron derives a separate userData folder from the product name, and its own update
+ * repository in app-update.yml. The appId also goes into package metadata, where the App reads it.
+ */
 export function validationBuilderArguments(options) {
   if (!options.validationVersion) return [];
+  const [owner, repo] = (options.validationUpdateRepository ?? productionUpdateRepository).split('/');
   return [`--config.extraMetadata.version=${options.validationVersion}`,
     `--config.extraMetadata.productName=${options.validationProductName}`,
     `--config.extraMetadata.xrCollectorAppId=${options.validationAppId}`,
-    `--config.extraMetadata.xrCollectorUpdateRepository=${options.validationUpdateRepository ?? productionUpdateRepository}`,
-    `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`];
+    `--config.appId=${options.validationAppId}`, `--config.productName=${options.validationProductName}`,
+    `--config.publish.owner=${owner}`, `--config.publish.repo=${repo}`];
 }
 
 export async function readPackagingGitIdentity(root, sourceEnvironment = process.env) {
@@ -317,7 +322,8 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   }
   const asarPath = path.join(resources, 'app.asar');
   const packageMetadata = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'));
-  assertPackagedProductMetadata(packageMetadata, productName, appId, updateRepository);
+  assertPackagedProductMetadata(packageMetadata, productName, appId);
+  assertPackagedUpdateConfig(parseYaml(await readFile(path.join(resources, 'app-update.yml'), 'utf8')), updateRepository);
   const buildInfo = JSON.parse(extractFile(asarPath, path.join('dist', 'node', 'build-info.json')).toString('utf8'));
   const sidecarBuildInfo = JSON.parse(await readFile(path.join(resources, 'build-info.json'), 'utf8'));
   if (JSON.stringify(sidecarBuildInfo) !== JSON.stringify(buildInfo)) throw new Error('Packaged BuildInfo sidecar differs from app.asar.');
@@ -359,11 +365,6 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     throw new Error('Packaged Agent Skill does not match the source artifact.');
   }
   const crt = path.join(bin, 'vcruntime140.dll');
-  if (target === 'darwin-arm64') {
-    const helper = path.join(bin, 'xr-mac-update-helper');
-    const helperInfo = await stat(helper);
-    if (!helperInfo.isFile() || (helperInfo.mode & 0o111) === 0) throw new Error('Packaged macOS update helper is missing or not executable.');
-  }
   if (target === 'win32-x64') {
     const pin = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).windowsCrt;
     if ((await stat(crt)).size !== pin.bytes || await sha256(crt) !== pin.sha256) throw new Error('Packaged Windows CRT does not match its pin.');
@@ -442,71 +443,82 @@ async function requireOnlyExpectedApplication(directory, productName) {
   return path.join(directory, expected);
 }
 
-export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository) {
+export function assertPackagedProductMetadata(metadata, productName, appId = 'com.moneydj.xrcollector') {
   if (metadata?.name !== 'xr-collector') throw new Error('Packaged application name is not XR Collector.');
   if (productName === 'XR Collector') {
     if (metadata.productName !== undefined && metadata.productName !== productName) throw new Error('Packaged productName does not match the packaging request.');
-  } else if (metadata.productName !== productName) {
-    throw new Error('Validation productName is missing from packaged application metadata.');
+    if (metadata.xrCollectorAppId !== undefined) throw new Error('Production package must not override its packaged identity.');
+  } else if (metadata.productName !== productName || metadata.xrCollectorAppId !== appId) {
+    throw new Error('Validation productName or appId is missing from packaged application metadata.');
   }
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(updateRepository)) throw new Error('Packaging update repository is invalid.');
-  if (productName === 'XR Collector') {
-    if (metadata.xrCollectorUpdateRepository !== undefined || metadata.xrCollectorAppId !== undefined) throw new Error('Production package must not override its packaged identity.');
-  } else if (metadata.xrCollectorUpdateRepository !== updateRepository || metadata.xrCollectorAppId !== appId) {
-    throw new Error('Validation update repository is missing from packaged application metadata.');
+}
+
+/** Checks that electron-builder pointed the packaged updater at the GitHub releases of `repository`. */
+export function assertPackagedUpdateConfig(config, repository) {
+  if (config?.provider !== 'github' || `${config.owner}/${config.repo}` !== repository) {
+    throw new Error(`Packaged app-update.yml does not name the GitHub repository ${repository}.`);
   }
 }
 
 /**
- * Writes the platform release index, `release-<target>.json`, that the updater and
- * `release:upload` read, and the private artifact manifest that records the build.
+ * Checks the update feed electron-builder wrote beside the installers, and writes the private
+ * artifact manifest that records the build and every file `release:upload` publishes.
  */
 export async function writeArtifactHandoff(input) {
   const base = `XR-Collector-${input.version}-${input.target}`;
-  const isMac = input.target === 'darwin-arm64';
-  const installer = input.artifacts.find((artifact) => artifact.endsWith(isMac ? '.dmg' : '.exe'));
-  const update = input.artifacts.find((artifact) => artifact.endsWith(isMac ? '.zip' : '.exe'));
-  if (!installer || !update) throw new Error(`No installer and update artifact exist for ${input.target}.`);
   const timer = input.timer ?? noStageTimer;
+  const feedName = updateFeedName(input.target);
+  const feed = input.artifacts.find((artifact) => path.basename(artifact) === feedName);
+  if (!feed) throw new Error(`electron-builder wrote no ${feedName} for ${input.target}.`);
+  assertUpdateFeed(parseYaml(await readFile(feed, 'utf8')), input.version, input.artifacts.map((artifact) => path.basename(artifact)));
   const described = await timer.time('hash: artifact sha256 inventory', async (stage) => {
     const files = await Promise.all(input.artifacts.map(async (artifact) => ({ path: path.basename(artifact), ...await describeFile(artifact) })));
     stage.bytes = files.reduce((total, artifact) => total + artifact.bytes, 0);
     return files;
   }, { count: input.artifacts.length });
-  const entry = (artifact) => {
-    const { path: name, bytes, sha256: digest } = described.find((file) => file.path === path.basename(artifact));
-    return { name, bytes, sha256: digest };
-  };
-  const releaseIndex = path.join(input.outputDir, releaseIndexName(input.target));
-  const index = { schemaVersion: 1, version: input.version, commit: input.commit, target: input.target,
-    buildInfo: input.buildInfo, installer: entry(installer), update: entry(update) };
-  await timer.time('manifest: write release index', () => writeFile(releaseIndex, `${JSON.stringify(index, null, 2)}\n`));
   const artifactManifest = path.join(input.outputDir, `${base}-artifacts.json`);
   const document = {
     schemaVersion: 1, version: input.version, commit: input.commit, target: input.target,
     packageIdentity: { productName: input.productName ?? 'XR Collector', appId: input.appId ?? 'com.moneydj.xrcollector', updateRepository: input.updateRepository ?? productionUpdateRepository },
     buildInfo: input.buildInfo, builderHost: input.host, toolVersions: input.toolVersions, signing: input.signing,
     runtimeIdentity: input.runtimeIdentity ?? null,
-    artifacts: [...described, { path: path.basename(releaseIndex), ...await describeFile(releaseIndex) }],
+    artifacts: described,
     acceptanceEvidence: [],
   };
   await timer.time('manifest: write artifact manifest', () => writeFile(artifactManifest, `${JSON.stringify(document, null, 2)}\n`));
-  return { releaseIndex, artifactManifest, manifest: document };
+  return { artifactManifest, manifest: document };
 }
 
-export function releaseIndexName(target) {
-  return `release-${target}.json`;
+/**
+ * The update feed file electron-updater requests from a release: `latest-mac.yml` on macOS,
+ * `latest.yml` on Windows.
+ */
+export function updateFeedName(target) {
+  // electron-updater appends "-mac" to the channel name on macOS and nothing on Windows.
+  // https://github.com/electron-userland/electron-builder/blob/electron-updater%406.8.12/packages/electron-updater/src/providers/Provider.ts
+  return target === 'darwin-arm64' ? 'latest-mac.yml' : 'latest.yml';
 }
 
-async function findInstallerArtifacts(outputDir, { version, target }, signingPolicy) {
+/** Checks that the feed names `version` and that every file it points the updater at is among `artifacts`. */
+export function assertUpdateFeed(feed, version, artifacts) {
+  if (feed?.version !== version) throw new Error(`The update feed names version ${feed?.version}, not ${version}.`);
+  const files = Array.isArray(feed.files) ? feed.files : [];
+  if (files.length === 0 || files.some((file) => !artifacts.includes(file?.url) || typeof file.sha512 !== 'string')) {
+    throw new Error('The update feed points at a file that is not among the release artifacts.');
+  }
+}
+
+async function findReleaseArtifacts(outputDir, { version, target }, signingPolicy) {
   const expectedPrefix = expectedArtifactPrefix(version, target);
-  const entries = (await readdir(outputDir)).filter((name) => name.startsWith(expectedPrefix) && ['.dmg', '.zip', '.exe', '.blockmap'].includes(path.extname(name)));
+  const names = await readdir(outputDir);
+  const entries = names.filter((name) => name.startsWith(expectedPrefix) && ['.dmg', '.zip', '.exe', '.blockmap'].includes(path.extname(name)));
   const installers = entries.filter((name) => ['.dmg', '.zip', '.exe'].includes(path.extname(name)));
   const expectedCount = target === 'darwin-arm64' ? 2 : 1;
   if (installers.length !== expectedCount) throw new Error(`Expected ${expectedCount} uniquely named ${target} installer artifacts, found ${installers.length}.`);
   if (target === 'darwin-arm64' && signingPolicy === DEVELOPER_ID_POLICY && entries.some((name) => name.endsWith('.dmg.blockmap'))) {
     throw new Error('Developer ID packages publish no DMG blockmap; updates use the ZIP.');
   }
+  if (names.includes(updateFeedName(target))) entries.push(updateFeedName(target));
   return entries.sort().map((entry) => path.join(outputDir, entry));
 }
 

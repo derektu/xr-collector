@@ -165,7 +165,7 @@ describe('tray menu (#32 T1)', () => {
     expect(label({ phase: 'ready', ready: offer, progress })).toMatchObject({ label: { phase: 'ready', version: '0.1.1', percent: null } });
     expect(label({ phase: 'available', offer })).toMatchObject({ label: { phase: 'available', version: '0.1.1' } });
     expect(label({ phase: 'available' })).toMatchObject({ label: { phase: 'available', version: null } });
-    expect(label({ phase: 'waiting', ready: offer })).toMatchObject({ label: { phase: 'waiting', version: null, percent: null } });
+    expect(label({ phase: 'installing', ready: offer })).toMatchObject({ label: { phase: 'installing', version: null, percent: null } });
     expect(label({ phase: 'error', errorCode: 'update_failed' })).toMatchObject({ label: { phase: 'error' } });
   });
 

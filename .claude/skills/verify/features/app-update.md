@@ -6,9 +6,9 @@
 
 ## Sub-features
 
-- `update-discovery`：檢查固定 release index，區分最新版、未發布與錯誤，顯示版本說明但不自動下載。
+- `update-discovery`：檢查固定 release index，區分最新版、未發布與錯誤，只顯示版本號，不自動下載。
 - `update-download`：下載時顯示進度及取消；大小、SHA-256、target 與 manifest 全部吻合才發布 ready。
-- `update-apply-wait`：ready 由使用者再次確認後等待工作與寫入安全停止；等待可取消，installing 不提供重複動作。
+- `update-install`：ready 由使用者再次確認後走一般的結束流程再交給安裝程式；installing 不提供重複動作，下次啟動依執行中的版本記為已安裝或未完成。
 - `update-agent`：授權 Agent 與 UI 使用同一組查詢、檢查、下載、套用及取消 API，selection 必須綁定版本與雜湊。
 - `update-no-vault`：更新是裝置資料，Onboarding／Vault 不可用時仍可從 App 設定與 Agent 操作。
 - `update-navigation`：側欄版本狀態與原生選單入口開啟設定後，等待更新面板掛載並將它帶入可視範圍。
@@ -24,7 +24,7 @@
 
 Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私人 feed 提供真實 generic index／manifest／payload HTTP 協定，real `UpdateService` 使用只存在 verification server 的 fake `NativeInstaller` 驗證語意 ZIP。原生安裝及 A→B 重新啟動另用兩平台隔離安裝版。
 
-1. 直接開 `/settings`，確認沒有 Vault 時仍看到目前版本與「檢查更新」；由這個 run 的 Agent connection 以 Bearer token 檢查，再比對 UI／Agent 都為 `available`、版本 `0.1.1`、來源與版本說明。
+1. 直接開 `/settings`，確認沒有 Vault 時仍看到目前版本與「檢查更新」；由這個 run 的 Agent connection 以 Bearer token 檢查，再比對 UI／Agent 都為 `available`、版本 `0.1.1`。
 2. 將 payload 分兩段送出，點「下載更新」；62% 時只顯示「取消下載」，Agent 同時要求 apply 回 `update_busy`。取消後回到同一 offer，沒有 ready。
 3. feed 改送同大小但錯誤雜湊的 payload；下載後顯示 integrity error、ready 為 null，但固定 offer 仍可直接重新下載。恢復原 bytes 並重新下載後才顯示「重新啟動以安裝」與「稍後」。
 4. 點「稍後」後同頁仍顯示「重新啟動以安裝」。feed 改為 `0.1.2` 並檢查，確認 ready `0.1.1` 與新版下載按鈕並存；開始新版下載時也不提前取代 ready，取消後仍可套用 `0.1.1`。點套用後停在 `waiting`，只顯示「取消等待」；取消後回 ready。Web 流程不呼叫 installing 或宣稱安裝成功。
@@ -44,7 +44,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；合成私
 
 ## Regression flows
 
-- `app-update`：斷言 `update-discovery`、`update-download`、`update-apply-wait`、`update-agent`、`update-no-vault`、`update-navigation`；從 no-Vault Web instance 開始，使用真實 generic HTTP metadata／stream 與 real UpdateService，涵蓋 Agent 檢查、UI 進度／取消、busy、integrity error、ready、稍後及 waiting 取消；之後建立 Vault，側欄各更新階段的 data-phase 與更新 API 相同，從非設定頁的側欄點擊與原生導覽訊號都定位到更新面板。明確不宣稱 Web 已安裝原生更新。
+- `app-update`：斷言 `update-discovery`、`update-download`、`update-install`、`update-agent`、`update-no-vault`、`update-navigation`；從 no-Vault Web instance 開始，使用真實 generic HTTP metadata／stream 與 real UpdateService，涵蓋 Agent 檢查、UI 進度／取消、busy、integrity error、ready、稍後及 waiting 取消；之後建立 Vault，側欄各更新階段的 data-phase 與更新 API 相同，從非設定頁的側欄點擊與原生導覽訊號都定位到更新面板。明確不宣稱 Web 已安裝原生更新。
 
 ## Backlog
 

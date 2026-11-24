@@ -1,6 +1,7 @@
-// What users download from a GitHub Release: each platform's files go into one draft for the tag
-// at the built commit, match the platform index and are downloaded back to compare, and the upload
-// stops before changing GitHub on a dirty checkout, a mismatched commit, tag or file, or no sign-in.
+// What users download from a GitHub Release, and what the App's updater reads there: each platform's
+// installers and update feed go into one draft for the tag at the built commit, match the package's
+// artifact manifest and are downloaded back to compare, and the upload stops before changing GitHub
+// on a dirty checkout, a mismatched commit, tag or file, or no sign-in.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,14 +30,12 @@ async function setup(target: 'darwin-arm64' | 'win32-x64', options: { version?: 
   const version = options.version ?? '0.1.0';
   const commit = options.commit ?? head;
   const names = target === 'darwin-arm64'
-    ? [`XR-Collector-${version}-mac-arm64.dmg`, `XR-Collector-${version}-mac-arm64.zip`]
-    : [`XR-Collector-${version}-win-x64-setup.exe`];
+    ? [`XR-Collector-${version}-mac-arm64.dmg`, `XR-Collector-${version}-mac-arm64.zip`, 'latest-mac.yml']
+    : [`XR-Collector-${version}-win-x64-setup.exe`, 'latest.yml'];
   for (const name of names) await writeFile(path.join(output, name), `${name} bytes`);
-  const entry = (name: string) => ({ name, bytes: Buffer.byteLength(`${name} bytes`), sha256: sha256(`${name} bytes`) });
-  await writeFile(path.join(output, `release-${target}.json`), JSON.stringify({ schemaVersion: 1, version, commit, target, buildInfo: {},
-    installer: entry(names[0]!), update: entry(names.at(-1)!) }));
-  await writeFile(path.join(output, `XR-Collector-${version}-${target}-artifacts.json`), JSON.stringify({ commit,
-    packageIdentity: { updateRepository: repository } }));
+  const entry = (name: string) => ({ path: name, bytes: Buffer.byteLength(`${name} bytes`), sha256: sha256(`${name} bytes`) });
+  await writeFile(path.join(output, `XR-Collector-${version}-${target}-artifacts.json`), JSON.stringify({ version, commit, target,
+    packageIdentity: { updateRepository: repository }, artifacts: names.map(entry) }));
 
   const git = { status: '', head, localTag: null as string | null };
   const github = { tags: new Map<string, string>(), commits: new Set([head]), releases: [] as Release[], nextId: 1, calls: [] as string[][],
@@ -92,7 +91,7 @@ async function setup(target: 'darwin-arm64' | 'win32-x64', options: { version?: 
 it('creates the tag and the draft, uploads one platform, and verifies it by downloading it back', async () => {
   const mac = await setup('darwin-arm64');
   await expect(mac.upload()).resolves.toMatchObject({ repository, tag: 'v0.1.0', platforms: ['darwin-arm64'],
-    uploaded: ['XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.zip', 'release-darwin-arm64.json'], skipped: [] });
+    uploaded: ['XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.zip', 'latest-mac.yml'], skipped: [] });
   expect(mac.github.tags.get('v0.1.0')).toBe(head);
   expect(mac.github.releases).toHaveLength(1);
   expect(mac.github.releases[0]).toMatchObject({ draft: true });
@@ -106,13 +105,13 @@ it('adds a second platform to the same draft from another machine and skips file
   const windows = await setup('win32-x64');
   Object.assign(windows.github, { tags: mac.github.tags, releases: mac.github.releases, nextId: mac.github.nextId });
   await expect(windows.upload()).resolves.toMatchObject({ platforms: ['darwin-arm64', 'win32-x64'],
-    uploaded: ['XR-Collector-0.1.0-win-x64-setup.exe', 'release-win32-x64.json'] });
+    uploaded: ['XR-Collector-0.1.0-win-x64-setup.exe', 'latest.yml'] });
   expect(windows.github.calls.some((call) => call.includes('--method') && call.some((arg) => arg.endsWith('/releases')))).toBe(false);
-  await expect(windows.upload()).resolves.toMatchObject({ uploaded: [], skipped: ['XR-Collector-0.1.0-win-x64-setup.exe', 'release-win32-x64.json'] });
+  await expect(windows.upload()).resolves.toMatchObject({ uploaded: [], skipped: ['XR-Collector-0.1.0-win-x64-setup.exe', 'latest.yml'] });
   expect(windows.uploads()).toHaveLength(1);
   expect(mac.github.releases[0]!.assets.map((asset) => asset.name).sort()).toEqual([
     'XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.zip', 'XR-Collector-0.1.0-win-x64-setup.exe',
-    'release-darwin-arm64.json', 'release-win32-x64.json',
+    'latest-mac.yml', 'latest.yml',
   ]);
 });
 
@@ -139,11 +138,11 @@ it('stops when HEAD is not the built commit, or a local or remote tag points els
   expect(unpushed.github.tags.size).toBe(0);
 });
 
-it('stops when a file does not match the platform index or the tag is not this version', async () => {
+it('stops when a file does not match the artifact manifest or the tag is not this version', async () => {
   const mac = await setup('darwin-arm64');
   await writeFile(path.join(mac.output, 'XR-Collector-0.1.0-mac-arm64.zip'), 'rebuilt bytes');
-  await expect(mac.upload()).rejects.toThrow(/XR-Collector-0\.1\.0-mac-arm64\.zip does not match release-darwin-arm64\.json/u);
-  await expect(mac.upload('v0.2.0')).rejects.toThrow(/version 0\.1\.0 for darwin-arm64, not 0\.2\.0/u);
+  await expect(mac.upload()).rejects.toThrow(/XR-Collector-0\.1\.0-mac-arm64\.zip does not match XR-Collector-0\.1\.0-darwin-arm64-artifacts\.json/u);
+  await expect(mac.upload('v0.2.0')).rejects.toThrow(/XR-Collector-0\.2\.0-darwin-arm64-artifacts\.json is missing/u);
   await expect(mac.upload('0.1.0')).rejects.toThrow(/must look like v0\.1\.0/u);
   expect(mac.github.calls).toEqual([]);
 });
