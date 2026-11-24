@@ -2,8 +2,8 @@ import type { ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.
 import type { Collector, VaultOperations } from '../../domain/vault/index.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import { existsSync } from 'node:fs';
+import type { Socket } from 'node:net';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { maskSecrets, maskSecretsJson, redact } from '../../shared/lib/redact.js';
@@ -48,7 +48,6 @@ export interface HttpAppOptions {
   pacing?: readonly Pacing[];
   connectivity?: ConnectivityAccess;
   webRoot?: string;
-  agentToken?: string;
   agentAuthorize?: (header: string | undefined) => boolean;
   agentConnection?: AgentConnectionAccess;
   runtimeStatus?: () => CollectorRuntimeStatus;
@@ -61,14 +60,9 @@ export interface HttpAppOptions {
   allowedHosts?: string[];
 }
 
-const appDrains = new WeakMap<FastifyInstance, () => Promise<void>>();
-
-export function waitForHttpAppIdle(app: FastifyInstance): Promise<void> {
-  return appDrains.get(app)?.() ?? Promise.resolve();
-}
-
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
+  endConnectionsOnClose(app);
   // Set on each reply in the first hook: an answer without a matching route (404, or refused by a
   // hook) gets no app-level serializer from Fastify. A reply's own serializer leaves the content type
   // to the serializer. https://fastify.dev/docs/latest/Reference/Reply/#serializerfunc
@@ -82,25 +76,6 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];
   const network = networkGuard(options.connectivity);
-  let activeRequests = 0;
-  const idleWaiters = new Set<() => void>();
-  appDrains.set(app, () => activeRequests === 0 ? Promise.resolve() : new Promise<void>((resolve) => idleWaiters.add(resolve)));
-  app.addHook('onRoute', (route) => {
-    if (!route.url.startsWith('/api/')) return;
-    const handler = route.handler;
-    route.handler = async function trackedHandler(request, reply) {
-      activeRequests += 1;
-      try {
-        return await handler.call(this, request, reply);
-      } finally {
-        activeRequests -= 1;
-        if (activeRequests === 0) {
-          for (const resolve of idleWaiters) resolve();
-          idleWaiters.clear();
-        }
-      }
-    };
-  });
 
   if (options.allowedHosts) {
     // Any page this computer opens can reach a server on the loopback interface. A page on another
@@ -124,17 +99,6 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       if (!agentAuthorize(request.headers.authorization)) return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
         error: { code: 'unauthorized', message: '請使用目前的 Agent 連線金鑰。' },
       });
-    });
-  } else if (options.agentToken !== undefined) {
-    if (!options.agentToken) throw new Error('Agent token must not be empty');
-    const expected = Buffer.from(`Bearer ${options.agentToken}`);
-    app.addHook('onRequest', async (request, reply) => {
-      const supplied = Buffer.from(request.headers.authorization ?? '');
-      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-        return reply.code(401).header('WWW-Authenticate', 'Bearer').send({
-          error: { code: 'unauthorized', message: '請使用目前連線檔中的 Agent token。' },
-        });
-      }
     });
   }
 
@@ -243,4 +207,32 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   });
 
   return app;
+}
+
+/**
+ * Node's server.close, which Fastify's close calls, ends idle connections once. Two kinds of open
+ * connection outlive it (checked on Fastify 5.12.7, Node 22): one opened without a request yet, as
+ * a browser opens ahead of need, stays until Node's headersTimeout; a keep-alive one whose request is still being answered stays
+ * after its response until keepAliveTimeout, which Fastify sets to 72 seconds. Node ends a
+ * connection once a response carrying `Connection: close` is sent.
+ * https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#forcecloseconnections
+ * https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#keepalivetimeout
+ * https://nodejs.org/docs/latest-v22.x/api/http.html#serverheaderstimeout
+ */
+function endConnectionsOnClose(app: FastifyInstance): void {
+  const withoutRequest = new Set<Socket>();
+  app.server.on('connection', (socket: Socket) => {
+    withoutRequest.add(socket);
+    socket.once('close', () => withoutRequest.delete(socket));
+  });
+  app.server.on('request', (request: { socket: Socket }) => withoutRequest.delete(request.socket));
+  let closing = false;
+  app.addHook('preClose', async () => {
+    closing = true;
+    for (const socket of withoutRequest) socket.destroy();
+  });
+  app.addHook('onSend', async (_request, reply, payload) => {
+    if (closing) void reply.header('connection', 'close');
+    return payload;
+  });
 }

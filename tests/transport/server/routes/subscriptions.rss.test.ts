@@ -8,6 +8,7 @@ import { youtubePlugins } from '../../../support/youtube-sources.js';
 import { cleanUp, machine, open, seed, temp } from '../../../support/exchange-fixtures.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 // RSS through the routes every source type shares (R11-T9): an Agent with a token previews,
 // subscribes, changes, checks and removes an RSS subscription and reads its documents.
@@ -29,7 +30,7 @@ async function world() {
   const options = {
     collector: workspace.collector, jobs: workspace.jobs, subscriptions: workspace.subscriptions.all(), schedule: workspace.schedule,
   };
-  const agent = await createHttpApp({ sources: PRODUCT_SOURCES, ...options, agentToken: TOKEN });
+  const agent = await createHttpApp({ sources: PRODUCT_SOURCES, ...options, agentAuthorize: acceptsBearer(TOKEN) });
   const send = async (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown) => {
     const response = await agent.inject({
       method, url, headers: { authorization: `Bearer ${TOKEN}` },

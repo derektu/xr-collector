@@ -1,7 +1,6 @@
-// Closing the HTTP server, as quit and restart do: it waits for a handler under way even after its
-// client left, delivers a keep-alive response in progress, and does not hang on idle connections,
-// open event streams or waiting change reads. A close that hangs leaves quit or restart stuck.
-import { once } from 'node:events';
+// Closing the HTTP server, as quit and restart do: it delivers a keep-alive response in progress and
+// does not hang on idle connections, open event streams or waiting change reads. A close that hangs
+// leaves quit or restart stuck.
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,7 +29,6 @@ function heldSearch() {
   let release!: () => void;
   let started!: () => void;
   const running = new Promise<void>((resolve) => { started = resolve; });
-  let finished = false;
   const search: TranscriptSearch = {
     status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }),
     index: async () => undefined,
@@ -38,10 +36,10 @@ function heldSearch() {
     search: async () => ({ results: [], total: 0 }) as never,
     rebuild: () => {
       started();
-      return new Promise<void>((resolve) => { release = () => { finished = true; resolve(); }; });
+      return new Promise<void>((resolve) => { release = resolve; });
     },
   };
-  return { search, running, release: () => release(), finished: () => finished };
+  return { search, running, release: () => release() };
 }
 
 async function server(search?: TranscriptSearch): Promise<RunningServer> {
@@ -79,32 +77,7 @@ const arrives = (running: RunningServer, path: string) => new Promise<void>((res
   running.app.server.on('request', (request: http.IncomingMessage) => { if (request.url?.startsWith(path)) resolve(); });
 });
 
-const settled = (promise: Promise<unknown>) => {
-  let done = false;
-  void promise.then(() => { done = true; }, () => { done = true; });
-  return () => done;
-};
-
 describe('HTTP server close', () => {
-  it('waits for an accepted handler whose client disconnected, then closes', async () => {
-    const held = heldSearch();
-    const running = await server(held.search);
-    const { request, response } = rebuild(running.port);
-    response.catch(() => undefined);
-    await held.running;
-    request.destroy();
-    const serverClosed = once(running.app.server, 'close');
-    const closing = running.close();
-    const closed = settled(closing);
-    // Past the listener's close, a close that did not wait for the handler has only callbacks left.
-    await serverClosed;
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(closed()).toBe(false);
-    held.release();
-    await closing;
-    expect(held.finished()).toBe(true);
-  });
-
   // Fastify keeps an idle connection for 72 seconds, past the test bound, so a close that waited for it fails.
   it('delivers the response of a keep-alive request under way and closes without waiting for its idle timeout', async () => {
     const held = heldSearch();

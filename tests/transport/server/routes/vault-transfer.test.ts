@@ -7,6 +7,7 @@ import { transcriptDocument } from '../../../../src/domain/sources/youtube/serve
 import { cleanUp, fileOf, machine, open, seed, temp, video } from '../../../support/exchange-fixtures.js';
 import { ensureMarker, packageBytes } from '../../../support/package-fixtures.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { acceptsBearer } from '../../../support/agent-access.js';
 
 afterEach(cleanUp);
 
@@ -21,7 +22,7 @@ describe('Vault transfer routes', () => {
     const file = await fileOf(incoming.exports, 'incoming.zip', await packageBytes(incoming.vault));
     const workspace = await open(local);
     for (const agentToken of [undefined, AGENT]) {
-      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, ...(agentToken ? { agentToken } : {}) });
+      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, ...(agentToken ? { agentAuthorize: acceptsBearer(agentToken) } : {}) });
       const headers = agentToken ? { authorization: `Bearer ${agentToken}` } : {};
       const post = (url: string, payload: object) => app.inject({ method: 'POST', url, headers, payload });
       try {
@@ -60,7 +61,7 @@ describe('Vault transfer routes', () => {
     const other = path.join(root, 'Other');
     await ensureMarker(other);
     const workspace = await open(local);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentToken: AGENT });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: workspace.collector, transfer: workspace.operations, agentAuthorize: acceptsBearer(AGENT) });
     const fixed = await open(await machine('Fixed', root), { fixedLocation: true });
     const fixedApp = await createHttpApp({ sources: PRODUCT_SOURCES, transfer: fixed.operations });
     const post = (url: string, payload: object) => app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${AGENT}` }, payload });

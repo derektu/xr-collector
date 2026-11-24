@@ -20,7 +20,7 @@ import { MeilisearchBackend } from '../../../src/domain/search/meilisearch-backe
 import { loadSearchLexicon } from '../../../src/domain/search/search-lexicon.js';
 import { startMeilisearchProcess } from '../../../src/domain/search/meilisearch-process.js';
 import { createHttpApp } from '../../../src/transport/server/app.js';
-import { startAgentAccess } from '../../support/agent-access.js';
+import { startAgentAccess, acceptsBearer } from '../../support/agent-access.js';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
@@ -78,7 +78,7 @@ describe('Agent authenticated HTTP access', () => {
     const channels = subscriptionCollection('youtube', {
       list: vi.fn(async () => []), add: vi.fn(), setEnabled: vi.fn(), remove: vi.fn(), startRun: vi.fn(),
     });
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, search, schedule, subscriptions: [channels], agentToken: 'test-secret' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs, search, schedule, subscriptions: [channels], agentAuthorize: acceptsBearer('test-secret') });
     cleanup.push(() => app.close());
     for (const url of ['/api/health', '/api/documents', '/api/search', '/api/search/status', '/api/documents/youtube:aaaaaaaaaaa', '/api/jobs', '/']) {
       for (const authorization of ['', 'Bearer wrong', 'Bearer test-secreX']) {
@@ -107,7 +107,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('paginates without omissions, validates bounds, and reads the full document', async () => {
     const { collector } = await fixture();
-    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentToken: 'secret' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentAuthorize: acceptsBearer('secret') });
     cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const ids: string[] = [];
@@ -132,7 +132,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('deletes a document for an authorized Agent (A7)', async () => {
     const { collector } = await fixture();
-    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentToken: 'secret' });
+    const agent = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentAuthorize: acceptsBearer('secret') });
     cleanup.push(() => agent.close());
     const headers = { authorization: 'Bearer secret' };
     const url = `/api/documents/${encodeURIComponent('youtube:aaaaaaaaaaa')}`;
@@ -157,7 +157,7 @@ describe('Agent authenticated HTTP access', () => {
     const { collector } = await fixture();
     const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), remove: vi.fn(), search: vi.fn() };
     const search = new ManagedTranscriptSearch(backend, async () => []);
-    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search, agentToken: 'secret' });
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search, agentAuthorize: acceptsBearer('secret') });
     cleanup.push(() => app.close());
     const headers = { authorization: 'Bearer secret' };
     expect((await app.inject({ url: '/api/search/status', headers })).json().status.state).toBe('starting');

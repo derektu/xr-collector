@@ -1,5 +1,3 @@
-import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import type { Socket } from 'node:net';
 import type { ChangeFeed, AgentConnectionAccess } from '../../app/runtime/index.js';
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { FastifyInstance } from 'fastify';
@@ -9,7 +7,7 @@ import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type { CollectorRuntimeStatus } from '../../shared/api/device-types.js';
-import { createHttpApp, waitForHttpAppIdle } from './app.js';
+import { createHttpApp } from './app.js';
 import type { UpdateAccess } from '../../domain/updates/index.js';
 
 export interface StartServerOptions {
@@ -28,7 +26,6 @@ export interface StartServerOptions {
   port: number;
   host?: string;
   webRoot?: string;
-  agentToken?: string;
   agentAuthorize?: (header: string | undefined) => boolean;
   agentConnection?: AgentConnectionAccess;
   runtimeStatus?: () => CollectorRuntimeStatus;
@@ -61,7 +58,6 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.search ? { search: options.search } : {}),
     ...(options.webRoot ? { webRoot: options.webRoot } : {}),
-    ...(options.agentToken !== undefined ? { agentToken: options.agentToken } : {}),
     ...(options.agentAuthorize ? { agentAuthorize: options.agentAuthorize } : {}),
     ...(options.agentConnection ? { agentConnection: options.agentConnection } : {}),
     ...(options.runtimeStatus ? { runtimeStatus: options.runtimeStatus } : {}),
@@ -73,7 +69,6 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     allowedHosts: [...new Set(['127.0.0.1', 'localhost', options.host ?? '127.0.0.1'])],
   });
   const host = options.host ?? '127.0.0.1';
-  const connections = trackConnections(app.server);
   try {
     await app.listen({ host, port: options.port });
   } catch (error) {
@@ -86,43 +81,6 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     app,
     url: `http://${host}:${address.port}`,
     port: address.port,
-    close: async () => {
-      connections.drain();
-      await app.close();
-      await waitForHttpAppIdle(app);
-    },
-  };
-}
-
-/**
- * The server's close waits for every open connection, and a browser keeps connections it opened
- * ahead of need, or after a response, without a request on them. Draining ends each connection
- * that carries no request at once, and each other one once its response is sent.
- * https://nodejs.org/api/http.html#serverclosecallback
- */
-function trackConnections(server: Server): { drain(): void } {
-  const responding = new Map<Socket, number>();
-  let draining = false;
-  server.on('connection', (socket: Socket) => {
-    if (draining) { socket.destroy(); return; }
-    responding.set(socket, 0);
-    socket.once('close', () => responding.delete(socket));
-  });
-  server.on('request', (request: IncomingMessage, response: ServerResponse) => {
-    const socket = request.socket;
-    responding.set(socket, (responding.get(socket) ?? 0) + 1);
-    response.once('close', () => {
-      const count = responding.get(socket);
-      if (count === undefined) return;
-      const remaining = count - 1;
-      responding.set(socket, remaining);
-      if (draining && remaining === 0) socket.end();
-    });
-  });
-  return {
-    drain() {
-      draining = true;
-      for (const [socket, count] of responding) if (count === 0) socket.destroy();
-    },
+    close: () => app.close(),
   };
 }
