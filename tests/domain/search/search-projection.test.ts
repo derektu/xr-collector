@@ -25,7 +25,7 @@ it('keeps the current version of this Vault and deletes its other versions', asy
     await writeFile(file, '');
   }
 
-  expect(await prepareSearchDatabase({ searchData, vaultRoot, binaryPath: path.join(root, 'meilisearch') })).toBe(current);
+  expect(await prepareSearchDatabase({ searchData, vaultRoot })).toBe(current);
 
   expect((await readdir(profile)).sort()).toEqual([current, `${current}-state.json`, `${current}.pid`, otherVault, `${otherVault}-state.json`, path.join(profile, 'settings.json')]
     .map((entry) => path.basename(entry)).sort());

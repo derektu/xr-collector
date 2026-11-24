@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { pidFilePath, stopLeftoverMeilisearchProcess } from './meilisearch-process.js';
+import { pidFilePath } from './meilisearch-process.js';
 
 export const SEARCH_INDEX_VERSION = 1;
 
@@ -19,19 +19,16 @@ export function searchDatabasePath(searchData: string, vaultRoot: string): strin
  * versions, with their state and process files. A database the current version has not built yet
  * does not exist, so the startup comparison indexes every document into it.
  */
-export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string; binaryPath: string }): Promise<string> {
+export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string }): Promise<string> {
   const databasePath = searchDatabasePath(options.searchData, options.vaultRoot);
   const prefix = vaultPrefix(options.searchData, options.vaultRoot);
   const current = new Set([databasePath, `${databasePath}-state.json`, pidFilePath(databasePath)].map((entry) => path.basename(entry)));
   const prefixName = path.basename(prefix);
   const directory = path.dirname(prefix);
   const others = (await readdir(directory).catch(() => [] as string[]))
-    .filter((name) => !current.has(name) && (name === prefixName || name.startsWith(`${prefixName}-`) || name.startsWith(`${prefixName}.`)))
+    .filter((name) => !current.has(name) && name.startsWith(`${prefixName}-`))
     .map((name) => path.join(directory, name));
   try {
-    for (const pidFile of others.filter((target) => target.endsWith('.pid'))) {
-      await stopLeftoverMeilisearchProcess({ binaryPath: options.binaryPath, databasePath: pidFile.slice(0, -'.pid'.length) });
-    }
     for (const target of others) await rm(target, { recursive: true, force: true });
   } catch (error) {
     console.warn('Unable to delete the search data of other index versions', error);
