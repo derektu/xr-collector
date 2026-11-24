@@ -96,7 +96,7 @@ Windows runner 在 job 開始時把 workspace 與 TEMP 加進 Defender 排除；
 
 交付平台固定為 Mac arm64 與 Windows x64，各在自己的建置機建置；步驟見 [建置、測試與發布](building.md)。每次 Developer ID 建置都要送 Apple 公證兩次並等結果，成本高，所以：
 
-- 開發與反覆驗收，包括功能、更新流程 A→B 與兩平台安裝 smoke，一律用 Mac ad-hoc 包與 Windows 未簽署包。
+- 開發與反覆驗收，包括功能、Windows 的更新流程 A→B 與兩平台安裝 smoke，一律用 Mac ad-hoc 包與 Windows 未簽署包。Squirrel.Mac 拒絕 ad-hoc 包的更新，所以 Mac 的更新流程 A→B 用驗收身分的 Developer ID 包（[更新來源](update-source.md#驗收身分)），只在改動更新流程本身的票與發布前執行。
 - Developer ID 簽章與公證只用於最終發布候選：其他驗收全部通過、使用者確認要建置發布候選之後才執行。
 - 發布候選建置後需要改程式時，修正先以 ad-hoc／未簽署包驗收，確認後再重建正式候選。
 - 修改簽章、公證或打包流程本身的票，以一次 Developer ID 實跑驗證該流程。

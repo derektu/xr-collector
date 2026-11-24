@@ -1,7 +1,7 @@
 // The installers a package run produces: only the Mac and Windows delivery targets, a Mac App
 // notarized and Gatekeeper-checked before its DMG and ZIP are built from it, verified BuildInfo and
-// runtimes inside, an isolated identity for validation packages, a release index and inventory, and
-// one package run per checkout.
+// runtimes inside, an isolated identity for validation packages, the update feed the App's updater
+// reads and an inventory, and one package run per checkout.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -263,7 +263,6 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     ['build: npm run build', 'ok'],
     ['build: write BuildInfo', 'ok'],
     ['build: stage BuildInfo sidecar', 'ok'],
-    ['build: macOS update helper', 'ok'],
     ['clear previous artifacts', 'ok'],
     [builderStage, 'failed'],
     [`${builderStage} / pack App (beforePack to afterPack)`, 'ok'],
@@ -288,29 +287,37 @@ it('requires an explicit isolated identity for validation version overrides', ()
   expect(() => parsePackageArguments(['--target', 'darwin-arm64', '--validation-update-repository', 'derektu/xr-collector-test'])).toThrow(/all validation options/u);
 });
 
-it('bakes the validation product name into package metadata so Electron derives an isolated userData folder', () => {
-  const options = { validationVersion: '0.1.1', validationAppId: 'com.xrcollector.verify36', validationProductName: 'XR Update Verify Mac' };
+it('gives a validation package its own version, appId, product name and update repository through electron-builder overrides', () => {
+  vi.stubEnv('XR_COLLECTOR_VALIDATION_BUILD', '1');
+  const options = parsePackageArguments(['--target', 'darwin-arm64',
+    '--validation-version', '0.1.1', '--validation-app-id', 'com.xrcollector.verify.public',
+    '--validation-product-name', 'XR Update Verify Public', '--validation-update-repository', 'derektu/xr-collector-test']);
   expect(validationBuilderArguments(options)).toEqual([
     '--config.extraMetadata.version=0.1.1',
-    '--config.extraMetadata.productName=XR Update Verify Mac',
-    '--config.extraMetadata.xrCollectorAppId=com.xrcollector.verify36',
-    '--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector',
-    '--config.appId=com.xrcollector.verify36',
-    '--config.productName=XR Update Verify Mac',
+    '--config.extraMetadata.productName=XR Update Verify Public',
+    '--config.extraMetadata.xrCollectorAppId=com.xrcollector.verify.public',
+    '--config.appId=com.xrcollector.verify.public',
+    '--config.productName=XR Update Verify Public',
+    '--config.publish.owner=derektu',
+    '--config.publish.repo=xr-collector-test',
   ]);
-  expect(() => assertPackagedProductMetadata({ name: 'xr-collector' }, options.validationProductName, options.validationAppId)).toThrow(/productName/u);
-  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', productName: options.validationProductName,
-    xrCollectorAppId: options.validationAppId, xrCollectorUpdateRepository: 'derektu/xr-collector' }, options.validationProductName, options.validationAppId)).not.toThrow();
-  expect(() => assertPackagedProductMetadata({ name: 'xr-collector', xrCollectorUpdateRepository: 'derektu/xr-collector-test' }, 'XR Collector')).toThrow(/Production package/u);
   expect(validationBuilderArguments({})).toEqual([]);
 });
 
-it('accepts a public update-test identity within the existing validation namespace', () => {
-  vi.stubEnv('XR_COLLECTOR_VALIDATION_BUILD', '1');
-  const options = parsePackageArguments(['--target', 'darwin-arm64',
-    '--validation-version', '0.1.0', '--validation-app-id', 'com.xrcollector.verify.public',
-    '--validation-product-name', 'XR Update Verify Public', '--validation-update-repository', 'derektu/xr-collector-test']);
-  expect(validationBuilderArguments(options)).toContain('--config.extraMetadata.xrCollectorUpdateRepository=derektu/xr-collector-test');
+it.each([
+  ['a production package without an identity override', { name: 'xr-collector' }, 'XR Collector', undefined, true],
+  ['a production package carrying a validation appId', { name: 'xr-collector', xrCollectorAppId: 'com.xrcollector.verify36' }, 'XR Collector', undefined, false],
+  ['a validation package with its product name and appId', { name: 'xr-collector', productName: 'XR Update Verify 36', xrCollectorAppId: 'com.xrcollector.verify36' }, 'XR Update Verify 36', 'com.xrcollector.verify36', true],
+  ['a validation package without its appId', { name: 'xr-collector', productName: 'XR Update Verify 36' }, 'XR Update Verify 36', 'com.xrcollector.verify36', false],
+] as const)('accepts the packaged metadata of %s: %s', (_case, metadata, productName, appId, accepted) => {
+  const check = () => assertPackagedProductMetadata(metadata, productName, appId);
+  if (accepted) expect(check).not.toThrow();
+  else expect(check).toThrow();
+});
+
+it('points the production updater at the GitHub releases of derektu/xr-collector', async () => {
+  const config = await getConfig(process.cwd(), path.resolve('electron-builder.yml'), null);
+  expect(config.publish).toEqual({ provider: 'github', owner: 'derektu', repo: 'xr-collector' });
 });
 
 it('removes Git routing and signing credentials from every packaging child environment', () => {
@@ -408,7 +415,6 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
     for (const runtimeCode of [
       'Contents/Resources/bin/meilisearch',
       'Contents/Resources/bin/deno',
-      'Contents/Resources/bin/xr-mac-update-helper',
       'Contents/Resources/bin/yt-dlp/_internal/Python.framework/Python',
     ]) expect(signIgnore.some((pattern) => pattern.test(path.posix.join(macApp, runtimeCode))), `${configFile}: ${runtimeCode}`).toBe(true);
     for (const signedCode of [
@@ -565,8 +571,7 @@ it('reads the identity of this process from the process table', async () => {
   await expect(readPackagingProcessIdentity(process.pid)).resolves.toMatchObject({ pid: process.pid, startedAt: expect.any(String) });
 });
 
-// The Mac update helper check reads POSIX execute bits, which Windows does not report.
-it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged runtime before accepting an app', async () => {
+it('verifies BuildInfo, the update repository and every packaged runtime before accepting an app', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-packaged-app-'));
   roots.push(root);
   const outputDir = path.join(root, 'release');
@@ -587,7 +592,8 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
   await mkdir(path.join(resources, 'bin/yt-dlp'), { recursive: true });
   await writeFile(path.join(resources, 'bin/yt-dlp/yt-dlp'), 'yt');
   await writeFile(path.join(resources, 'bin/deno'), 'deno');
-  await writeFile(path.join(resources, 'bin/xr-mac-update-helper'), 'helper', { mode: 0o755 });
+  const updateConfig = (repo: string) => writeFile(path.join(resources, 'app-update.yml'), `owner: derektu\nrepo: ${repo}\nprovider: github\nupdaterCacheDirName: xr-collector-updater\n`);
+  await updateConfig('xr-collector');
   const fileEntry = async (file: string, relative: string) => ({ path: relative, bytes: (await readFile(file)).byteLength, sha256: createHash('sha256').update(await readFile(file)).digest('hex') });
   const dependencyPins = JSON.parse(await readFile(path.resolve('scripts/runtime-dependency-pins.json'), 'utf8'));
   const dependency = (pin: { version: string; url: string; sha256: string }) => ({ version: pin.version, url: pin.url, archiveSha256: pin.sha256 });
@@ -643,10 +649,12 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
   await expect(verify()).rejects.toThrow(/Meilisearch bytes/u);
 
   await writeFile(path.join(resources, 'bin/meilisearch'), meiliBinary);
+  await updateConfig('xr-collector-test');
+  await expect(verify()).rejects.toThrow(/app-update\.yml does not name the GitHub repository derektu\/xr-collector/u);
   const validationProductName = 'XR Update Verify Public';
   const validationAppId = 'com.xrcollector.verify.public';
   await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0',
-    productName: validationProductName, xrCollectorAppId: validationAppId, xrCollectorUpdateRepository: 'derektu/xr-collector-test' }));
+    productName: validationProductName, xrCollectorAppId: validationAppId }));
   await rm(path.join(resources, 'app.asar'));
   await createPackage(asarSource, path.join(resources, 'app.asar'));
   await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), path.join(outputDir, `mac-arm64/${validationProductName}.app`));
@@ -654,7 +662,7 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
     productName: validationProductName, appId: validationAppId, updateRepository: 'derektu/xr-collector-test' },
   { trustedManifest: meiliManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill,
     runBinary: async () => ({ stdout: 'meilisearch 1.53.2' }), verifyMacBundle: async () => undefined }))
-    .resolves.toMatchObject({ packageMetadata: { productName: validationProductName, xrCollectorUpdateRepository: 'derektu/xr-collector-test' } });
+    .resolves.toMatchObject({ packageMetadata: { productName: validationProductName, xrCollectorAppId: validationAppId } });
 });
 
 it('accepts a Developer ID App only when it is byte-identical to the verified stapled App', async () => {
@@ -673,44 +681,27 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   await expect(readBack(stapled)).rejects.toThrow(/app\.asar|ENOENT|no such file/iu);
 });
 
-it('writes the platform release index and an exact artifact inventory', async () => {
+it('checks the update feed electron-builder wrote and lists it with every installer in the artifact inventory', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-package-artifacts-'));
   roots.push(root);
-  const names = ['XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.dmg.blockmap', 'XR-Collector-0.1.0-mac-arm64.zip', 'XR-Collector-0.1.0-mac-arm64.zip.blockmap'];
-  await Promise.all(names.map((name) => writeFile(path.join(root, name), name)));
+  const names = ['XR-Collector-0.1.0-mac-arm64.dmg', 'XR-Collector-0.1.0-mac-arm64.dmg.blockmap', 'XR-Collector-0.1.0-mac-arm64.zip', 'XR-Collector-0.1.0-mac-arm64.zip.blockmap', 'latest-mac.yml'];
+  await Promise.all(names.slice(0, -1).map((name) => writeFile(path.join(root, name), name)));
+  const feed = (version: string, url: string) => writeFile(path.join(root, 'latest-mac.yml'),
+    `version: ${version}\nfiles:\n  - url: ${url}\n    sha512: abc\n    size: 10\npath: ${url}\nsha512: abc\n`);
   const buildInfo = { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'build', target: 'darwin-arm64', sourceDirty: false };
-  const result = await writeArtifactHandoff({
+  const handoff = () => writeArtifactHandoff({
     outputDir: root, target: 'darwin-arm64', version: '0.1.0', commit: 'a'.repeat(40), buildInfo,
     artifacts: names.map((name) => path.join(root, name)), host: { platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false },
     toolVersions: { node: 'v22' }, signing: { status: 'ad-hoc' },
   });
-  const digest = (name: string) => createHash('sha256').update(name).digest('hex');
-  expect(path.basename(result.releaseIndex)).toBe('release-darwin-arm64.json');
-  expect(JSON.parse(await readFile(result.releaseIndex, 'utf8'))).toEqual({
-    schemaVersion: 1, version: '0.1.0', commit: 'a'.repeat(40), target: 'darwin-arm64', buildInfo,
-    installer: { name: names[0], bytes: Buffer.byteLength(names[0]!), sha256: digest(names[0]!) },
-    update: { name: names[2], bytes: Buffer.byteLength(names[2]!), sha256: digest(names[2]!) },
-  });
+  await feed('0.1.1', 'XR-Collector-0.1.0-mac-arm64.zip');
+  await expect(handoff()).rejects.toThrow(/version 0\.1\.1, not 0\.1\.0/u);
+  await feed('0.1.0', 'XR Collector-0.1.0-arm64-mac.zip');
+  await expect(handoff()).rejects.toThrow(/not among the release artifacts/u);
+  await feed('0.1.0', 'XR-Collector-0.1.0-mac-arm64.zip');
+  const result = await handoff();
   expect(path.basename(result.artifactManifest)).toBe('XR-Collector-0.1.0-darwin-arm64-artifacts.json');
   const manifest = JSON.parse(await readFile(result.artifactManifest, 'utf8'));
   expect(manifest.packageIdentity).toEqual({ productName: 'XR Collector', appId: 'com.moneydj.xrcollector', updateRepository: 'derektu/xr-collector' });
-  expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual([...names, 'release-darwin-arm64.json']);
-});
-
-it('indexes one Windows setup as both the installer and the update', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'xr-package-artifacts-'));
-  roots.push(root);
-  const installer = path.join(root, 'XR-Collector-0.1.0-win-x64-setup.exe');
-  await writeFile(installer, 'installer');
-  const result = await writeArtifactHandoff({
-    outputDir: root, target: 'win32-x64', version: '0.1.0', commit: 'a'.repeat(40),
-    buildInfo: { schemaVersion: 1, kind: 'packaged', version: '0.1.0', builtAt: '2026-10-25T00:00:00.000Z', commit: 'a'.repeat(40), buildId: 'build', target: 'win32-x64', sourceDirty: false },
-    artifacts: [installer], host: { platform: 'win32', processArch: 'x64', hostArch: 'arm64', emulated: true },
-    toolVersions: { node: 'v22' }, signing: { status: 'unsigned' },
-  });
-  const index = JSON.parse(await readFile(result.releaseIndex, 'utf8'));
-  expect(path.basename(result.releaseIndex)).toBe('release-win32-x64.json');
-  expect(index.installer).toEqual(index.update);
-  expect(index.update).toEqual({ name: 'XR-Collector-0.1.0-win-x64-setup.exe', bytes: 9, sha256: createHash('sha256').update('installer').digest('hex') });
-  expect(JSON.parse(await readFile(result.artifactManifest, 'utf8')).builderHost).toMatchObject({ hostArch: 'arm64', emulated: true });
+  expect(manifest.artifacts.map((entry: { path: string }) => entry.path)).toEqual(names);
 });

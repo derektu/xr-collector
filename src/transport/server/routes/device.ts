@@ -80,13 +80,11 @@ export function registerDeviceRoutes(app: FastifyInstance, options: DeviceRouteO
 }
 
 function updateSelection(body: unknown): UpdateSelection {
-  if (!body || typeof body !== 'object') throw new CollectorError('invalid_request', '請提供更新版本與雜湊。');
-  const value = body as Record<string, unknown>;
-  if (typeof value.version !== 'string' || typeof value.sha256 !== 'string'
-    || !/^[a-f0-9]{64}$/u.test(value.sha256) || Object.keys(value).some((key) => key !== 'version' && key !== 'sha256')) {
-    throw new CollectorError('invalid_request', '請只提供有效的 version 與 sha256。');
+  const value = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+  if (typeof value.version !== 'string' || Object.keys(value).some((key) => key !== 'version')) {
+    throw new CollectorError('invalid_request', '請只提供 version。');
   }
-  return { version: value.version, sha256: value.sha256 };
+  return { version: value.version };
 }
 
 function pacingLabel(sources: SourceRegistry, group: string): string {

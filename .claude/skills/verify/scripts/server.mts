@@ -61,7 +61,7 @@ const { VaultSelection } = await load('src/domain/vault/vault-selection.ts');
 const { exportFolder, backupFolder } = await load('src/domain/vault/transfer-files.ts');
 const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
 const { UpdateService } = await load('src/domain/updates/update-service.ts');
-const { GenericIndexSource } = await load('src/domain/updates/sources.ts');
+const { parse: parseYaml, stringify: stringifyYaml } = await import('yaml');
 
 const profilePath = path.join(run, 'profile');
 const vaultPath = path.join(run, 'vault');
@@ -109,25 +109,61 @@ const createdBy = `XR Collector (verify skill, ${data} data)`;
 const resources = bundledResources({ packaged: false, checkout });
 const program = resources.program;
 
-// Opt-in fixture for the recorded update flow. It serves the real generic-index protocol and runs
-// the real UpdateService, but validates a semantic test file instead of pretending Web mode can
-// install a native app. Other verification runs do not receive an update source or fake installer.
+// Opt-in fixture for the recorded update flow. The feeds port serves an electron-builder style
+// latest-mac.yml and its payload, and the real UpdateService drives a fixture updater that reads
+// them the way electron-updater does: a missing feed reads as ERR_UPDATER_CHANNEL_FILE_NOT_FOUND and
+// a payload whose sha512 differs from the feed fails the download. Installing only records the
+// request; the next start reads the running version from updates.currentVersion. Other
+// verification runs do not receive an update service.
+//   updates.version         the version the feed offers (0.1.1 by default)
+//   updates.currentVersion  the version this server runs as (0.1.0 by default), read at start
+//   updates.feedStatus      the HTTP status of latest-mac.yml (200 by default)
+//   updates.payloadMode     'corrupt' serves a payload whose sha512 differs from the feed
 const updateEnabled = () => data === 'synthetic' && catalog().updates?.enabled === true;
-const sha256 = (value: Buffer) => createHash('sha256').update(value).digest('hex');
-const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', version: '0.1.0', builtAt: '2026-10-27T00:00:00.000Z',
-  commit: '1'.repeat(40), buildId: 'verify-update-0.1.0', target: 'darwin-arm64', sourceDirty: false });
+const sha512 = (value: Buffer) => createHash('sha512').update(value).digest('base64');
+const currentVersion = updateEnabled() ? String(catalog().updates?.currentVersion ?? '0.1.0') : '0.1.0';
+const fixtureBuildInfo = Object.freeze({ schemaVersion: 1, kind: 'development', version: currentVersion, builtAt: '2026-10-27T00:00:00.000Z',
+  commit: '1'.repeat(40), buildId: `verify-update-${currentVersion}`, target: 'darwin-arm64', sourceDirty: false });
 const updateFixture = (version = String(catalog().updates?.version ?? '0.1.1')) => {
   const prefix = Buffer.from(`XR-COLLECTOR-VERIFY-UPDATE-${version}\n`);
   const payload = Buffer.concat([prefix, Buffer.alloc(100_000 - prefix.byteLength, version.endsWith('.2') ? 0x37 : 0x36)]);
   const payloadName = `XR-Collector-${version}-mac-arm64.zip`;
-  const commit = '2'.repeat(40);
-  const buildInfo = { ...fixtureBuildInfo, kind: 'packaged', version, commit, buildId: `verify-update-${version}` };
-  const payloadFile = { name: payloadName, bytes: payload.byteLength, sha256: sha256(payload) };
-  const indexBody = Buffer.from(JSON.stringify({ schemaVersion: 1, version, commit, target: 'darwin-arm64', buildInfo,
-    installer: payloadFile, update: payloadFile }));
-  const notesBody = Buffer.from(`## 驗證版 ${version}\n\n- 合成更新，只驗證共用下載與等待流程。`);
-  return { version, payload, payloadName, indexBody, notesBody };
+  const feedBody = Buffer.from(stringifyYaml({ version, files: [{ url: payloadName, sha512: sha512(payload), size: payload.byteLength }],
+    path: payloadName, sha512: sha512(payload), releaseDate: '2026-10-27T00:00:00.000Z' }));
+  return { version, payload, payloadName, feedBody };
 };
+const newer = (left: string, right: string) => {
+  const [a, b] = [left, right].map((value) => value.split('.').map(Number));
+  for (let index = 0; index < 3; index += 1) if (a![index] !== b![index]) return a![index]! > b![index]!;
+  return false;
+};
+const fixtureUpdater = (feedBase: string) => ({
+  available: true,
+  check: async () => {
+    const response = await fetch(`${feedBase}latest-mac.yml`);
+    if (response.status === 404) {
+      throw Object.assign(new Error('Cannot find channel "latest-mac.yml" update info: HttpError: 404'), { code: 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' });
+    }
+    if (!response.ok) throw new Error(`HttpError: ${response.status}`);
+    const feed = parseYaml(await response.text());
+    return newer(feed.version, currentVersion) ? { version: feed.version } : null;
+  },
+  download: async (progress: (transferred: number, total: number) => void, signal: AbortSignal) => {
+    const feed = parseYaml(await (await fetch(`${feedBase}latest-mac.yml`, { signal })).text());
+    const file = feed.files[0];
+    const response = await fetch(`${feedBase}${file.url}`, { signal });
+    if (!response.ok || !response.body) throw new Error(`HttpError: ${response.status}`);
+    const parts: Buffer[] = [];
+    let transferred = 0;
+    for await (const part of response.body) {
+      parts.push(Buffer.from(part));
+      transferred += part.byteLength;
+      progress(transferred, file.size);
+    }
+    const actual = sha512(Buffer.concat(parts));
+    if (actual !== file.sha512) throw new Error(`sha512 checksum mismatch, expected ${file.sha512}, got ${actual}`);
+  },
+});
 
 type LoginStartupFixture = {
   mode: 'unavailable' | 'normal' | 'failure' | 'requires_approval';
@@ -168,14 +204,10 @@ function syntheticFeedServer() {
     if (offline()) { request.socket.destroy(); return; }
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (pathname === '/connectivity') { response.writeHead(204).end(); return; }
-    if (updateEnabled() && pathname === '/updates/release-darwin-arm64.json') {
-      const { indexBody } = updateFixture();
-      const status = Number(catalog().updates.indexStatus ?? 200);
-      response.writeHead(status, { 'content-type': 'application/json', 'content-length': status === 200 ? indexBody.byteLength : 0 }).end(status === 200 ? indexBody : undefined); return;
-    }
     const fixture = updateEnabled() ? updateFixture() : null;
-    if (fixture && pathname === '/updates/release-notes.md') {
-      response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-length': fixture.notesBody.byteLength }).end(fixture.notesBody); return;
+    if (fixture && pathname === '/updates/latest-mac.yml') {
+      const status = Number(catalog().updates.feedStatus ?? 200);
+      response.writeHead(status, { 'content-type': 'text/yaml', 'content-length': status === 200 ? fixture.feedBody.byteLength : 0 }).end(status === 200 ? fixture.feedBody : undefined); return;
     }
     if (fixture && pathname === `/updates/${fixture.payloadName}`) {
       const settings = catalog().updates;
@@ -298,22 +330,12 @@ const sources = data === 'synthetic'
   ? await syntheticSources()
   : await createSourcePlugins({ profilePath, env: process.env, program });
 const updateService = updateEnabled() ? await UpdateService.open({
-  identity: { version: fixtureBuildInfo.version, target: fixtureBuildInfo.target },
-  currentBuildId: fixtureBuildInfo.buildId,
-  source: new GenericIndexSource(`http://127.0.0.1:${port('FEEDS')}/updates/`),
-  installer: {
-    available: true,
-    validate: async (_offer: unknown, packageFile: string, signal?: AbortSignal) => {
-      if (signal?.aborted) throw signal.reason;
-      const expected = updateFixture((_offer as { version: string }).version).payload;
-      if (!readFileSync(packageFile).equals(expected)) throw new CollectorError('update_integrity_failed', '合成更新檔內容不正確。');
-    },
-    prepare: async () => { throw new CollectorError('update_install_unavailable', 'Web 驗證不會安裝原生 App。'); },
-  },
+  updater: fixtureUpdater(`http://127.0.0.1:${port('FEEDS')}/updates/`),
+  currentVersion,
+  target: fixtureBuildInfo.target,
   directory: path.join(profilePath, 'updates'),
-  // Leave a real apply request in waiting until the flow cancels it. This verifies the common
-  // service/API/UI contract without claiming that a Web run can hand off to a native installer.
-  apply: () => undefined,
+  // A Web run cannot hand over to a native installer; the install stays requested until the flow restarts the server.
+  restartToInstall: () => undefined,
 }) : null;
 
 // `selected` opens the Vault the way a user's chosen one opens, so opening another stays available;

@@ -35,19 +35,12 @@ export type CoreErrorCode =
   | 'login_startup_requires_approval'
   | 'login_startup_failed'
   | 'agent_connection_unavailable'
-  | 'update_busy'
-  | 'update_cancelled'
   | 'update_source_failed'
-  | 'update_not_published'
-  | 'update_metadata_invalid'
-  | 'update_asset_missing'
   | 'update_not_available'
   | 'update_offer_changed'
   | 'update_download_failed'
-  | 'update_integrity_failed'
   | 'update_not_ready'
   | 'update_install_unavailable'
-  | 'update_apply_failed'
   | 'invalid_request';
 
 export class CollectorError extends Error {

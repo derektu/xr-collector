@@ -30,14 +30,6 @@ interface LockDependencies {
   changed?: () => void;
 }
 
-interface UpdateContext { releaseHold: (() => void) | null; transferred: boolean; signal: AbortSignal }
-
-export interface UpdateLease {
-  cancel(): void;
-  /** Keeps the gate held while the runtime destructively closes; it must never be resumed afterwards. */
-  transferToShutdown(): void;
-}
-
 export class VaultOperationLock {
   private current: OperationStatus = {
     state: 'idle', operation: null, message: '', completedFiles: 0, totalFiles: 0, result: null, errorCode: null,
@@ -50,8 +42,6 @@ export class VaultOperationLock {
   private running = false;
   private releaseHold: (() => void) | null = null;
   private writes = 0;
-  private readonly writeWaiters = new Set<() => void>();
-  private updateContext: UpdateContext | null = null;
   private active: Promise<void> = Promise.resolve();
 
   constructor(private readonly dependencies: LockDependencies) {}
@@ -62,40 +52,12 @@ export class VaultOperationLock {
 
   enterWrite(): () => void {
     if (this.running) throw this.busyWrite();
-    if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，暫時不能寫入知識庫。');
     this.writes += 1;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.writes -= 1;
-      if (this.writes === 0) { for (const resolve of this.writeWaiters) resolve(); this.writeWaiters.clear(); }
-    };
-  }
-
-  async prepareUpdate(signal: AbortSignal): Promise<UpdateLease> {
-    if (this.running || this.updateContext) throw this.busyWrite();
-    const context: UpdateContext = { releaseHold: null, transferred: false, signal };
-    this.updateContext = context;
-    this.dependencies.suspend(true);
-    try {
-      context.releaseHold = await this.dependencies.hold();
-      if (signal.aborted) throw signal.reason;
-      if (this.writes > 0) await abortable(new Promise<void>((resolve) => this.writeWaiters.add(resolve)), signal);
-      await abortable(this.dependencies.idle(), signal);
-      if (signal.aborted) throw signal.reason;
-    } catch (error) {
-      this.releaseUpdate(context);
-      throw error;
-    }
-    let finished = false;
-    return {
-      cancel: () => { if (finished) return; finished = true; this.releaseUpdate(context); },
-      transferToShutdown: () => {
-        if (finished || this.updateContext !== context) throw new CollectorError('update_busy', '更新等待已經結束。');
-        if (context.signal.aborted) { finished = true; this.releaseUpdate(context); throw context.signal.reason; }
-        finished = true; context.transferred = true;
-      },
     };
   }
 
@@ -114,7 +76,6 @@ export class VaultOperationLock {
   }
 
   private acquire(operation: TransferOperation): void {
-    if (this.updateContext) throw new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
     if (this.running || this.writes) {
       throw new CollectorError('vault_busy', '正在進行其他知識庫操作，請等它完成後再試。');
     }
@@ -163,25 +124,7 @@ export class VaultOperationLock {
   }
 
   private busyWrite(): CollectorError {
-    if (this.updateContext) return new CollectorError('update_busy', '正在準備安裝更新，請稍後再試。');
     const operation = this.value.operation;
     return new CollectorError('vault_busy', operation === 'open' || operation === 'create' ? '正在切換知識庫，請等它完成後再操作。' : '正在匯出或匯入知識庫，請等它完成後再操作。');
   }
-
-  private releaseUpdate(context: UpdateContext): void {
-    if (this.updateContext !== context || context.transferred) return;
-    this.updateContext = null;
-    this.dependencies.suspend(false);
-    context.releaseHold?.();
-    context.releaseHold = null;
-  }
-}
-
-function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
-  });
 }

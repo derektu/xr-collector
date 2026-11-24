@@ -11,7 +11,6 @@ export interface BundledResources {
   readonly searchLexicon: string;
   readonly skill: string;
   readonly trayIcons: string;
-  readonly macUpdateHelper: string;
 }
 
 export interface ResourceEnvironment {
@@ -35,7 +34,6 @@ export function bundledResources(layout: ResourceLayout, environment: ResourceEn
     searchLexicon: paths.resolve(override('XR_COLLECTOR_SEARCH_LEXICON') ?? paths.join(root, 'search', 'coct-main.txt')),
     skill: paths.join(layout.packaged ? layout.resourcesPath : layout.checkout, 'skills', 'xr-collector-agent'),
     trayIcons: paths.join(root, 'tray'),
-    macUpdateHelper: paths.join(runtimeFolder, 'xr-mac-update-helper'),
   };
 }
 

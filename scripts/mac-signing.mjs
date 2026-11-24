@@ -427,11 +427,7 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   });
   const stagedMeili = path.join(bin, 'meilisearch');
   const sourceMeili = path.join(sourceBin, 'meilisearch');
-  const stagedHelper = path.join(bin, 'xr-mac-update-helper');
-  const sourceHelper = path.join(sourceBin, 'xr-mac-update-helper');
-  for (const [staged, source, label] of [[stagedMeili, sourceMeili, 'Meilisearch'], [stagedHelper, sourceHelper, 'update helper']]) {
-    if (!sameFileIdentity(await describeFile(staged), await describeFile(source))) throw new Error(`Staged ${label} does not match its raw source bytes.`);
-  }
+  if (!sameFileIdentity(await describeFile(stagedMeili), await describeFile(sourceMeili))) throw new Error('Staged Meilisearch does not match its raw source bytes.');
   if (!sameFileIdentity(await describeFile(stagedMeili), meiliManifest.binary)) throw new Error('Raw Meilisearch bytes do not match the producer manifest before signing.');
 
   await repairPythonFramework(path.join(bin, 'yt-dlp/_internal/Python.framework'));

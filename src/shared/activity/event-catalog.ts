@@ -66,8 +66,7 @@ const NAMED_EVENTS = {
   'device.update_ready': shown('info'),
   'device.update_download_failed': shown('error'),
   'device.update_installed': shown('info'),
-  'device.update_install_failed': shown('error'),
-  'device.update_outcome_unknown': shown('warning'),
+  'device.update_incomplete': shown('warning'),
 } as const satisfies Record<string, EventSpec>;
 
 export type NamedEventType = keyof typeof NAMED_EVENTS;

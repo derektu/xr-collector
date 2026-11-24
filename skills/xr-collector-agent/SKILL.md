@@ -200,15 +200,15 @@ Content-Type: application/json
 
 ## App 更新
 
-App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、安裝支援、檢查時間、`phase`、固定的 `offer`、已驗證的 `ready`、下載進度、訊息與 `lastAttempt`（最近安裝的版本、build、結果及時間）。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。`update_not_published` 表示尚無穩定版發布，不等於 `up_to_date`。只有使用者明確選定該 offer 並要求下載時，才把 `offer.version` 與 `offer.payload.sha256` 原樣送到 `POST /api/device/updates/download`。下載完成只保存經大小及 SHA-256 驗證的檔案，不自行套用。
+App 更新是裝置資料，不屬於 Vault。`GET /api/device/updates` 的 `update` 回傳目前版本、target、安裝支援、檢查時間、`phase`（`idle`、`checking`、`up_to_date`、`available`、`downloading`、`ready`、`installing`、`error`）、最新的 `offer`（只有 `version`）、已下載可安裝的 `ready`、下載進度、訊息與 `lastAttempt`。檢查可依使用者要求送 `POST /api/device/updates/check`；它不下載。最新的 Release 還沒有本平台的更新檔時回報 `up_to_date`。只有使用者明確選定該版本並要求下載時，才把 `offer.version` 原樣送到 `POST /api/device/updates/download`。下載完成不會自行安裝。
 
-`lastCheckAttemptAt` 是最近一次檢查開始時間，包含失敗；`checkedAt` 是最近一次成功檢查時間。喚醒補檢查依嘗試時間判斷是否滿 24 小時；連續相同結果不重複記錄 Activity。`update_download_timeout` 表示連線或串流連續 60 秒沒有收到資料，未完成的檔案會刪除；經使用者要求可重試下載。即使版本號相同，新的 `offer.payload.sha256` 仍代表另一份檔案，必須使用目前選定的版本與 SHA。
+`lastCheckAttemptAt` 是最近一次檢查開始時間，包含失敗；`checkedAt` 是最近一次成功檢查時間。喚醒補檢查依嘗試時間判斷是否滿 24 小時；連續相同結果不重複記錄 Activity。下載失敗回到 `error` 且沒有 `ready`，經使用者要求可重新下載。開始下載另一個版本時，之前的 `ready` 失效；App 重新啟動後也要重新下載。
 
-`lastAttempt.outcome` 為 `failed` 且訊息指出已還原時，表示已讀到對應安裝的原生還原結果；`unknown` 表示結果尚未確認，應先向使用者說明訊息並檢查目前版本，不自行重複安裝。需要人工復原的安裝會保留 helper 記錄與備份。
+安裝會結束 App，必須再次取得使用者明確同意，並把 `ready.version` 原樣送到 `POST /api/device/updates/apply`；不能改用目前 `offer` 或自行選新版本。App 照一般方式結束後交給安裝程式，新版啟動。`lastAttempt` 是上次安裝的結果，只在安裝後第一次啟動時出現：`outcome` 為 `installed` 表示執行中的就是那個版本；`incomplete` 表示仍是舊版，`message` 附安裝程式回報的原因（例如 macOS 未以 Developer ID 簽章的 App 不能在 App 內更新、`/Applications` 無法寫入）。`incomplete` 時向使用者說明原因並建議手動下載安裝，不自行重複安裝。新版啟動失敗不會自動退回舊版。
 
-版本更新不發作業系統通知。可用版本、下載進度與 ready 狀態只從上述 API，以及 App 的設定頁、側欄與原生選單呈現；不要告知使用者會收到版本通知。
+版本更新不發作業系統通知。可用版本、下載進度與 `ready` 狀態只從上述 API，以及 App 的設定頁、側欄與原生選單呈現；不要告知使用者會收到版本通知。
 
-套用會結束 App，必須再次取得使用者明確同意，並把 `ready.version`、`ready.payload.sha256` 原樣送到 `POST /api/device/updates/apply`；不能改用目前 `offer` 或自行選新版本。`POST /api/device/updates/cancel` 取消下載或等待安全停止，已驗證檔仍保留，正常關閉 App 不會自動安裝。`update_busy`、`update_offer_changed` 或 `update_not_ready` 時重新讀狀態，不重複送出；`update_integrity_failed` 必須重新下載。所有更新 API 在 Vault 未設定時仍可用。
+`POST /api/device/updates/cancel` 取消進行中的下載。正常關閉 App 不會安裝。`update_offer_changed` 或 `update_not_ready` 時重新讀狀態，不重複送出。所有更新 API 在 Vault 未設定時仍可用。
 
 ## Vault 設定
 
@@ -245,10 +245,10 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 | --- | --- |
 | `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台與原始碼狀態；Vault 未就緒／鎖定時可讀 |
 | `GET /api/device/updates` | 唯讀更新狀態；Vault 未就緒／鎖定時可讀 |
-| `POST /api/device/updates/check` | 檢查穩定版 metadata，不下載；回傳 `update` |
-| `POST /api/device/updates/download` | 經使用者確認後送 `{"version":"...","sha256":"64 位小寫十六進位"}`；下載及驗證固定 offer |
-| `POST /api/device/updates/apply` | 經使用者再次確認後送與 `ready` 相同的版本及雜湊；等待安全停止並重新啟動安裝 |
-| `POST /api/device/updates/cancel` | 取消進行中的下載或等待；已驗證檔保留 |
+| `POST /api/device/updates/check` | 檢查最新的穩定版，不下載；回傳 `update` |
+| `POST /api/device/updates/download` | 經使用者確認後送 `{"version":"..."}`，與 `offer.version` 相同；下載並驗證 |
+| `POST /api/device/updates/apply` | 經使用者再次確認後送 `{"version":"..."}`，與 `ready.version` 相同；App 結束並安裝 |
+| `POST /api/device/updates/cancel` | 取消進行中的下載 |
 | `GET /api/health` | runtime state、instance、profile、active Vault、Not Ready 原因、`connectivity` 與 `activityLog` |
 | `GET /api/device/agent` | 目前 listener 狀態、active URL／port、已保存的連線埠模式及是否要重啟套用 |
 | `GET /api/device/agent/connection` | 目前 active `url` 與 `token`；listener 不可用時回 409 |
