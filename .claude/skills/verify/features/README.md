@@ -56,13 +56,13 @@
 
 ## 最近一次維護覆核
 
-2026-11-16，以 main `d3c282a9e1e20e9faa217868ee93d7e797046939` 逐份核對 15 份功能檔，並由協調者實際操作。維護只修正本 skill 的文件，未修改產品程式或流程。
+2026-11-24，以 main `acdf506` 逐份核對 15 份功能檔，並由協調者實際操作。維護只修正本 skill 的文件，未修改產品程式或流程。
 
 | 功能 | 本次執行與範圍 |
 | --- | --- |
 | 有收錄流程的 14 項功能 | 全部 21 支收錄流程在同一版本以 `flows run --jobs 3` 通過（Desktop 流程背景模式）；需顯示視窗的 scenario 未跑 |
 | 外觀主題 | 沒有收錄流程，另以 Web 操作：深色／淺色切換、方向鍵與 Home／End、重新整理後保留、跟隨系統隨瀏覽器外觀改變；未驗 Desktop 偏好檔 |
 
-來源核對修正了建置資訊、工作頁、App 更新、選單列、開始使用、Vault 匯出匯入與外觀主題的描述。畫面上的次要狀態與 testid（讀取中、失敗、處理中文案等）未全數收進功能檔。
+來源核對修正了記錄、AI 助理連線、App 更新、文件與搜尋、工作頁、登入自啟、通知、開始使用、RSS、訂閱、選單列與 Vault 匯出匯入的描述；建置資訊、收集單支影片與外觀主題與來源一致。新增的子功能 `update-auto-check`、`onboarding-agent-setup`、`vault-import-partial` 列在各自的 Backlog。
 
-本機證據位於 `.local/ticket-artifacts/maint/` 與 `.local/ticket-artifacts/217/merge-*`。
+本機證據位於 `.local/ticket-artifacts/maint/`。

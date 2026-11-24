@@ -45,7 +45,7 @@ Preconditions:
 ## Gotchas
 
 - 搜尋走 Meilisearch，寫入後有短暫的索引延遲；斷言用 `waitFor` 而不是固定等待。
-- 中文精簡引擎需外置 `resources/search/coct-main.txt` 與其 manifest。詞庫、引擎及 query 策略列入投影身分；詞庫異動後重啟需重建，缺檔／壞 hash／格式不得宣稱 ready。UI 流程不修改共用詞庫；資源替換與啟動失敗使用獨立 profile／資源副本驗證。
+- 中文精簡引擎在啟動時讀外置的 `resources/search/coct-main.txt`。詞庫缺檔、不是 UTF-8、格式錯誤（含重複詞）或 Meilisearch `--version` 與 pin 不符時，App 不啟動引擎，搜尋狀態為 `error`，訊息為「無法啟動搜尋引擎：…」，App 其他功能照常。索引目錄是 `<搜尋資料目錄>-<Vault 雜湊>-v<SEARCH_INDEX_VERSION>`，啟動時刪除同一 Vault 其他版本的目錄；何時調版本見 [docs/storage-and-search.md](../../../../docs/storage-and-search.md) 的「索引版本」。UI 流程不修改共用詞庫；壞資源與啟動失敗使用獨立 profile／資源副本驗證。
 - 正文摘要才有 mark；只命中標題或發布者時，可顯示未標記的正文摘要。完整詞優先的固定案例不能當成所有查詢的相關性保證：合格的 Meili 結果在前，片段補回結果依當次投影順序接續。完整重建後同級片段的相對順序可能改變；記錄重建前後順序，另驗重啟沿用投影的順序。Latin typo／prefix 沿用 Meili，中文不加名稱錯字或公司別名擴張。
 - `page-documents` 出現只代表已切回頁面；截取刪除後的列表前，等摘要與來源選單的文件數完成更新，避免把載入中的畫面當成完成證據。
 - `documents-source` 是原生 `<select>`，展開的選單截不到；把選項文字寫進 observations，必要時在頁面加一個標示「驗收註記」的浮層再截圖，截完移除。
@@ -59,11 +59,11 @@ Preconditions:
 - `subscription-remove`：斷言 `docs-filter`、`reader-view`。移除訂閱並保留文件後，來源選單列出這個已移除的訂閱且 API 標示已移除與份數，篩選列出全部文件，閱讀頁可讀且發布者不再是連結。選項文字「<標題>・已移除（n）」在 tests/transport/web/document-presentation.test.ts。
 - `documents-reader-search`：斷言 `docs-list`、`docs-search`、`docs-status`、`reader-delete`、`reader-recollect`。以 22 份合成文件驗列表與第二頁，頁碼記在網址、閱讀後返回同一頁、搜尋從第一頁開始；從列選單改回草稿（標記、篇數、Vault 只改狀態與修改時間），草稿篩選與來源、搜尋一起作用，閱讀頁兩種狀態的標記與按鈕，發布後回列表篇數已更新；從搜尋結果刪除後回文件頁並保留搜尋詞，直接開已刪文件網址顯示已刪除狀態，核對 Vault、API、索引與刪除紀錄，從畫面重新收集。
 - `workspace-content`：斷言 `docs-list`、`docs-filter`、`docs-search`、`docs-search-unavailable`、`reader-view`、`reader-delete`、`reader-recollect`。已刪除 RSS 不提供重新收集、最後一頁刪除回退，以及明示為 UI fixture 的搜尋不可用分支。
-- `search-normalization`：斷言 `docs-search-fragments`、`docs-filter`、`docs-search`。片段查詢套用來源、日期與 20＋1 分頁，UI API、授權 Agent 與畫面第二頁相同；從設定頁重建索引與重啟後，片段結果、原文與 Vault 不變。文字規則（簡繁與異體、NFKC、地區詞、連續片段、詞界、引號、原文標示）在 tests/domain/search/managed-transcript-search.real-engine.test.ts 與旁邊的單元測試。均為 Mac Web 合成資料；不代表兩平台封裝資源、換詞庫或壞資源啟動驗收。
+- `search-normalization`：斷言 `docs-search-fragments`、`docs-filter`、`docs-search`。片段查詢套用來源、日期與 20＋1 分頁，UI API、授權 Agent 與畫面第二頁相同；從設定頁重建索引與重啟後，片段結果、原文與 Vault 不變。文字規則（簡繁與異體、NFKC、地區詞、連續片段、詞界、引號、原文標示）在 tests/domain/search/managed-transcript-search.real-engine.test.ts 與旁邊的單元測試。均為 Mac Web 合成資料；不代表兩平台封裝資源或壞資源啟動驗收。
 - `live-updates`：斷言 `docs-list`、`docs-search`、`reader-view`。文件頁開著時 Agent 刪除文件，總數與 API 相同；閱讀頁開著時 Agent 刪除同一份，顯示已刪除；設定頁開著時 Agent 刪除文件，搜尋卡的已索引與知識庫數、搜尋狀態 API 與引擎實際索引數都等於文件數。
 
 ## Backlog
 
 - `reader-view`：從訂閱詳情與記錄進入閱讀頁的入口，以及發布者連結實際點回訂閱詳情。
 - `docs-search`：搜尋索引筆數與知識庫不一致（已索引 N 份／知識庫 M 份）時的提示。
-- `docs-search-normalization`：沒有流程；正規化、地區詞與原文標示在 `tests/domain/search/managed-transcript-search.real-engine.test.ts` 與 `tests/domain/search/` 的單元測試。外置詞庫的載入、替換與壞資源，整理成使用資源副本的參數化 smoke，不放進一般文件流程。
+- `docs-search-normalization`：沒有流程；正規化、地區詞與原文標示在 `tests/domain/search/managed-transcript-search.real-engine.test.ts` 與 `tests/domain/search/` 的單元測試。外置詞庫的缺檔、非 UTF-8、格式錯誤與引擎版本不符，整理成使用資源副本的參數化 smoke，不放進一般文件流程。

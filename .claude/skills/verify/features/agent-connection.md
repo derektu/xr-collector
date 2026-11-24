@@ -12,7 +12,7 @@
 ## How to get to it (user POV)
 
 - 主視窗左側「設定」→「AI 助理連線」。
-- 尚未建立知識庫時，在「選擇知識庫位置」畫面按「AI 助理連線」，展開同一個完整面板（`onboarding-agent-panel`），可下載、複製及設定連線。
+- 尚未建立知識庫時，在開始使用畫面（`onboarding-home`）按標題旁的「AI 助理連線」，展開同一個完整面板（`onboarding-agent-panel`），可下載、複製及設定連線。
 - 一般使用者只需「下載 Skill」；分開安裝或更新連線時才使用「複製連線資料」。
 
 ## Driving it with verify
@@ -33,7 +33,7 @@ Preconditions:
 
 ## Regression flows
 
-- `agent-connection`：斷言 `agent-connection-summary`、`agent-connection-help`、`agent-connection-export`、`agent-connection-settings`。摘要的 active URL 與連線 API 相同、點擊說明顯示四步且 Escape 收起、下載與複製只輸出 active 連線、連線設定延後套用、金鑰重設後舊金鑰 401 新金鑰 200。
+- `agent-connection`：斷言 `agent-connection-summary`、`agent-connection-help`、`agent-connection-export`、`agent-connection-settings`。尚未建立知識庫時開始使用畫面的面板顯示 active URL 且三個按鈕可用；摘要的 active URL 與連線 API 相同、點擊說明顯示四步且 Escape 收起、下載與複製只輸出 active 連線；連線設定延後套用，保存失敗顯示在 modal 內，取消後重開還原已保存的值；取消重設不送出請求，重設失敗顯示在 modal 內，重設後舊金鑰 401 新金鑰 200。
 
 ## Backlog
 

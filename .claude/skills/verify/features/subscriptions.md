@@ -1,25 +1,25 @@
 # 訂閱與檢查
 
-使用者在訂閱頁訂閱 YouTube 頻道，訂閱立即列出並依序經過「排隊中」「檢查中」「下載中 k/n」，完成後顯示「下次 HH:MM」；檢查開始後不再回到排隊中。可手動檢查全部、暫停、關閉自動檢查、移除（保留或一併刪除文件），並在訂閱詳情頁看設定與收集紀錄。
+使用者在訂閱頁訂閱 YouTube 頻道，訂閱立即列出（解析頻道期間為「新增中」、「排隊中」，或在限制連線時顯示「錯誤・HH:MM 重試」），並依序經過「排隊中」「檢查中」「下載中 k/n」，完成後顯示「下次 <時間>」；檢查開始後不再回到排隊中。可手動檢查全部或單一訂閱、暫停、關閉自動檢查、移除（保留或一併刪除文件），並在訂閱詳情頁看設定與收集紀錄。
 
 ## Sub-features
 
-- `sub-add`：頁首或空清單的「新增訂閱」→「YouTube 頻道」→ 貼頻道網址 →「訂閱」。
-- `sub-status`：狀態欄的排隊中、檢查中、下載中 k/n、錯誤・HH:MM 重試、下次 HH:MM、錯誤（連續 n 次）・HH:MM 重試、已暫停、已暫停・連續失敗 n 次、自動檢查已關閉，以及文件欄的份數。
-- `sub-check`：頁首「立即檢查」送出所有已啟用訂閱的檢查。
-- `sub-pause`：列上的暫停按鈕。
+- `sub-add`：頁首或空清單的「新增訂閱」→「YouTube 頻道」→ 貼頻道網址 →「訂閱」。頻道已訂閱時卡片標「已訂閱」並有「查看訂閱」連結；已暫停時卡片標「已暫停」、顯示 `resume-summary`，按鈕為「恢復訂閱」。
+- `sub-status`：狀態欄的新增中（pending 列）、排隊中、檢查中、下載中 k/n、錯誤・HH:MM 重試、下次 <時間>、錯誤（連續 n 次）・<時間> 重試、錯誤（連續 n 次）（自動檢查關閉時）、已暫停、已暫停・連續失敗 n 次、自動檢查已關閉，以及文件欄的份數。<時間> 今天是「HH:MM」，明天是「明天 HH:MM」，更晚是「MM-DD HH:MM」；「錯誤・HH:MM 重試」一律是 HH:MM。
+- `sub-check`：頁首「立即檢查」送出所有已啟用訂閱的檢查（沒有已啟用的訂閱時停用），notice「已開始檢查 n 個訂閱。」；列的「更多動作」→「立即檢查」只檢查該列（暫停中停用），notice「已開始檢查「<標題>」。」。
+- `sub-pause`：列上的暫停按鈕；暫停中的列換成文字按鈕「恢復」。
 - `sub-auto`：自動檢查開關。
 - `sub-remove`：列的「更多動作」→「移除」，預設保留文件，可選一併刪除。
-- `sub-detail`：點訂閱名稱進詳情頁，顯示新增時間、下次檢查、收集設定與紀錄。
-- `sub-failure`：列出影片失敗的檢查：檢查內重試時列為「錯誤・HH:MM 重試」，失敗後列為紅色「錯誤（連續 n 次）・HH:MM 重試」，詳情頁紅條「最近一次檢查失敗（連續 n 次）：<原因>」；失敗的檢查不進工作頁失敗區。連續失敗 5 次且第一次失敗滿 24 小時自動暫停：列為紅色「已暫停・連續失敗 5 次」，詳情頁紅條「連續失敗 5 次，<時間> 自動暫停：<原因>」；按「恢復」歸零並立即檢查。
-- `sub-offline`：沒有網路時頁面上方的「目前沒有網路，恢復後自動檢查。（HH:MM 確認）」，「新增訂閱」、文件頁「新增」、工作頁「重試」停用，「立即檢查」保持可按並在仍沒有網路時顯示「目前沒有網路，恢復後再試。」；恢復後訊息消失、到期訂閱檢查一次。
+- `sub-detail`：點訂閱名稱或「更多動作」→「查看詳情」進詳情頁：狀態 `detail-status`、頁首暫停／恢復 `detail-toggle` 與「移除」（同一個確認框，完成後回到清單）、重試時的原因 `detail-retry-reason`、文件／最近新增／上次檢查（`detail-last-checked`）／新增時間、收集設定、下次檢查與收集紀錄（已收集的文件列 `collection-collected` 連到閱讀器；沒有紀錄時為「還沒有收集紀錄。」）。訂閱不存在時顯示 `source-missing`。
+- `sub-failure`：列出影片失敗的檢查：檢查內重試時列為「錯誤・HH:MM 重試」，失敗後列為紅色「錯誤（連續 n 次）・<時間> 重試」，詳情頁紅條「最近一次檢查失敗（連續 n 次）：<原因>」；失敗的檢查不進工作頁失敗區。連續失敗 5 次且第一次失敗滿 24 小時自動暫停：列為紅色「已暫停・連續失敗 5 次」，詳情頁紅條「連續失敗 5 次，<時間> 自動暫停：<原因>」；按「恢復」歸零並立即檢查。
+- `sub-offline`：沒有網路時頁面上方的「目前沒有網路，恢復後自動檢查。（<時間> 確認）」（今天為 HH:MM，其他日子為 MM-DD HH:MM；閱讀器開著時不顯示），「新增訂閱」、文件頁「新增」（含空清單的 `add-document-empty`）、工作頁「重試」停用，「立即檢查」保持可按並在仍沒有網路時顯示「目前沒有網路，恢復後再試。」；恢復後訊息消失、到期訂閱檢查一次。
 
 ## How to get to it (user POV)
 
 - 側欄「訂閱」（`/`）→ 右上「新增訂閱」。
 - 空清單中央另有「新增訂閱」入口；有訂閱時可用類型 chips 與「篩選訂閱」搜尋名稱。
 - 文件頁「新增」→「網址」貼頻道網址，按「改為訂閱」。
-- 訂閱頁每列：名稱連到 `/sources/youtube/<id>`，右側暫停按鈕與「更多動作」選單。
+- 訂閱頁每列：名稱連到 `/sources/youtube/<id>`，右側暫停（或「恢復」）按鈕與「更多動作」選單（查看詳情、立即檢查、移除）。
 
 ## Driving it with verify
 
@@ -29,18 +29,18 @@ Preconditions:
 
 - **訂閱。** `getByTestId('nav-sources')` → `add-subscription` → `add-item-youtube-channel`，`add-url` 填頻道網址，等 `add-confirm` 為「訂閱」且 enabled 後點擊。對話框關閉，留在 `page-sources`。
 - **空清單與篩選。** 空清單的 `add-subscription-empty` 開啟同一新增選單。完成訂閱後，`sources-filter` 填名稱，並在 `getByRole('group', { name: '類型' })` 選「全部」「YouTube」或「RSS」；結果不符時顯示 `sources-no-match`，清空名稱及類型恢復清單。
-- **狀態變化。** 記錄 `source-row-<channelId>` 內 `subscription-status` 每個不同的值（頁內 MutationObserver，見 `flows/lib/watch.mjs`）。預期依序為「排隊中 → 檢查中 → 下載中 0/5 … 4/5 → 下次 HH:MM」，可省略排隊中與檢查中（檢查中只持續約 200 ms，取樣不一定拍到）；開始後不再回到排隊中，k 只增不減。完成後列的文件欄為 5。
+- **狀態變化。** 記錄 `source-row-<channelId>` 內 `subscription-status` 每個不同的值（頁內 MutationObserver，見 `flows/lib/watch.mjs`）。預期依序為「排隊中 → 檢查中 → 下載中 0/5 … 4/5 → 下次 <時間>」，可省略排隊中與檢查中（檢查中只持續約 200 ms，取樣不一定拍到）；開始後不再回到排隊中，k 只增不減。完成後列的文件欄為 5。
 - **兩個訂閱同時收集。** A 下載中時訂閱 B：B 開始前顯示「排隊中」，開始後為「檢查中」「下載中 k/3」，兩者輪流擷取時都維持下載中，不回到排隊中。
 - **冷卻。** `instance.updateCatalog(c => { c.youtube.rateLimitNext = true; })`，等 `GET /api/pacing` 的 `youtube` 群組 `state === 'cooldown'`；下載中的訂閱轉為「錯誤・HH:MM 重試」（時間是冷卻結束），還沒開始的檢查維持「排隊中」；合成的冷卻持續到流程設 `c.youtube.endCooldown = true`，之後自動繼續並完成。
 - **暫停。** `getByRole('button', { name: '暫停 <頻道標題>' })`，狀態變「已暫停」。
-- **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停的列顯示「自動檢查已關閉」，已暫停的維持「已暫停」。再點一次恢復「下次 HH:MM」。
+- **自動檢查。** `getByTestId('auto-collection-switch').click({ force: true })`；未暫停且沒有連續失敗的列顯示「自動檢查已關閉」，有連續失敗的顯示「錯誤（連續 n 次）」不附重試時間，手動暫停的維持「已暫停」，自動暫停的維持「已暫停・連續失敗 n 次」。再點一次恢復「下次 <時間>」。
 - **移除並保留。** `getByRole('button', { name: '<頻道標題> 的更多動作' })` → `getByRole('menuitem', { name: '移除' })`。`confirm-remove` 中 `remove-keep` 預設勾選；點 `confirm-remove-button`。列消失，`GET /api/documents` 仍有該頻道的文件；文件頁 `documents-source` 選項顯示「<標題>・已移除（n）」。
 - **移除並刪除。** 同上但勾 `remove-delete`。文件從列表與搜尋消失，記錄頁 `activity-log` 有「已移除「<標題>」，並刪除 n 份文件。」，`vault/settings/deleted-documents.json` 有 n 筆該頻道的紀錄。
 - **詳情。** `getByRole('link', { name: /<標題>/ })` → `source-detail`。內容含「新增時間」「下次檢查」（`detail-next-check`）。`detail-settings` 內檢查頻率是下拉 `detail-settings-intervalMinutes`，選了立即儲存；時間範圍與數量上限是數字輸入框 `detail-settings-backfillDays`、`detail-settings-backfillMaxItems`，離開欄位或按 Enter 時儲存（`fill` 之後按 Enter）。儲存後出現 `settings-saved`。不合法的值（超出 1–60 天、1–100 則或不是整數）在欄位下方顯示 `detail-settings-<key>-error`，輸入框 `aria-invalid`，不儲存，`apply-settings`（「套用到所有」）停用。新增訂閱卡片的欄位相同，前綴是 `add-settings-`，不合法時 `add-confirm` 停用。
 - **收集紀錄。** 詳情中的單次檢查是 `collection-check`；連續定時無新內容或網路錯誤達兩次時是 `collection-check-group`，顯示結果、次數與起訖。例如「完成檢查：沒有新影片・12 次」「發生錯誤：網路錯誤・2 次」。恢復後的一次檢查獨立列出，不加「1 次」。合併列「查看細節」進入 [記錄的群組細節](activity.md)，「返回」回到同一訂閱。現有的 `detail-status`／`detail-problem` 仍獨立反映目前狀態。
 - **檢查時間。** 訂閱清單頁尾 `check-times` 顯示上次與下次檢查及所屬訂閱；完成後比對上次檢查對應的訂閱名稱與 `lastCheckedAt`，不要把最靠近的文件新增時間當成檢查完成時間。
 - **斷網與恢復。** `updateCatalog(c => { c.network = 'offline'; })` 讓合成 YouTube、feed 與 runtime 的網路確認都連不上。下一個連網的收集請求失敗後，`offline-banner` 出現，`GET /api/health` 的 `connectivity.state` 為 `offline`；`add-subscription`、`add-document`、`job-retry` disabled，title 為「沒有網路時無法使用」，`check-all` 仍可按，按下後 `notice` 為「目前沒有網路，恢復後再試。」。改回 `c.network = 'online'` 後 2 秒內確認成功，訊息消失，記錄有一筆 `collection.resumed`（`pauseReason: offline`），到期的訂閱各檢查一次。
-- **列出失敗。** `updateCatalog(c => { c.youtube.failListing = '<channelId>'; })` 後從該列「更多動作」→「立即檢查」。列出以 `network_error` 失敗，檢查內重試 3 次（合成 server 間隔 2 秒、3 秒，約 5 秒；正式版 30 秒、2 分鐘），之後檢查失敗：列為「錯誤（連續 1 次）・HH:MM 重試」，`GET /api/subscriptions` 該筆 `checkFailures.count` 為 1，`lastCheckedAt` 等於失敗工作的 `finishedAt`；工作頁失敗區沒有它。
+- **列出失敗。** `updateCatalog(c => { c.youtube.failListing = '<channelId>'; })` 後從該列「更多動作」→「立即檢查」。列出以 `network_error` 失敗，檢查內重試 3 次（合成 server 間隔 2 秒、3 秒，約 5 秒；正式版 30 秒、2 分鐘），之後檢查失敗：列為「錯誤（連續 1 次）・<時間> 重試」，`GET /api/subscriptions` 該筆 `checkFailures.count` 為 1，`lastCheckedAt` 等於失敗工作的 `finishedAt`；工作頁失敗區沒有它。
 - **自動暫停。** 不必等 24 小時：改 Vault 的 `settings/youtube-channels.json` 中該頻道的 `checkFailures`（`count: 4`、`since` 為 25 小時前），再讓一次檢查失敗，列變為「已暫停・連續失敗 5 次」，記錄有 `subscription.auto_paused`。詳情頁 `detail-toggle`（恢復）清除 `checkFailures` 與 `autoPausedAt` 並立即檢查。
 
 ## Gotchas
@@ -68,7 +68,7 @@ Preconditions:
 
 ## Backlog
 
-- `sub-auto`：Web 的自動檢查開關：未暫停的列為「自動檢查已關閉」、已暫停的維持「已暫停」，再開回「下次 HH:MM」。狀態計算已有 `tests/domain/subscriptions/subscription-service.status.test.ts`，畫面串接待補；選單列的切換見 [tray.md](tray.md)。
+- `sub-auto`：Web 的自動檢查開關：未暫停的列為「自動檢查已關閉」（有連續失敗的為「錯誤（連續 n 次）」）、手動暫停的維持「已暫停」，自動暫停的維持「已暫停・連續失敗 n 次」，再開回「下次 <時間>」。狀態計算已有 `tests/domain/subscriptions/subscription-service.status.test.ts`，畫面串接待補；選單列的切換見 [tray.md](tray.md)。
 - `sub-check`：成功的「立即檢查」：一個啟用、一個暫停的訂閱，只派出啟用者並完成。派工規則已有 `tests/domain/subscriptions/` 與 HTTP 案例，畫面待補一個代表。
 - `sub-status`：pending 列、完整名稱與類型組合，以及頁尾 `check-times` 的上次與下次檢查，可併入既有流程補斷言。
 - `sub-remove`：「一併刪除」的資料安全代表（文件從列表、搜尋與 Vault 消失，刪除紀錄與記錄各一筆），以及空訂閱的確認框形狀，歸訂閱專項。擷取中移除與部分刪除失敗沿用 `tests/transport/server/routes/subscriptions.lifecycle.test.ts`。
