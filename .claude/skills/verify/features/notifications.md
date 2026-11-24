@@ -25,7 +25,7 @@ Preconditions:
 ## Gotchas
 
 - `notifications(app)` 是交給 OS，不是已顯示或權限已允許。
-- 完全退出後由通知啟動 App（冷啟動）與 crash 寫入邊界不在 #136 驗收。
+- 完全退出後由通知啟動 App（冷啟動）不在 #136 驗收。
 - macOS 上 Electron 的通知點擊只送到顯示它的那個程序；App 重啟後從通知中心點舊通知只會帶到前景，不導頁。Windows 的 toast 把導頁目標放在 launch 參數，重啟後點擊仍會導頁。
 - 通知開關在 device profile，不應出現在 Vault 匯出檔。
 
@@ -36,6 +36,6 @@ Preconditions:
 
 ## Backlog
 
-- `notification-actionable`：恢復訂閱後從需處理清單消失（目前只斷言移除）。
+- `notification-actionable`：恢復訂閱後從需處理清單消失（目前只斷言移除；active 排除已恢復訂閱的規則在 tests/domain/notifications/notification-center.test.ts）。
 - `notification-click`：其他 Vault 的通知顯示的說明文字（目前只斷言不導頁、不切換）。
 - `notification-native`：真通知、Windows 重啟後從通知中心點擊、深淺色、Windows DPI 與 OS 阻擋；OS 畫面屬明確略過的項目，只在打包版登入桌面目視。

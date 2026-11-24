@@ -7,7 +7,7 @@
 - `rss-add-feed`：「新增訂閱」→「RSS」→ 貼 feed 網址 →「訂閱」。
 - `rss-add-page`：貼網頁網址，辨識頁面 `<link rel="alternate">` 宣告的 feed。
 - `rss-atom`：Atom feed。
-- `rss-articles`：文章收進文件頁，閱讀頁顯示轉好的 Markdown（標題、段落、連結）。
+- `rss-articles`：文章收進文件頁，閱讀頁顯示轉好的 Markdown（標題、段落、連結），原始連結按鈕為「開啟原始文章」。feed 沒有給全文（RSS 的 `content:encoded` 缺少或是空的；Atom 沒有內嵌的 `content`，包括帶 `src` 的 `content`）的文章，閱讀頁副標顯示「只有摘要」。
 - `rss-check`：feed 新增文章後，檢查只收新文章。
 - `rss-failure`：讀取失敗的處理。5xx 與連線錯誤是網路錯誤，已開始的檢查留在工作頁「進行中」等待重試；404、410、429 與非 feed 內容讓這次檢查失敗、等到下次檢查再試，錯誤記在記錄頁，並計入該訂閱的連續失敗。429 只影響回 429 的那個訂閱，RSS 沒有共用冷卻。
 - `rss-settings`：訂閱詳情頁的 RSS 收集設定。
@@ -40,7 +40,7 @@ Preconditions:
 - 訂閱階段 feed 回 5xx 時，辨識結果是 `unavailable`，對話框沒有「訂閱」動作；要測讀取失敗，先完成訂閱再注入錯誤。
 - 網路錯誤拿掉後，到重試時間才會完成，合成 server 的重試間隔是 2 秒、3 秒；API 已經沒有工作時，訂閱列可能還短暫顯示「排隊中」，斷言畫面用 `waitFor`。
 - 合成 feed 的 port 隨 slot 變動，不要把 7253 寫死在流程裡。
-- RSS 擁有所有 http(s) 網址，無法辨識成其他類型的網址都會落到 RSS；貼一般網頁看到「找不到 feed」是正常結果。
+- RSS 擁有所有 http(s) 網址，無法辨識成其他類型的網址都會落到 RSS。貼沒有宣告 feed 的一般網頁，辨識卡片為「無法加入這個網址」與「這個網址沒有 RSS feed。」（`unsupported`）；網址回 404／410 才是「無法讀取RSS」與「找不到這個 feed。」（`unavailable`）。兩者都沒有「訂閱」動作。
 - 真實 feed（`REAL.feed`）的文章數與內容會變，smoke 只斷言「至少收進一篇」。
 
 ## Regression flows
@@ -53,4 +53,4 @@ Preconditions:
 - `rss-failure`：503 恢復後同一工作完成、列回到「下次」；404／410／非 feed 各選一個代表畫面。分類與重試矩陣已有 `tests/domain/sources/rss/` 與 HTTP 案例。
 - `rss-add-page`：頁面宣告 canonical feed 的辨識，以及文件頁「新增」貼 feed 網址切換為訂閱。
 - `rss-atom`：RDF feed 的實際收集，用少量代表資料；格式解析已有 `tests/domain/sources/rss/feed.test.ts`。
-- `rss-articles`：閱讀頁的 Markdown 小標與連結代表內容；完整 HTML 轉換矩陣留在 `tests/domain/sources/rss/html.test.ts`。
+- `rss-articles`：閱讀頁的 Markdown 小標與連結代表內容；完整 HTML 轉換矩陣留在 `tests/domain/sources/rss/html.test.ts`。閱讀頁的「開啟原始文章」按鈕文字與只有摘要文章的「只有摘要」副標沒有流程；`content_extent` 判定在 `tests/domain/sources/rss/server.collection.test.ts`。

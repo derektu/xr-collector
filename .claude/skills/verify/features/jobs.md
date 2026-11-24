@@ -27,8 +27,8 @@ Preconditions:
 - **進行中與排隊中。** 經畫面訂閱頻道 A（見 [subscriptions.md](subscriptions.md)）；一個訂閱只有一個工作，A 下載中時再訂閱 B，再切到工作頁。每列為 `job-<jobId>`；`jobs-running` 有 A。B 開始前在 `jobs-queued`（列依序編號），開始後移到 `jobs-running`，之後不再回到排隊中。截圖。
 - **全部結束。** 兩者完成後 `jobs-empty` 顯示「沒有進行中的工作」，側欄不顯示 `jobs-badge`。
 - **失敗。** 經文件頁加入 `https://www.youtube.com/watch?v=vD000000003`。工作頁 `jobs-failed` 出現該工作與失敗原因；沒有其他工作時側欄不顯示 `jobs-badge`。
-- **重試。** 先把 `failVideo` 改回 `null`，再點該列的 `job-retry`。工作離開失敗區，文件頁出現 D 第 3 集。
-- **移除。** 再造一個失敗後點 `job-dismiss`。列消失，`GET /api/jobs/overview` 的 `failed` 不含它。
+- **重試。** 先把 `failVideo` 改回 `null`，再點該列的 `job-retry`。`notice` 顯示「已重新排入「<標題>」。」，工作離開失敗區，文件頁出現 D 第 3 集。同一目標已有進行中的工作時，重試併入那個工作。
+- **移除。** 再造一個失敗後點 `job-dismiss`。`notice` 顯示「已移除「<標題>」。」，列消失，`GET /api/jobs/overview` 的 `failed` 不含它。操作失敗時 `notice` 以錯誤樣式顯示伺服器訊息。
 - **離線。** 依 [訂閱與檢查](subscriptions.md) 的斷網步驟進入離線；失敗列的 `job-retry` disabled，`job-dismiss` 仍可按。
 
 ## Gotchas
@@ -36,7 +36,8 @@ Preconditions:
 - 三區只在有內容時渲染（`jobs-<id>` 不存在不代表錯誤）；斷言前先等「正在讀取…」消失與工作狀態，或以 `GET /api/jobs/overview` 對照。
 - 失敗不計入側欄徽章；只有失敗工作時找不到 `jobs-badge` 是正常的。
 - 合成收集很快，不停住收集很難拍到進行中；停住（`holdCaptures`）而不是調慢，進行中就會持續到放行。
-- 工作頁不輪詢：收到工作的變更事件才重讀，兩次讀取至少相隔約 1 秒（`READ_GAP_MS`）。等待畫面符合預期，不以 API 剛完成就假定畫面已刷新。
+- 工作頁不輪詢：收到工作的變更事件、事件串流重新連線，或瀏覽器的 `online` 事件時才重讀，兩次讀取至少相隔約 1 秒（`READ_GAP_MS`）。等待畫面符合預期，不以 API 剛完成就假定畫面已刷新。
+- 失敗區每個目標只看最新的一筆單篇或新增訂閱工作，這筆不是失敗就不列（例如同一網址又從別的入口加入、正在收集或已完成）；已重試、已移除、結束超過 7 天（`FAILED_RETENTION_MS`），或單篇的文件已經存在時也不列，也不能移除。檢查工作不進失敗區。失敗列自己不見可能是這些規則，不一定是錯誤。
 - 重試前沒把注入的失敗拿掉，重試會再次失敗；這是驗證步驟的錯誤，不是產品問題。
 - 失敗原因的用字由 plugin 宣告決定（`src/domain/sources/youtube/shared.ts` 的 `failureLabels`），截圖只核對畫面呈現。
 
@@ -44,7 +45,7 @@ Preconditions:
 
 - `subscribe-a-b`：斷言 `jobs-sections`、`jobs-empty`、`jobs-badge`。A、B 開始後在進行中且不回到排隊中、沒有失敗區、結束後顯示空狀態，以及工作全部結束、畫面穩定後沒有徽章。
 - `youtube-cooldown`：斷言 `jobs-row-text`。YouTube 冷卻中，開始過的檢查在進行中、等待原因為限制連線（data-cause），冷卻期間送出的單支影片在排隊中。說明文字在 tests/transport/web/jobs-presentation.test.ts。
-- `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`、`jobs-badge`。只有失敗工作時不顯示徽章；單篇失敗後重新收集及從失敗區移除，以 API 與文件內容確認結果。
+- `workspace-content`：斷言 `jobs-retry`、`jobs-dismiss`、`jobs-badge`。只有失敗工作時不顯示徽章；單篇失敗後重新收集，以文件內容確認；從失敗區移除，以 API 與畫面列消失確認。
 - `rss-rate-limit`：斷言 `jobs-sections`。RSS 503 後已開始的重試檢查在「進行中」，沒有「排隊中」分區。
 - `live-updates`：斷言 `jobs-empty`。Agent 訂閱的收集結束後工作頁顯示沒有進行中的工作，閒置 10 秒沒有請求。
 
@@ -53,4 +54,4 @@ Preconditions:
 - `jobs-badge`：進行中時的非零徽章，以及點徽章進工作頁。
 - `jobs-sections`：可控的排隊中 → 進行中、各區數量與順序、一個訂閱只佔一列；分類與排序的呈現已有 `tests/transport/web/jobs-presentation.test.ts`。
 - `jobs-retry`：重試後該列確實從畫面的失敗區離開（目前以 API 與文件確認）。
-- `jobs-dismiss`：移除後該列確實從畫面離開；沒有網路時仍可移除失敗工作。
+- `jobs-dismiss`：沒有網路時仍可移除失敗工作。

@@ -4,9 +4,9 @@
 
 ## Sub-features
 
-- `login-startup-setting`：安裝版讀取、開啟與關閉作業系統登入項目，切換中不先假裝成功，回到設定頁或視窗重新取得焦點時重讀。
+- `login-startup-setting`：安裝版讀取、開啟與關閉作業系統登入項目，切換中不先假裝成功，成功時跳 toast「已開啟登入自啟」／「已關閉登入自啟」並在「記錄」寫入 `device.login_startup_enabled`／`disabled`，失敗寫 `device.login_startup_failed`；回到設定頁或視窗重新取得焦點時重讀。
 - `login-startup-unavailable`：Web／開發版開關停用並說明只能用安裝版；UI 與 Agent API 都拒絕修改。
-- `login-startup-background`：由登入項目啟動時 runtime、排程、系統匣與 Agent API 可用，主視窗不顯示。
+- `login-startup-background`：由登入項目啟動時 runtime、排程、系統匣與 Agent API 可用，主視窗不顯示，「記錄」留下 `device.login_startup_launched`。
 - `login-startup-single-instance`：已有 instance 時，登入自啟形式的第二次啟動不顯示視窗；手動第二次啟動顯示現有視窗，instanceId 不變。
 - `login-startup-os-state`：作業系統外部停用優先；macOS 需要允許時明確顯示；Windows App 搬移後顯示關閉，再開啟一次即指向目前位置。
 
@@ -26,14 +26,14 @@ Preconditions:
 - 真登入案例沿用上述 VM 安裝版，會真的登出再登入，只在使用者確認時段後執行。
 
 - **Web 不可設定。** 進入設定頁，`settings-login-startup` 內的 `login-startup-switch` 內的 `input` 必須 disabled，`login-startup-status` 簡短顯示「僅限安裝版 App。」。向 UI 與 Agent listener `PUT /api/device/login-startup {"enabled":true}` 都是 409 `login_startup_unavailable`。
-- **切換與 read-back。** 安裝版切換後，以兩個 listener 的 GET 比對 OS 實際狀態；製造 adapter 失敗時，開關維持 read-back 值並在卡片顯示錯誤。
-- **背景啟動。** 登入 VM 後不操作，確認視窗不可見、tray 存在、Agent `/api/health` 可達；再手動啟動，現有視窗顯示且 `runtime.instanceId` 不變。
+- **切換與 read-back。** 安裝版切換後，以兩個 listener 的 GET 比對 OS 實際狀態，並確認 toast 與「記錄」的切換事件；製造 adapter 失敗時，開關維持 read-back 值並在卡片顯示錯誤。
+- **背景啟動。** 登入 VM 後不操作，確認視窗不可見、tray 存在、Agent `/api/health` 可達，「記錄」有 `device.login_startup_launched`；再手動啟動，現有視窗顯示且 `runtime.instanceId` 不變。
 - **外部停用。** 在 OS 設定關閉後再進設定頁，開關必須顯示關閉，App 不得自行重開。
 
 ## Gotchas
 
 - 開發版 Electron 與瀏覽器不是安裝版，不能用它們證明 OS 登入項目真的生效。
-- macOS 未簽章的 44.4.1 App 可能回 `requires-approval` 或設定後 read-back 仍為關閉；這是要呈現的 OS 狀態，不可當作成功。
+- macOS ad-hoc 簽章（`electron-builder.yml` 的 `identity: "-"`）的 App 可能回 `requires-approval` 或設定後 read-back 仍為關閉；這是要呈現的 OS 狀態，不可當作成功。
 - 真登入案例會登出 VM，會中斷該 VM 的其他驗收；先與使用者確認時段。
 - 只看到 build 成功、registry/plist 存在或 process 出現，都不能取代「登入後背景服務可用且視窗未顯示」的行為驗收。
 
@@ -45,7 +45,7 @@ Preconditions:
 
 ## Backlog
 
-- `login-startup-os-state`：沒有流程；寫入被拒後重讀、視窗回到前景時重讀但寫入途中不讀在 `tests/transport/web/login-startup-control.test.ts`，平台 adapter 的需要核准、OS 外部停用與 App 搬移後的狀態在 `tests/desktop/electron/login-startup.test.ts`。真實 OS 的狀態需要打包安裝版。
+- `login-startup-os-state`：沒有流程；寫入被拒後重讀、視窗回到前景時重讀但寫入途中不讀在 `tests/transport/web/login-startup-control.test.ts`，平台 adapter 的 macOS 需要核准、Windows 外部停用與 App 搬移後的狀態在 `tests/desktop/electron/login-startup.test.ts`；macOS 外部停用沒有下層測試。真實 OS 的狀態需要打包安裝版。
 
 - `login-startup-background`：由登入項目啟動時 runtime、排程、系統匣與 Agent API 可用且主視窗不顯示；需要打包安裝版，真正登出／登入的生效屬明確略過的項目。
 - `login-startup-single-instance`：登入自啟形式的第二次啟動不顯示視窗；手動第二次啟動見 [tray.md](tray.md)。

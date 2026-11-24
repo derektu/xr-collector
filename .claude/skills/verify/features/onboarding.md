@@ -9,6 +9,7 @@
 - `onboarding-open`：選到知識庫直接開啟；選到一般資料夾回到首頁，在卡片下方顯示「『<資料夾名稱>』不是 XR Collector 知識庫。」；取消不顯示錯誤。
 - `onboarding-missing`：先前使用的知識庫改名或刪除後重開，卡片上方顯示「原知識庫無法開啟」、原因與原路徑。
 - `onboarding-from-export`：選擇匯出檔後顯示匯出日期、文件數與訂閱數，名稱預設為匯出時的資料夾名稱；「建立並匯入」後內容與匯出前一致。
+- `onboarding-agent-setup`：停在開始使用畫面時，已授權的 Agent 經 `POST /api/vault/setup` 建立或開啟知識庫，畫面不必重新整理就進入 App；自己送出時遇到 `vault_already_set` 同樣直接進入 App，不顯示錯誤。
 - `onboarding-native-pickers`：Desktop 的「選擇位置」「開啟」「選擇檔案」各自開原生選擇器，標題與確認按鈕分別是「選擇位置／選擇位置」「選擇知識庫資料夾／開啟」「選擇匯出檔／選擇」，macOS 顯示 `message`；位置選擇器從目前的位置開始，開啟既有從「文件」開始。
 
 ## How to get to it (user POV)
@@ -23,7 +24,7 @@ Preconditions: `launchWeb({ vault: 'none' })`。新知識庫的預設位置是 r
 - **首頁。** `onboarding-home`、`onboarding-entries`；`onboarding-original-failure` 只在原知識庫無法開啟時出現。
 - **建立。** `onboarding-create` → `onboarding-create-form`；`new-vault-name`、`new-vault-location-input`（Web）或 `new-vault-location`＋`new-vault-choose-location`（Desktop）；`new-vault-preview` 顯示將建立的知識庫位置或原因；`onboarding-create-confirm`；`onboarding-back` 回首頁。
 - **開啟既有。** Web 模式按 `onboarding-open` 後在 `onboarding-open-path` 輸入完整路徑、按 `onboarding-open-confirm`；錯誤在 `onboarding-error`。
-- **原知識庫不見。** 進入 App 後把知識庫資料夾改名，`instance.restart({ page })`。
+- **原知識庫不見。** 進入 App 後把知識庫資料夾改名，先 `page.goto(instance.url)` 離開設定頁，再 `instance.restart({ page })`；重啟會回到原本的路由，沒有知識庫時停在設定頁（`/settings`）顯示 App 更新（`device-settings-without-vault`），其他路由顯示開始使用畫面。
 - **從匯出檔建立。** 先在 App 內匯出（`POST /api/vault/export`）；刪除 profile 的 `vault-selection.json` 後重啟回到開始使用。`onboarding-from-export` → `onboarding-import-form`，`onboarding-package-input` 輸入 zip 路徑、按 `onboarding-package-read`，`onboarding-package-summary` 在檔名下方顯示摘要，`onboarding-import-confirm` 建立並匯入。
 - **Desktop 選擇器。** Electron 中以 `stubDialogs(instance.app, { open })` 替換對話框，`globalThis.__dialogCalls` 的 `options` 有 `title`、`buttonLabel`、`message`、`defaultPath`。驗證對話框本身的外觀時不替換，以原生截圖為證據，執行時會跳出視窗。
 
@@ -39,4 +40,5 @@ Preconditions: `launchWeb({ vault: 'none' })`。新知識庫的預設位置是 r
 
 ## Backlog
 
+- `onboarding-agent-setup`：`agent-connection` 流程的 A44-W0 從頁面外以 UI listener `POST /api/vault/setup`，並確認不重新整理就出現 `nav-settings`，但沒有列入它的斷言；經 Agent listener（帶金鑰）送出，以及自己送出遇到 `vault_already_set`，都沒有流程。
 - `onboarding-native-pickers`：沒有錄製的 flow（Desktop flow 以 `vault: 'selected'` 啟動，到不了開始使用畫面）；以 `launchElectron({ vault: 'none' })` 搭配 `stubDialogs` 記錄的參數驗證標題、確認按鈕、`message` 與起始位置，選擇器本身的外觀需原生截圖。
