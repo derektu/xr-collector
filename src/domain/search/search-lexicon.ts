@@ -1,17 +1,5 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-
-export const SEARCH_LEXICON_FORMAT_REVISION = 1;
-const SUPPORTED_LEXICON_NORMALIZATION_REVISION = 1;
-
-export interface SearchLexiconIdentity {
-  id: string;
-  sha256: string;
-  bytes: number;
-  formatRevision: typeof SEARCH_LEXICON_FORMAT_REVISION;
-  normalizationRevision: number;
-}
 
 export interface LexiconToken {
   word: string;
@@ -20,66 +8,25 @@ export interface LexiconToken {
 }
 
 export interface SearchLexicon {
-  path: string;
-  manifestPath: string;
-  identity: SearchLexiconIdentity;
   cut(text: string): LexiconToken[];
 }
 
-interface LexiconManifest {
-  schemaVersion: number;
-  id: string;
-  normalization?: { revision?: unknown };
-  uniqueTerms: number;
-  output?: { file?: unknown; sha256?: unknown; bytes?: unknown };
-}
-
-export async function loadSearchLexicon(
-  lexiconPath: string,
-  manifestPath = `${lexiconPath.slice(0, -path.extname(lexiconPath).length)}.json`,
-): Promise<SearchLexicon> {
+export async function loadSearchLexicon(lexiconPath: string): Promise<SearchLexicon> {
   const absoluteLexicon = path.resolve(lexiconPath);
-  const absoluteManifest = path.resolve(manifestPath);
-  let manifest: LexiconManifest;
-  let bytesValue: Buffer;
+  let bytes: Buffer;
   try {
-    [manifest, bytesValue] = await Promise.all([
-      readFile(absoluteManifest, 'utf8').then((value) => JSON.parse(value) as LexiconManifest),
-      readFile(absoluteLexicon),
-    ]);
+    bytes = await readFile(absoluteLexicon);
   } catch (error) {
-    throw new Error(`Search lexicon resource is missing or invalid: ${absoluteLexicon}.`, { cause: error });
+    throw new Error(`Search lexicon resource is missing: ${absoluteLexicon}.`, { cause: error });
   }
-  const bytes = bytesValue.byteLength;
-  const sha256 = createHash('sha256').update(bytesValue).digest('hex');
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytesValue);
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch (error) {
     throw new Error(`Search lexicon is not valid UTF-8: ${absoluteLexicon}.`, { cause: error });
   }
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
-    || manifest.schemaVersion !== 1 || typeof manifest.id !== 'string' || manifest.id.length === 0
-    || !Number.isInteger(manifest.uniqueTerms) || manifest.uniqueTerms <= 0
-    || !manifest.output || manifest.output.file !== path.basename(absoluteLexicon)
-    || manifest.output.sha256 !== sha256 || manifest.output.bytes !== bytes
-    || manifest.normalization?.revision !== SUPPORTED_LEXICON_NORMALIZATION_REVISION) {
-    throw new Error(`Search lexicon manifest does not match ${absoluteLexicon}.`);
-  }
-  const dictionary = parseDictionary(text, manifest.uniqueTerms);
-  const identity: SearchLexiconIdentity = {
-    id: manifest.id,
-    sha256,
-    bytes,
-    formatRevision: SEARCH_LEXICON_FORMAT_REVISION,
-    normalizationRevision: SUPPORTED_LEXICON_NORMALIZATION_REVISION,
-  };
-  return {
-    path: absoluteLexicon,
-    manifestPath: absoluteManifest,
-    identity,
-    cut: (value) => cutWithDictionary(value, dictionary),
-  };
+  const dictionary = parseDictionary(text);
+  return { cut: (value) => cutWithDictionary(value, dictionary) };
 }
 
 interface Dictionary {
@@ -88,7 +35,7 @@ interface Dictionary {
   maxWordLength: number;
 }
 
-function parseDictionary(text: string, expectedEntries: number): Dictionary {
+function parseDictionary(text: string): Dictionary {
   const frequencies = new Map<string, number>();
   let total = 0;
   let maxWordLength = 1;
@@ -109,9 +56,7 @@ function parseDictionary(text: string, expectedEntries: number): Dictionary {
     total += frequency;
     maxWordLength = Math.max(maxWordLength, [...word].length);
   }
-  if (frequencies.size !== expectedEntries || !Number.isSafeInteger(total) || total <= 0) {
-    throw new Error(`Search lexicon entry count or total frequency is invalid (got ${frequencies.size}, expected ${expectedEntries}).`);
-  }
+  if (!Number.isSafeInteger(total) || total <= 0) throw new Error('Search lexicon total frequency is invalid.');
   return { frequencies, total, maxWordLength };
 }
 

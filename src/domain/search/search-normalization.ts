@@ -1,9 +1,6 @@
 import { Converter, Locale, Trie } from 'opencc-js';
 import type { DictGroup, DictLike } from 'opencc-js';
 
-export const SEARCH_NORMALIZATION_REVISION = 1;
-export const OPENCC_DATA_VERSION = '1.4.2';
-
 interface Unit { text: string; rawStart: number; rawEnd: number }
 
 export interface NormalizedText {

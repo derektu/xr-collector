@@ -107,33 +107,6 @@ describe('ManagedTranscriptSearch', () => {
     expect(search.status()).toMatchObject({ state: 'ready', lastRebuiltAt: '2026-10-01T00:00:00.000Z' });
   });
 
-  it('forces a full replacement for a new semantic profile and records it only after success', async () => {
-    const rebuilt: SavedDocument[][] = [];
-    const recorded: string[] = [];
-    const search = new ManagedTranscriptSearch(
-      fakeBackend(true, rebuilt),
-      async () => documents,
-      undefined,
-      () => new Date('2026-10-24T00:00:00.000Z'),
-      { forceRebuild: true, onFullRebuildSucceeded: async () => { recorded.push('profile'); } },
-    );
-    await search.start();
-    expect(rebuilt).toEqual([documents]);
-    expect(recorded).toEqual(['profile']);
-  });
-
-  it('enters the error state when committing the semantic profile fails', async () => {
-    const search = new ManagedTranscriptSearch(
-      fakeBackend(false, []),
-      async () => documents,
-      undefined,
-      () => new Date(),
-      { onFullRebuildSucceeded: async () => { throw new Error('marker disk full'); } },
-    );
-    await expect(search.start()).rejects.toThrow('marker disk full');
-    expect(search.status()).toMatchObject({ state: 'error', message: '無法啟動搜尋索引。' });
-  });
-
   it('reports a failed rebuild with its reason and keeps the previous rebuild time', async () => {
     const store = memoryStateStore('2026-10-01T00:00:00.000Z');
     const backend = { ...fakeBackend(true, []), replaceAll: async () => { throw new Error('engine down'); } };
@@ -159,28 +132,25 @@ describe('ManagedTranscriptSearch', () => {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
       requests.push({ url, method, body });
 
-      if (url.endsWith('/indexes/documents_v4') && method === 'GET') {
-        return Response.json({ uid: 'documents_v4', primaryKey: 'key' });
+      if (url.endsWith('/indexes/documents') && method === 'GET') {
+        return Response.json({ uid: 'documents', primaryKey: 'key' });
       }
-      if (url.endsWith('/indexes/transcripts') && method === 'GET') {
-        return Response.json({ message: 'not found' }, { status: 404 });
-      }
-      if (url.endsWith('/indexes/documents_v4/settings') && method === 'PATCH') {
+      if (url.endsWith('/indexes/documents/settings') && method === 'PATCH') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
       if (url.endsWith('/tasks/1')) {
         return Response.json({ uid: 1, status: 'succeeded', error: null });
       }
-      if (url.includes('/indexes/documents_v4/documents?fields=key,contentHash')) {
+      if (url.includes('/indexes/documents/documents?fields=key,contentHash')) {
         return Response.json({ results: [], total: 0 });
       }
-      if (url.endsWith('/indexes/documents_v4/documents') && method === 'DELETE') {
+      if (url.endsWith('/indexes/documents/documents') && method === 'DELETE') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v4/documents') && method === 'PUT') {
+      if (url.endsWith('/indexes/documents/documents') && method === 'PUT') {
         return Response.json({ taskUid: 1 }, { status: 202 });
       }
-      if (url.endsWith('/indexes/documents_v4/search') && method === 'POST') {
+      if (url.endsWith('/indexes/documents/search') && method === 'POST') {
         return Response.json({
           hits: [{
             id: documents[0]!.id,

@@ -1,70 +1,40 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pidFilePath, stopLeftoverMeilisearchProcess } from './meilisearch-process.js';
-import type { SearchIndexProfile } from './meilisearch-runtime.js';
 
-export interface PreparedSearchProjection {
-  databasePath: string;
-  forceRebuild: boolean;
-  recordRebuild(): Promise<void>;
-}
+export const SEARCH_INDEX_VERSION = 1;
 
-export function searchDatabasePath(searchData: string, vaultRoot: string): string {
+function vaultPrefix(searchData: string, vaultRoot: string): string {
   return `${path.resolve(searchData)}-${createHash('sha256').update(vaultRoot).digest('hex').slice(0, 16)}`;
 }
 
-export function searchProfilePath(databasePath: string): string {
-  return `${path.resolve(databasePath)}-fingerprint.json`;
+/** The search database of `vaultRoot` for the current `SEARCH_INDEX_VERSION`; another version is another directory. */
+export function searchDatabasePath(searchData: string, vaultRoot: string): string {
+  return `${vaultPrefix(searchData, vaultRoot)}-v${SEARCH_INDEX_VERSION}`;
 }
 
-export async function prepareOwnedSearchProjection(options: {
-  searchData: string;
-  vaultRoot: string;
-  binaryPath: string;
-  profile: SearchIndexProfile;
-}): Promise<PreparedSearchProjection> {
+/**
+ * Returns the Vault's search database path after deleting the Vault's databases of other index
+ * versions, with their state and process files. A database the current version has not built yet
+ * does not exist, so the startup comparison indexes every document into it.
+ */
+export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string; binaryPath: string }): Promise<string> {
   const databasePath = searchDatabasePath(options.searchData, options.vaultRoot);
-  await stopLeftoverMeilisearchProcess({ binaryPath: options.binaryPath, databasePath });
-  const profilePath = searchProfilePath(databasePath);
-  const matches = await profileMatches(profilePath, options.profile);
-  if (!matches) {
-    const targets = [databasePath, `${databasePath}-state.json`, pidFilePath(databasePath), profilePath];
-    for (const target of targets) await refuseSymlink(target);
-    for (const target of targets) await rm(target, { recursive: target === databasePath, force: true });
-  }
-  return {
-    databasePath,
-    forceRebuild: !matches,
-    async recordRebuild() {
-      await mkdir(path.dirname(profilePath), { recursive: true });
-      const temporary = `${profilePath}.${process.pid}-${randomUUID()}.tmp`;
-      try {
-        await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, profile: options.profile }, null, 2)}\n`, { flag: 'wx' });
-        await rename(temporary, profilePath);
-      } finally {
-        await rm(temporary, { force: true });
-      }
-    },
-  };
-}
-
-async function profileMatches(profilePath: string, profile: SearchIndexProfile): Promise<boolean> {
+  const prefix = vaultPrefix(options.searchData, options.vaultRoot);
+  const current = new Set([databasePath, `${databasePath}-state.json`, pidFilePath(databasePath)].map((entry) => path.basename(entry)));
+  const prefixName = path.basename(prefix);
+  const directory = path.dirname(prefix);
+  const others = (await readdir(directory).catch(() => [] as string[]))
+    .filter((name) => !current.has(name) && (name === prefixName || name.startsWith(`${prefixName}-`) || name.startsWith(`${prefixName}.`)))
+    .map((name) => path.join(directory, name));
   try {
-    const value: unknown = JSON.parse(await readFile(profilePath, 'utf8'));
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-      && (value as { schemaVersion?: unknown }).schemaVersion === 1
-      && JSON.stringify((value as { profile?: unknown }).profile) === JSON.stringify(profile);
+    for (const pidFile of others.filter((target) => target.endsWith('.pid'))) {
+      await stopLeftoverMeilisearchProcess({ binaryPath: options.binaryPath, databasePath: pidFile.slice(0, -'.pid'.length) });
+    }
+    for (const target of others) await rm(target, { recursive: true, force: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return false;
-    throw error;
+    console.warn('Unable to delete the search data of other index versions', error);
   }
-}
-
-async function refuseSymlink(target: string): Promise<void> {
-  try {
-    if ((await lstat(target)).isSymbolicLink()) throw new Error(`Refusing to clear symlinked search projection path: ${target}`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+  return databasePath;
 }

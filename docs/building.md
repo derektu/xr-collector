@@ -157,7 +157,7 @@ npm run package:mac -- --mac-signing-mode developer-id-notarized --mac-signing-e
 env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`、`APPLE_TEAM_ID`；兩個檔案路徑都相對 signing root，env、p12、p8 必須只允許 owner 讀取。流程以專用 temporary keychain 找到該 p12 唯一且 Team 相符的 identity。因 macOS `codesign --keychain` 仍要求 identity 所在 keychain 可被搜尋，流程在保留既有順序下把自己建立的 keychain 暫時 append 到目前 user search list；正常清理由 `delete-keychain` 移除自己的 keychain，若該命令失敗，fallback 只從當下清單刪除自己的 entry，保留其他 session 同時加入的項目，並讓整次建置以包含主錯與清理錯的診斷失敗，不用舊 snapshot 覆蓋新變更。builder child 不取得 App Store Connect key。Mac Developer ID 產物依下列順序建置與檢查，每份產物只做一次完整檢查：
 
 1. electron-builder `--dir` 產 App；afterPack 簽署 staged runtime，再以 Developer ID 簽署 App。
-2. 公證前對 App 跑完整 Developer ID gate：Team、hardened runtime、entitlements、sealed resources 與 signed runtime inventory。
+2. 公證前對 App 跑完整 Developer ID gate：Team、hardened runtime、entitlements、sealed resources 與每個已簽署的 runtime 檔案。
 3. App 只送公證一次：以 `ditto` 壓成上傳用 ZIP，`notarytool submit` 後立即用 upload SHA、Team 與用途保存 submission ID，再等待結果並取回 log；中斷後只續查同一 submission，不能盲目重送。`Accepted`、零 issues 才 `stapler staple` 並 `stapler validate` App。
 4. 對已 staple 的 App 跑完整 Developer ID gate、`syspolicy_check distribution` 與 `spctl --assess --type execute`；這份 App 的 identity 記為 App 收據的 `stapled`。
 5. electron-builder 以 `--prepackaged` 由已 staple 的 App 一次產出 DMG 與 ZIP。
@@ -167,7 +167,7 @@ env 只接受 `CSC_LINK`、`CSC_KEY_PASSWORD`、`APPLE_API_KEY`、`APPLE_API_KEY
 9. 以 `ditto` 解開 ZIP，其中唯一的 App 做與第 8 步相同的比對與檢查。
 10. 讀回 `release/mac-arm64` 的 App：bytes 必須等於 `stapled`，再核對 BuildInfo、runtime 與 resources；步驟 2、4 已驗過相同 bytes，不重跑 Developer ID gate。
 
-Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。`runtime-signing.json` 同時保存 raw producer identity、final 完整 inventory、Meilisearch raw／final identity及實際 signature。啟動端只接受 raw hash，或接受被有效外層 App seal 保護、final hash 相符且 Meilisearch 與外層 App Team 相同的 Developer ID identity；不能只信任可被單獨覆寫的 sidecar final SHA。Deno 保留固定 upstream 簽章。
+Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy，raw source pin 不變；runtime Mach-O 葉節點檔案最多 8 個同時簽署，Python.framework 等 bundle 在其內容全部簽完後才簽，維持由內而外；簽署前會把 SHA-256 pin 驗證過的 yt-dlp／Deno archives 另行解壓到隔離目錄，以該獨立重建結果比對 raw source 與 staging tree，不能用可和檔案一起改寫的 manifest 自證。簽署後逐一以 `codesign` 核對每個 runtime Mach-O 檔案與 Python.framework 的 Developer ID 簽章與 Team；App 的 Developer ID gate 再核對一次。Deno 保留固定 upstream 簽章。
 
 ## 發布
 

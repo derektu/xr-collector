@@ -10,7 +10,6 @@ import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import { noStageTimer } from './stage-timings.mjs';
 
 export const DEVELOPER_ID_POLICY = 'developer-id-notarized';
-export const RUNTIME_SIGNING_MANIFEST = 'runtime-signing.json';
 /** Upper bound on concurrent `codesign` processes for runtime Mach-O files. */
 export const RUNTIME_SIGNING_CONCURRENCY = 8;
 export const DENO_TEAM_ID = '2H4KBF436B';
@@ -407,10 +406,8 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   const bin = path.join(appPath, 'Contents/Resources/bin');
   const dependencyManifestPath = path.join(bin, 'runtime-dependencies.json');
   const sourceDependencyManifestPath = path.join(sourceBin, 'runtime-dependencies.json');
-  const meiliManifestPath = path.join(bin, 'meilisearch-build.json');
-  const sourceMeiliManifestPath = path.join(sourceBin, 'meilisearch-build.json');
-  const [dependencyManifest, sourceDependencyManifest, meiliManifest, sourceMeiliManifest] = await Promise.all([
-    readJson(dependencyManifestPath), readJson(sourceDependencyManifestPath), readJson(meiliManifestPath), readJson(sourceMeiliManifestPath),
+  const [dependencyManifest, sourceDependencyManifest, meiliManifest] = await Promise.all([
+    readJson(dependencyManifestPath), readJson(sourceDependencyManifestPath), readJson(path.join(sourceBin, 'meilisearch-build.json')),
   ]);
   await timer.time('check runtime provenance (independent archive extraction)', async () => {
     const reconstructed = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-runtime-provenance-'));
@@ -428,7 +425,6 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
       await (dependencies.rm ?? rm)(reconstructed, { recursive: true, force: true });
     }
   });
-  if (JSON.stringify(meiliManifest) !== JSON.stringify(sourceMeiliManifest)) throw new Error('Staged Meilisearch manifest does not match the raw producer identity.');
   const stagedMeili = path.join(bin, 'meilisearch');
   const sourceMeili = path.join(sourceBin, 'meilisearch');
   const stagedHelper = path.join(bin, 'xr-mac-update-helper');
@@ -450,84 +446,27 @@ export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, 
   const framework = path.join(bin, 'yt-dlp/_internal/Python.framework');
   await timer.time('codesign --timestamp Python.framework', () => run('/usr/bin/codesign', signArgs(framework)), { count: 1 });
 
-  const verifiedFiles = [...codeFiles, framework, denoPath];
-  const executableSignatures = await timer.time('verify signed runtime files', async () => {
-    const signatures = await mapConcurrent(verifiedFiles, RUNTIME_SIGNING_CONCURRENCY, async (file) => {
-      await run('/usr/bin/codesign', ['--verify', '--strict', file]);
-      const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
-      const expected = file === denoPath ? DENO_TEAM_ID : expectedTeamId;
-      assertDeveloperIdSignature(metadata, expected, path.relative(bin, file));
-      if (file === denoPath) {
-        const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', file]);
-        metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
-        assertDenoEntitlements(metadata.entitlements);
-      }
-      return metadata;
-    });
-    return Object.fromEntries(verifiedFiles.map((file, index) => [path.relative(bin, file), signatures[index]]));
-  }, { count: verifiedFiles.length });
-  const files = await timer.time('hash signed runtime inventory', () => inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST])));
-  const meiliFinal = files.find((entry) => entry.path === 'meilisearch');
-  if (!meiliFinal) throw new Error('Signed Meilisearch final identity is missing.');
-  const signingManifest = {
-    schemaVersion: 1,
-    policy: DEVELOPER_ID_POLICY,
-    expectedAppTeamId: expectedTeamId,
-    sourceIdentity: {
-      dependencyManifest: await describeFile(sourceDependencyManifestPath),
-      meilisearchManifest: await describeFile(sourceMeiliManifestPath),
-    },
-    meilisearch: {
-      source: { bytes: meiliManifest.binary.bytes, sha256: meiliManifest.binary.sha256 },
-      final: { bytes: meiliFinal.bytes, sha256: meiliFinal.sha256 },
-      signature: executableSignatures.meilisearch,
-    },
-    files,
-    executableSignatures,
-  };
-  await writeFile(path.join(bin, RUNTIME_SIGNING_MANIFEST), `${JSON.stringify(signingManifest, null, 2)}\n`, { mode: 0o644 });
-  return signingManifest;
+  return timer.group('verify signed runtime files', (child) => verifySignedRuntimeFiles(bin, expectedTeamId, { run, timer: child, concurrency: RUNTIME_SIGNING_CONCURRENCY }));
 }
 
-export async function verifySignedRuntimeInventory(bin, expectedTeamId, dependencies = {}) {
-  const signingManifest = await readJson(path.join(bin, RUNTIME_SIGNING_MANIFEST));
-  if (signingManifest.schemaVersion !== 1 || signingManifest.policy !== DEVELOPER_ID_POLICY
-    || signingManifest.expectedAppTeamId !== expectedTeamId || !Array.isArray(signingManifest.files)) {
-    throw new Error('Signed runtime inventory schema or expected App Team is invalid.');
-  }
+/** Checks the Developer ID signature of every runtime Mach-O file and the Python framework, and Deno's pinned entitlements. */
+export async function verifySignedRuntimeFiles(bin, expectedTeamId, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
   const timer = dependencies.timer ?? noStageTimer;
-  const actual = await timer.time('hash runtime inventory', () => inventoryTree(bin, new Set([RUNTIME_SIGNING_MANIFEST])));
-  if (JSON.stringify(actual) !== JSON.stringify(signingManifest.files)) throw new Error('Signed runtime final bytes do not match the sealed inventory.');
-  if (!sameFileIdentity(signingManifest.sourceIdentity?.dependencyManifest, await describeFile(path.join(bin, 'runtime-dependencies.json')))
-    || !sameFileIdentity(signingManifest.sourceIdentity?.meilisearchManifest, await describeFile(path.join(bin, 'meilisearch-build.json')))) {
-    throw new Error('Signed runtime producer manifests do not match their sealed source identities.');
-  }
-  const meiliManifest = await readJson(path.join(bin, 'meilisearch-build.json'));
-  if (!sameFileIdentity(signingManifest.meilisearch?.source, meiliManifest.binary)) throw new Error('Signed runtime does not retain the raw Meilisearch producer identity.');
-  const meili = actual.find((entry) => entry.path === 'meilisearch');
-  if (!meili || !sameFileIdentity(meili, signingManifest.meilisearch?.final)) throw new Error('Signed Meilisearch bytes do not match the sealed final identity.');
-  if (dependencies.verifySignatures !== false) {
-    const run = dependencies.run ?? runCaptured;
-    const framework = path.join(bin, 'yt-dlp/_internal/Python.framework');
-    const expectedSignatures = [...await listMachOFiles(bin), framework].map((file) => path.relative(bin, file)).sort();
-    const recordedSignatures = Object.keys(signingManifest.executableSignatures ?? {}).sort();
-    if (JSON.stringify(recordedSignatures) !== JSON.stringify(expectedSignatures)) throw new Error('Signed runtime signature inventory does not cover every Mach-O file and the Python framework.');
-    // One file at a time: the packaging checkout lock records the single child process it tracks.
-    await timer.time('codesign verify runtime files', () => mapConcurrent(Object.entries(signingManifest.executableSignatures ?? {}), 1,
-      async ([relative, recorded]) => {
-        const target = path.join(bin, relative);
-        await run('/usr/bin/codesign', ['--verify', '--strict', target]);
-        const actualSignature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', target])).stderr);
-        assertDeveloperIdSignature(actualSignature, relative === 'deno' ? DENO_TEAM_ID : expectedTeamId, relative);
-        if (relative === 'deno') {
-          const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', target]);
-          actualSignature.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
-          assertDenoEntitlements(actualSignature.entitlements);
-        }
-        if (JSON.stringify(actualSignature) !== JSON.stringify(recorded)) throw new Error(`Runtime signature identity changed: ${relative}.`);
-      }), { count: recordedSignatures.length });
-  }
-  return signingManifest;
+  const files = [...await listMachOFiles(bin), path.join(bin, 'yt-dlp/_internal/Python.framework')];
+  const signatures = await timer.time('codesign verify runtime files', () => mapConcurrent(files, dependencies.concurrency ?? 1, async (file) => {
+    const relative = path.relative(bin, file);
+    await run('/usr/bin/codesign', ['--verify', '--strict', file]);
+    const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
+    assertDeveloperIdSignature(metadata, relative === 'deno' ? DENO_TEAM_ID : expectedTeamId, relative);
+    if (relative === 'deno') {
+      const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', file]);
+      metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
+      assertDenoEntitlements(metadata.entitlements);
+    }
+    return metadata;
+  }), { count: files.length });
+  return Object.fromEntries(files.map((file, index) => [path.relative(bin, file), signatures[index]]));
 }
 
 export async function verifyDeveloperIdApplication(appPath, expectedTeamId, dependencies = {}) {
@@ -541,7 +480,8 @@ export async function verifyDeveloperIdApplication(appPath, expectedTeamId, depe
     for (const helper of await listNestedApplications(path.join(appPath, 'Contents/Frameworks'))) await assertExactElectronEntitlements(helper, run);
     return metadata;
   });
-  const runtime = await timer.group('signed runtime inventory', (child) => verifySignedRuntimeInventory(path.join(appPath, 'Contents/Resources/bin'), expectedTeamId, { ...dependencies, timer: child }));
+  // One file at a time: the packaging checkout lock records the single child process it tracks.
+  const runtime = await timer.group('signed runtime files', (child) => verifySignedRuntimeFiles(path.join(appPath, 'Contents/Resources/bin'), expectedTeamId, { run, timer: child }));
   return { signature, runtime };
 }
 
@@ -808,11 +748,11 @@ function isMachO(buffer) {
     || [0xcafebabe, 0xcafebabf, 0xbebafeca, 0xbfbafeca].includes(big);
 }
 
-async function inventoryTree(root, excluded = new Set()) {
+async function inventoryTree(root) {
   const entries = [];
   for (const absolute of await walk(root, true)) {
     const relative = path.relative(root, absolute);
-    if (!relative || excluded.has(relative)) continue;
+    if (!relative) continue;
     const info = await lstat(absolute);
     if (info.isSymbolicLink()) entries.push({ path: relative, type: 'symlink', target: await readlink(absolute) });
     else if (info.isFile()) entries.push({ path: relative, type: 'file', mode: info.mode & 0o777, ...await describeFile(absolute) });

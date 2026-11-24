@@ -9,9 +9,7 @@ import { planFragmentQuery } from './fragment-query.js';
 import { normalizeSearchText, normalizeSearchTextWithMap } from './search-normalization.js';
 import type { SearchLexicon } from './search-lexicon.js';
 
-const INDEX_SCHEMA_VERSION = 4;
-const INDEX_UID = `documents_v${INDEX_SCHEMA_VERSION}`;
-const RETIRED_INDEX_UIDS = ['transcripts'];
+const INDEX_UID = 'documents';
 const MAX_TOTAL_HITS = 10_000;
 
 function retrievedAttributes(sources: SourceDeclarations): string[] {
@@ -121,14 +119,6 @@ export class MeilisearchBackend implements SearchBackend {
     // Updating filterableAttributes re-indexes every stored document, in time proportional to the index size.
     // https://www.meilisearch.com/docs/learn/filtering_and_sorting/filter_search_results#configure-index-settings
     await this.waitForTask(settingsTask.taskUid, SETTINGS_TASK_TIMEOUT_MS);
-
-    for (const uid of RETIRED_INDEX_UIDS) {
-      const existing = await this.fetchImplementation(`${this.baseUrl}/indexes/${uid}`, { headers: this.headers() });
-      if (existing.status === 404) continue;
-      if (!existing.ok) throw await this.responseError(existing);
-      const task = await this.request<TaskReference>(`/indexes/${uid}`, { method: 'DELETE' });
-      await this.waitForTask(task.taskUid);
-    }
 
     await this.request<MeilisearchSearchResponse>(`/indexes/${INDEX_UID}/search`, {
       method: 'POST',

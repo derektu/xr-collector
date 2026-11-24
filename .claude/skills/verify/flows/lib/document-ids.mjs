@@ -13,7 +13,7 @@ export const vaultIds = (state) => (state.vault.documents ?? []).map((document) 
 
 /** The sorted document IDs of the search index; null when the index cannot be read. */
 export const indexIds = (state) => {
-  const index = state.index.indexes?.find((entry) => ['documents_v4', 'documents_v2'].includes(entry.uid));
+  const index = state.index.indexes?.find((entry) => entry.uid === 'documents');
   return index ? index.keys.map(fromIndexKey).sort() : null;
 };
 

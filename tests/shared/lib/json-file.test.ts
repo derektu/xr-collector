@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readJsonFile, writeJsonFile } from '../../../src/shared/lib/json-file.js';
-import { windowsPowerShellEnvironment } from '../../../src/domain/search/windows-powershell.js';
+// @ts-expect-error The script is executable JavaScript without type declarations.
+import { windowsPowerShellEnvironment } from '../../../scripts/windows-powershell.mjs';
 
 const holders: ChildProcess[] = [];
 const directories: string[] = [];
