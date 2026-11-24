@@ -26,7 +26,7 @@ export interface SubscriptionCollection {
   readonly type: string;
   list(): Promise<SubscriptionRecord[]>;
   listSubscriptions(): Promise<Subscription[]>;
-  preview(url: string): Promise<SubscriptionPreview>;
+  preview(url: string, cancel?: AbortSignal): Promise<SubscriptionPreview>;
   add(url: string, settings?: Partial<SubscriptionSettings>): Promise<JobSubmission>;
   setEnabled(id: string, enabled: boolean): Promise<{ subscription: SubscriptionRecord; submission: JobSubmission | null }>;
   updateSettings(id: string, patch: Partial<SubscriptionSettings>): Promise<SubscriptionRecord>;
@@ -44,13 +44,14 @@ export interface SubscriptionRouteOptions {
   subscriptions: readonly SubscriptionCollection[];
   sourceTypes: SourceTypeDeclaration[];
   network: NetworkGuard;
+  closing: AbortSignal;
   schedule?: ScheduleManagement;
   collector?: Collector;
   activity?: ActivityAccess;
 }
 
 export function registerSubscriptionRoutes(app: FastifyInstance, options: SubscriptionRouteOptions): void {
-  const { sources, subscriptions, sourceTypes, network } = options;
+  const { sources, subscriptions, sourceTypes, network, closing } = options;
 
   const collectionOf = (type: string): { collection: SubscriptionCollection; subscription: SubscriptionDeclaration; targetNoun: string } => {
     const collection = subscriptions.find((candidate) => candidate.type === type);
@@ -71,7 +72,7 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
     serve(app, API_ROUTES.previewSubscription, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       const { collection, input } = subscriptionAddress(request.body?.url);
       network.requireOnline();
-      return { preview: await network.confirmingNetwork(() => collection.preview(input)) };
+      return { preview: await network.confirmingNetwork(() => collection.preview(input, closing)) };
     });
 
     serve(app, API_ROUTES.subscribe, async (request: FastifyRequest<{ Body: { url?: unknown; settings?: unknown } }>) => {
@@ -148,7 +149,7 @@ export function registerSubscriptionRoutes(app: FastifyInstance, options: Subscr
         return summaries.slice(0, 30);
       } : undefined);
     const previewSubscription = (type: string, url: string): Promise<SubscriptionPreview> =>
-      network.confirmingNetwork(() => collectionOf(type).collection.preview(url));
+      network.confirmingNetwork(() => collectionOf(type).collection.preview(url, closing));
 
     serve(app, API_ROUTES.recognizeUrl, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
       if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') {

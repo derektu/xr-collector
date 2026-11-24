@@ -62,7 +62,7 @@ export interface HttpAppOptions {
 
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
-  endConnectionsOnClose(app);
+  const closing = closeInOrder(app);
   // Set on each reply in the first hook: an answer without a matching route (404, or refused by a
   // hook) gets no app-level serializer from Fastify. A reply's own serializer leaves the content type
   // to the serializer. https://fastify.dev/docs/latest/Reference/Reply/#serializerfunc
@@ -181,7 +181,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   if (activity) registerActivityRoutes(app, activity);
   if (options.schedule) registerScheduleRoutes(app, options.schedule, network);
   registerSubscriptionRoutes(app, {
-    sources: options.sources, subscriptions, network,
+    sources: options.sources, subscriptions, network, closing,
     sourceTypes: options.sourceTypes ?? sourceTypeDeclarations(options.sources),
     ...(options.schedule ? { schedule: options.schedule } : {}),
     ...(options.collector ? { collector: options.collector } : {}),
@@ -219,20 +219,38 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
  * https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#keepalivetimeout
  * https://nodejs.org/docs/latest-v22.x/api/http.html#serverheaderstimeout
  */
-function endConnectionsOnClose(app: FastifyInstance): void {
+function closeInOrder(app: FastifyInstance): AbortSignal {
   const withoutRequest = new Set<Socket>();
   app.server.on('connection', (socket: Socket) => {
     withoutRequest.add(socket);
     socket.once('close', () => withoutRequest.delete(socket));
   });
   app.server.on('request', (request: { socket: Socket }) => withoutRequest.delete(request.socket));
-  let closing = false;
+
+  const handlers = new Set<Promise<unknown>>();
+  app.addHook('onRoute', (route) => {
+    if (!route.url.startsWith('/api/')) return;
+    const handler = route.handler;
+    route.handler = function untilSettled(request, reply) {
+      const running = Promise.resolve(handler.call(this, request, reply));
+      const settled = running.then(() => undefined, () => undefined);
+      handlers.add(settled);
+      void settled.then(() => handlers.delete(settled));
+      return running;
+    };
+  });
+
+  const closing = new AbortController();
   app.addHook('preClose', async () => {
-    closing = true;
+    closing.abort(new CollectorError('vault_busy', '服務正在停止。'));
     for (const socket of withoutRequest) socket.destroy();
   });
   app.addHook('onSend', async (_request, reply, payload) => {
-    if (closing) void reply.header('connection', 'close');
+    if (closing.signal.aborted) void reply.header('connection', 'close');
     return payload;
   });
+  app.addHook('onClose', async () => {
+    while (handlers.size > 0) await Promise.all(handlers);
+  });
+  return closing.signal;
 }

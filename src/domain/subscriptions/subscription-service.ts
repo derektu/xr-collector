@@ -132,13 +132,15 @@ export class SubscriptionService {
     return this.jobs.checkJobs(this.type).get(id) ?? [];
   }
 
-  async preview(url: string): Promise<SubscriptionPreview> {
+  /** Resolves the target of `url`; `cancel` abandons the lookup, including a request still waiting for its channel. */
+  async preview(url: string, cancel?: AbortSignal): Promise<SubscriptionPreview> {
     const input = this.definition.classify(url);
     if (input.kind !== 'subscription') throw new CollectorError('invalid_subscription', this.definition.prompts.subscriptionInputHint);
     const target = await withTimeout(
       (signal) => this.options.resolveTarget(input.url, signal),
       this.options.previewTimeoutMs ?? PREVIEW_TIMEOUT_MS,
       `解析${this.subscription.targetNoun}逾時，請稍後再試。`,
+      cancel,
     );
     const existing = (await this.store.list()).find((candidate) => candidate.id === target.id);
     return {
@@ -498,17 +500,19 @@ function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
 }
 
-function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, message: string, cancel?: AbortSignal): Promise<T> {
   const abort = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new CollectorError('network_error', message);
-      abort.abort(error);
-      reject(error);
-    }, timeoutMs);
+  const stopped = new Promise<never>((_, reject) => {
+    abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true });
   });
-  return Promise.race([work(abort.signal), timeout]).finally(() => clearTimeout(timer));
+  const timer = setTimeout(() => abort.abort(new CollectorError('network_error', message)), timeoutMs);
+  const cancelled = () => abort.abort(cancel?.reason);
+  if (cancel?.aborted) cancelled();
+  else cancel?.addEventListener('abort', cancelled, { once: true });
+  return Promise.race([work(abort.signal), stopped]).finally(() => {
+    clearTimeout(timer);
+    cancel?.removeEventListener('abort', cancelled);
+  });
 }
 
 export class SubscriptionServices implements SubscriptionPort {
