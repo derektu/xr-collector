@@ -1,6 +1,8 @@
-// Closing the HTTP server, as quit and restart do: it delivers a keep-alive response in progress and
-// does not hang on idle connections, open event streams or waiting change reads. A close that hangs
-// leaves quit or restart stuck.
+// Closing the HTTP server, as quit and restart do: it waits for a handler under way even after its
+// client left, cancels a subscription preview, delivers a keep-alive response in progress, and does not
+// hang on idle connections, open event streams or waiting change reads. A close that hangs leaves
+// quit or restart stuck.
+import { once } from 'node:events';
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +10,7 @@ import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
 import type { BuildInfo } from '../../../src/shared/api/update-types.js';
 import type { TranscriptSearch } from '../../../src/shared/api/search-types.js';
 import { startServer, type RunningServer } from '../../../src/transport/server/start.js';
+import type { SubscriptionCollection } from '../../../src/transport/server/app.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
@@ -29,6 +32,7 @@ function heldSearch() {
   let release!: () => void;
   let started!: () => void;
   const running = new Promise<void>((resolve) => { started = resolve; });
+  let finished = false;
   const search: TranscriptSearch = {
     status: () => ({ state: 'ready', indexedDocuments: 0, lastRebuiltAt: null }),
     index: async () => undefined,
@@ -36,10 +40,10 @@ function heldSearch() {
     search: async () => ({ results: [], total: 0 }) as never,
     rebuild: () => {
       started();
-      return new Promise<void>((resolve) => { release = resolve; });
+      return new Promise<void>((resolve) => { release = () => { finished = true; resolve(); }; });
     },
   };
-  return { search, running, release: () => release() };
+  return { search, running, release: () => release(), finished: () => finished };
 }
 
 async function server(search?: TranscriptSearch): Promise<RunningServer> {
@@ -77,7 +81,31 @@ const arrives = (running: RunningServer, path: string) => new Promise<void>((res
   running.app.server.on('request', (request: http.IncomingMessage) => { if (request.url?.startsWith(path)) resolve(); });
 });
 
+const settled = (promise: Promise<unknown>) => {
+  let done = false;
+  void promise.then(() => { done = true; }, () => { done = true; });
+  return () => done;
+};
+
 describe('HTTP server close', () => {
+  it('waits for an accepted handler whose client disconnected, then closes', async () => {
+    const held = heldSearch();
+    const running = await server(held.search);
+    const { request, response } = rebuild(running.port);
+    response.catch(() => undefined);
+    await held.running;
+    request.destroy();
+    const serverClosed = once(running.app.server, 'close');
+    const closing = running.close();
+    const closed = settled(closing);
+    await serverClosed;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closed()).toBe(false);
+    held.release();
+    await closing;
+    expect(held.finished()).toBe(true);
+  });
+
   // Fastify keeps an idle connection for 72 seconds, past the test bound, so a close that waited for it fails.
   it('delivers the response of a keep-alive request under way and closes without waiting for its idle timeout', async () => {
     const held = heldSearch();
@@ -98,6 +126,28 @@ describe('HTTP server close', () => {
     await openSocket(running);
     await openSocket(running, 'GET /api/search/status HTTP/1.1\r\nHost: 127.0.0.1\r\n');
     await running.close();
+  });
+
+  it('cancels a subscription preview still under way, so its wait for the request channel does not hold the close', async () => {
+    let cancelled: AbortSignal | undefined;
+    let started!: () => void;
+    const previewing = new Promise<void>((resolve) => { started = resolve; });
+    const channels = {
+      type: 'youtube',
+      preview: (_url: string, cancel?: AbortSignal) => new Promise((_resolve, reject) => {
+        cancelled = cancel;
+        started();
+        cancel?.addEventListener('abort', () => reject(cancel.reason), { once: true });
+      }),
+    } as unknown as SubscriptionCollection;
+    const running = await startServer({ sources: PRODUCT_SOURCES, buildInfo: info, port: 0, subscriptions: [channels] });
+    const preview = fetch(`${running.url}/api/subscription-previews`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://www.youtube.com/@example' }),
+    }).then((response) => response.status, () => 0);
+    await previewing;
+    await running.close();
+    expect(cancelled?.aborted).toBe(true);
+    await preview;
   });
 
   it('closes while event streams and waiting change reads are open', async () => {

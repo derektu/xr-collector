@@ -97,7 +97,7 @@ describe('URL recognition (T-02 to T-05)', () => {
     const { channels, preview } = channelsWith({ [resolved]: null });
     const recognition = (await recognize(input, channels)).json().recognition;
 
-    expect(preview).toHaveBeenCalledWith(resolved);
+    expect(preview).toHaveBeenCalledWith(resolved, expect.any(AbortSignal));
     expect(recognition).toMatchObject({
       status: 'ready', sourceType: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道',
       target: { id: CHANNEL_ID, title: '頻道一' }, subscription: null, settings: DEFAULT_POLICY, autoCollection: true,
@@ -177,7 +177,7 @@ describe('URL recognition (T-02 to T-05)', () => {
     const feeds = { type: 'rss', preview, listSubscriptions: async () => [], checkJobs: () => [] } as unknown as SubscriptionCollection;
     const recognition = (await recognize(input, feeds)).json().recognition;
 
-    expect(preview).toHaveBeenCalledWith(resolved);
+    expect(preview).toHaveBeenCalledWith(resolved, expect.any(AbortSignal));
     expect(recognition).toMatchObject({ status: 'unsupported', sourceType: 'rss', kind: 'feed', actions: [], message: '這個網址沒有 RSS feed。' });
   });
 

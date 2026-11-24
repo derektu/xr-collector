@@ -165,7 +165,10 @@ describe('YouTube request channel (P-T3)', () => {
     await expect(gate.run('background', async () => 'x', abort.signal)).rejects.toBe(reason);
   });
 
-  it('drops a channel preview that times out while it waits for its turn, so it is never sent', async () => {
+  it.each([
+    { reason: 'times out', previewTimeoutMs: 50, cancel: () => undefined, code: 'network_error' },
+    { reason: 'is cancelled', previewTimeoutMs: 60_000, cancel: (abort: AbortController) => abort.abort(new CollectorError('vault_busy', 'stopping')), code: 'vault_busy' },
+  ])('drops a channel preview that $reason while it waits for its turn, so it is never sent', async ({ previewTimeoutMs, cancel, code }) => {
     const gate = await PacingGate.open(YOUTUBE_PACING, { waitRangeMs: { min: 0, max: 0 } });
     let finishRunning!: () => void;
     const running = gate.run('background', () => new Promise<void>((resolve) => { finishRunning = resolve; }));
@@ -175,14 +178,17 @@ describe('YouTube request channel (P-T3)', () => {
       sources: PRODUCT_SOURCES,
       autoCollection: async () => true,
       documents: async () => [],
-      previewTimeoutMs: 50,
+      previewTimeoutMs,
       resolveTarget: (url, signal) => gate.run('interactive', async () => {
         previewRequests += 1;
         return { id: 'UCabcdefghijklmnopqrstuv', title: '頻道', url };
       }, signal),
     });
 
-    await expect(subscriptions.preview('https://www.youtube.com/@example')).rejects.toMatchObject({ code: 'network_error' });
+    const abort = new AbortController();
+    const preview = subscriptions.preview('https://www.youtube.com/@example', abort.signal);
+    cancel(abort);
+    await expect(preview).rejects.toMatchObject({ code });
     expect(gate.status().state).toBe('busy');
     finishRunning();
     await running;

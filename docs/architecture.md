@@ -40,7 +40,7 @@ Agent 金鑰在讀出與重設時登記為已知機密；搜尋引擎每次啟�
 
 `CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都經 `startCollectorServer` 由同一個 runtime 建立 `VaultWorkspace`、scheduler、搜尋 process 及已授權 Agent listener。
 
-啟動時先讀出 Agent 金鑰並在所有輸出中遮蔽，再開啟 Vault（接續的工作此時就可能失敗並寫出錯誤），最後啟動 listener。啟動 listener 的函式由傳輸層提供，失敗時自己先關閉已啟動的 listener；runtime 接著關閉 Agent 連線、Vault 與工作紀錄，啟動以失敗結束。開啟 Vault 時，先撤回 Onboarding 中被中斷且選擇沒有指向的匯入、完成知識庫內被中斷的原地匯入，接著 workspace 接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。關閉時先停止網路確認與變動追蹤（進行中的網路確認直接放棄，workspace 停止期間沒有工作在等它），停止 listeners：沒送出請求的連線直接斷開，處理中的請求回應送完後斷開，客戶端已經斷線的 handler 不等；再由 workspace 等待進行中的知識庫操作、停止排程與收集（等待執行中的步驟，把其餘工作記為中斷）並關閉搜尋 process；最後關閉工作紀錄與活動記錄。
+啟動時先讀出 Agent 金鑰並在所有輸出中遮蔽，再開啟 Vault（接續的工作此時就可能失敗並寫出錯誤），最後啟動 listener。啟動 listener 的函式由傳輸層提供，失敗時自己先關閉已啟動的 listener；runtime 接著關閉 Agent 連線、Vault 與工作紀錄，啟動以失敗結束。開啟 Vault 時，先撤回 Onboarding 中被中斷且選擇沒有指向的匯入、完成知識庫內被中斷的原地匯入，接著 workspace 接續該 Vault 的中斷工作，再啟動排程，讓重啟後的第一次檢查併入接續中的工作。關閉時先停止網路確認與變動追蹤（進行中的網路確認直接放棄，workspace 停止期間沒有工作在等它），停止 listeners：進行中的訂閱預覽（含網址辨識時的預覽）取消，連同還在等請求通道的，沒送出請求的連線直接斷開，等其他已接受的 handler 做完（客戶端已斷線的也等），處理中的請求回應送完後斷開；再由 workspace 等待進行中的知識庫操作、停止排程與收集（等待執行中的步驟，把其餘工作記為中斷）並關閉搜尋 process；最後關閉工作紀錄與活動記錄。
 
 Electron 版關閉視窗只會把它隱藏，視窗只在結束 App 時才真正關閉。結束 App 時 `before-quit` 先擋下這次結束，等 runtime 關閉後自己再結束一次。
 
