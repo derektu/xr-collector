@@ -176,7 +176,7 @@ Developer ID 會改變部分 runtime bytes。簽署 hook 只處理 staging copy�
 | Mac | `XR-Collector-<版本>-mac-arm64.dmg` | `XR-Collector-<版本>-mac-arm64.zip` | `latest-mac.yml` |
 | Windows | `XR-Collector-<版本>-win-x64-setup.exe`（同時是更新檔） | 同左 | `latest.yml` |
 
-另有各檔案的 `.blockmap`，electron-updater 從下一次更新起用它做差分下載。App 從 GitHub 最新的穩定 Release（不是 draft、不是 prerelease）讀取自己平台的 feed，再下載 feed 指定的更新檔並核對 sha512。Release 沒有某個平台的 feed 時，那個平台的 App 回報已是最新版。artifact manifest 不上傳。
+另有更新檔的 `.blockmap`，electron-updater 從下一次更新起用它做差分下載。App 怎麼從 Release 找到 feed、核對更新檔，以及 Release 缺某個平台的 feed 時的結果，見 [App 更新來源](update-source.md#feed)。artifact manifest 不上傳。
 
 ### 第一次：登入 GitHub CLI
 
