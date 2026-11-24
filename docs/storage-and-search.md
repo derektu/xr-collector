@@ -194,7 +194,7 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 每個 Vault 的搜尋資料放在裝置的搜尋資料目錄旁：`<搜尋資料目錄>-<Vault 路徑雜湊>-v<索引版本>`，同名加上 `-state.json` 是重建時間，加上 `.pid` 是執行中引擎的程序編號。索引版本是 `src/domain/search/search-projection.ts` 的 `SEARCH_INDEX_VERSION`，目前為 1。版本不同就是另一個目錄：新版本的目錄一開始是空的，啟動時的比對發現索引與 Vault 不一致，從 Vault 全量重建。啟動時刪除同一個 Vault 其他版本的目錄與它們的 state、pid 檔；刪不掉時只寫入程式記錄，搜尋照常啟動。
 
-下列任一項改變時，把 `SEARCH_INDEX_VERSION` 加 1，否則裝置上沿用舊索引，查詢結果與新規則不一致：
+下列任一項改變時，把 `SEARCH_INDEX_VERSION` 加 1，裝置上的索引才會換到新目錄、從 Vault 重建：
 
 - Meilisearch 版本（`src/domain/search/meilisearch-runtime-pins.json`）
 - 索引的欄位、設定或索引文件的形式
@@ -202,11 +202,11 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 - 查詢策略
 - 詞庫內容
 
-`tests/domain/search/search-projection.index-version.test.ts` 記錄版本 1 使用的 Meilisearch 版本、`opencc-js` 版本與詞庫的 SHA-256，換了其中一項而沒有調版本時失敗。其他幾項由修改的人自行判斷。
+`tests/domain/search/search-projection.index-version.test.ts` 記錄版本 1 使用的 Meilisearch 版本、`opencc-js` 版本與詞庫的 SHA-256，換了其中一項而沒有調版本時失敗。其他幾項由修改的人自行判斷；沒有加 1 時，裝置沿用舊索引，查詢結果與新規則不一致。
 
 查詢以相同 COCT 詞頻執行 Jieba 加權路徑；COCT 辨識的多詞維持 AND，相鄰未知單字組成的短片段即使跨 COCT 詞界也維持逐字連續，引號內文字整段連續。每個中文片段必須在同一個正規化欄位逐字相鄰，可位於較長詞內，但不能跨空白、標點或欄位。Meilisearch 的合格 primary 排序優先，片段補回結果按 Vault 順序穩定接續；純 Latin 沿用引擎查詢，中英混合由引擎處理 Latin typo／prefix，再驗中文連續性。衍生的 normalized fields 與 unique-character postings 只存在 Node 記憶體，從 Vault 重建並在增刪成功後同步；任何同步或重建失敗都不提供 stale-ready 搜尋。
 
-來源專屬的欄位放在以來源類型為名的區塊，由 plugin 的 frontmatter codec 讀出，例如 YouTube 文件的 `youtube` 區塊含字幕語言與種類。每筆索引文件帶有其 metadata、來源專屬區塊與正文的內容雜湊，欄位順序固定，雜湊只隨內容改變；`tests/domain/search/meilisearch-backend.test.ts` 固定了一份 YouTube 文件的雜湊值。啟動時逐筆比對索引與 Vault 的文件 ID 及雜湊，集合或任一雜湊不同就從 Vault 全量重建，因此篇數相同但內容或身分不同時也會重建；完全一致時沿用持久化索引。全量重建完成的時間記錄在裝置的搜尋資料旁（`<搜尋資料目錄>-state.json`），供設定頁與 `GET /api/search/status` 顯示。這項比對只在啟動時進行；執行期間的收集逐筆更新索引。
+來源專屬的欄位放在以來源類型為名的區塊，由 plugin 的 frontmatter codec 讀出，例如 YouTube 文件的 `youtube` 區塊含字幕語言與種類。每筆索引文件帶有其 metadata、來源專屬區塊與正文的內容雜湊，欄位順序固定，雜湊只隨內容改變；`tests/domain/search/meilisearch-backend.test.ts` 固定了一份 YouTube 文件的雜湊值。啟動時逐筆比對索引與 Vault 的文件 ID 及雜湊，集合或任一雜湊不同就從 Vault 全量重建，因此篇數相同但內容或身分不同時也會重建；完全一致時沿用持久化索引。全量重建完成的時間記錄在搜尋資料目錄旁的 state 檔，供設定頁與 `GET /api/search/status` 顯示。這項比對只在啟動時進行；執行期間的收集逐筆更新索引。
 
 刪除文件時，文件 ID 先加入待移除清單，再在背景從索引刪除。搜尋時清單內的 ID 以引擎篩選條件排除，結果與總數都不含已刪除文件。索引刪除失敗時 ID 留在清單，下一次索引異動時再刪除；清單超過 100 筆時改為從 Vault 全量重建，篩選條件因此維持在固定長度內。清單只存在於執行中的程序；重新啟動後，啟動時的比對會發現索引多出已刪除的文件並全量重建，重建完成前搜尋不提供結果。
 
