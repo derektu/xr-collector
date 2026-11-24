@@ -40,16 +40,16 @@ try {
   const baseUrl = `http://127.0.0.1:${port}`;
   const version = await request(baseUrl, key, '/version');
   if (version.pkgVersion !== '1.53.2') throw new Error(`Smoke engine version is ${version.pkgVersion ?? 'unknown'}, expected 1.53.2.`);
-  const index = await request(baseUrl, key, '/indexes', { method: 'POST', body: JSON.stringify({ uid: 'documents_v2', primaryKey: 'key' }) });
+  const index = await request(baseUrl, key, '/indexes', { method: 'POST', body: JSON.stringify({ uid: 'documents', primaryKey: 'key' }) });
   await task(baseUrl, key, index.taskUid);
   const settings = {
     searchableAttributes: ['title', 'publisherName', 'bodyMarkdown'],
     filterableAttributes: ['id', 'sourceType', 'publisherId', 'publishedAtEpoch'],
     pagination: { maxTotalHits: 10_000 },
   };
-  const settingTask = await request(baseUrl, key, '/indexes/documents_v2/settings', { method: 'PATCH', body: JSON.stringify(settings) });
+  const settingTask = await request(baseUrl, key, '/indexes/documents/settings', { method: 'PATCH', body: JSON.stringify(settings) });
   await task(baseUrl, key, settingTask.taskUid);
-  const actualSettings = await request(baseUrl, key, '/indexes/documents_v2/settings');
+  const actualSettings = await request(baseUrl, key, '/indexes/documents/settings');
   for (const [name, value] of Object.entries(settings)) if (JSON.stringify(actualSettings[name]) !== JSON.stringify(value)) throw new Error(`Canonical setting ${name} differs.`);
   if (actualSettings.localizedAttributes !== null) throw new Error('localizedAttributes must remain unset.');
   const documents = [
@@ -57,7 +57,7 @@ try {
     { key: 'two', id: 'rss:two', type: 'Article', sourceType: 'rss', sourceId: 'two', sourceUrl: 'https://example.invalid/two', title: 'Semiconductor outlook', publisherId: 'feed-b', publisherName: 'English Feed', publishedAt: '2026-01-02T00:00:00.000Z', publishedAtEpoch: 1767312000000, collectedAt: '2026-01-03T00:00:00.000Z', rss: {}, bodyMarkdown: 'AI semiconductor demand and foundry capacity.', contentHash: 'two' },
     { key: 'three', id: 'youtube:three', type: 'Transcript', sourceType: 'youtube', sourceId: 'three', sourceUrl: 'https://example.invalid/three', title: '台積電供應鏈', publisherId: 'channel-c', publisherName: '產業頻道', publishedAt: '2026-01-03T00:00:00.000Z', publishedAtEpoch: 1767398400000, collectedAt: '2026-01-04T00:00:00.000Z', youtube: { languageCode: 'zh-Hant' }, bodyMarkdown: `${'市場消息'.repeat(80)}台積電供應鏈追蹤。${'產業分析'.repeat(80)}`, contentHash: 'three' },
   ];
-  const add = await request(baseUrl, key, '/indexes/documents_v2/documents', { method: 'PUT', body: JSON.stringify(documents) });
+  const add = await request(baseUrl, key, '/indexes/documents/documents', { method: 'PUT', body: JSON.stringify(documents) });
   await task(baseUrl, key, add.taskUid);
   const searchPayload = {
     q: '台積電', hitsPerPage: 1, page: 1,
@@ -66,12 +66,12 @@ try {
     highlightPreTag: '<mark>', highlightPostTag: '</mark>', cropMarker: '…', matchingStrategy: 'all',
     filter: ['sourceType = "youtube"'],
   };
-  const first = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(searchPayload) });
-  const second = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, page: 2 }) });
+  const first = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify(searchPayload) });
+  const second = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, page: 2 }) });
   const englishPayload = { ...searchPayload, q: 'AI semiconductor', page: 1, hitsPerPage: 10, filter: ['sourceType = "rss"'] };
-  const english = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(englishPayload) });
-  const youtubeOnly = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, q: '', page: 1, hitsPerPage: 10, filter: ['sourceType = "youtube"'] }) });
-  const rssOnly = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, q: '', page: 1, hitsPerPage: 10, filter: ['sourceType = "rss"'] }) });
+  const english = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify(englishPayload) });
+  const youtubeOnly = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, q: '', page: 1, hitsPerPage: 10, filter: ['sourceType = "youtube"'] }) });
+  const rssOnly = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify({ ...searchPayload, q: '', page: 1, hitsPerPage: 10, filter: ['sourceType = "rss"'] }) });
   if (first.totalHits !== 2 || first.hits.length !== 1 || second.hits.length !== 1 || first.hits[0].id === second.hits[0].id
     || !first.hits[0]._formatted?.bodyMarkdown?.includes('<mark>') || !first.hits[0]._formatted.bodyMarkdown.includes('…')) throw new Error('Query/filter/page/highlight/crop smoke failed.');
   if (english.totalHits !== 1 || english.hits[0]?.id !== 'rss:two') throw new Error('English RSS query smoke failed.');
@@ -79,9 +79,9 @@ try {
     || rssOnly.totalHits !== 1 || rssOnly.hits[0]?.id !== 'rss:two') throw new Error('Source filter counterfactual smoke failed.');
   await stop(engine);
   engine = await start(binary, database, port, key);
-  const restartedStats = await request(baseUrl, key, '/indexes/documents_v2/stats');
-  const restartedSearch = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(searchPayload) });
-  const restartedEnglish = await request(baseUrl, key, '/indexes/documents_v2/search', { method: 'POST', body: JSON.stringify(englishPayload) });
+  const restartedStats = await request(baseUrl, key, '/indexes/documents/stats');
+  const restartedSearch = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify(searchPayload) });
+  const restartedEnglish = await request(baseUrl, key, '/indexes/documents/search', { method: 'POST', body: JSON.stringify(englishPayload) });
   if (restartedStats.numberOfDocuments !== 3 || restartedSearch.totalHits !== 2
     || restartedEnglish.totalHits !== 1 || restartedEnglish.hits[0]?.id !== 'rss:two') throw new Error('Restart persistence smoke failed.');
   console.log(JSON.stringify({ status: 'pass', target: manifest.target, sha256: manifest.binary.sha256, documents: 3, totalHits: restartedSearch.totalHits }));

@@ -5,7 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { protectSecret } from '../../shared/lib/redact.js';
-import { windowsPowerShellEnvironment } from './windows-powershell.js';
+import runtimePins from './meilisearch-runtime-pins.json' with { type: 'json' };
 
 const run = promisify(execFile);
 
@@ -27,6 +27,7 @@ export async function startMeilisearchProcess(
   const binaryPath = path.resolve(options.binaryPath);
   const databasePath = path.resolve(options.databasePath);
   const pidFile = pidFilePath(databasePath);
+  await checkPinnedVersion(binaryPath);
   await stopLeftoverMeilisearchProcess({ binaryPath, databasePath });
   const port = options.port ?? await availableLoopbackPort();
   const url = `http://127.0.0.1:${port}`;
@@ -65,7 +66,7 @@ export async function startMeilisearchProcess(
   });
 
   try {
-    if (child.pid) await writeFile(pidFile, `${JSON.stringify({ pid: child.pid, binaryPath, databasePath } satisfies PidRecord)}\n`);
+    if (child.pid) await writeFile(pidFile, `${child.pid}\n`);
     await waitUntilHealthy(child, url, apiKey, () => processError, () => stderr);
   } catch (error) {
     await stopChild(child);
@@ -86,58 +87,42 @@ export async function startMeilisearchProcess(
   };
 }
 
-interface PidRecord { pid: number; binaryPath: string; databasePath: string }
-
 export function pidFilePath(databasePath: string): string {
   return `${path.resolve(databasePath)}.pid`;
 }
 
+/**
+ * Stops the engine a killed run left on this database: the recorded process, while it still runs the
+ * engine's executable. On Windows the record is only cleared, since no engine outlives its app there.
+ */
 export async function stopLeftoverMeilisearchProcess(options: StartMeilisearchOptions): Promise<void> {
-  const databasePath = path.resolve(options.databasePath);
-  const pidFile = pidFilePath(databasePath);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(pidFile, 'utf8')) as unknown;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw new Error(`Cannot verify the Meilisearch process record ${pidFile}.`, { cause: error });
+  const pidFile = pidFilePath(options.databasePath);
+  // libuv places every child it spawns on Windows in a job object that kills them when the parent
+  // process ends, however it ends: https://github.com/libuv/libuv/blob/v1.51.0/src/win/process.c
+  const pid = process.platform === 'win32' ? null : await recordedPid(pidFile);
+  if (pid !== null && isAlive(pid) && await executableName(pid) === path.basename(options.binaryPath)) {
+    await stopProcess(pid);
   }
-  if (!isPidRecord(parsed)) throw new Error(`Cannot verify the Meilisearch process record ${pidFile}.`);
-  const record = parsed;
-  if (!isAlive(record.pid)) {
-    await rm(pidFile, { force: true });
-    return;
-  }
-  const recordedDatabase = path.resolve(record.databasePath);
-  const recordedBinary = path.resolve(record.binaryPath);
-  if (recordedDatabase !== databasePath) throw new Error(`Meilisearch process record ${pidFile} names another database.`);
-  const commandLine = await processCommandLine(record.pid);
-  if (commandLine === null || !namesEngine(commandLine, recordedBinary, databasePath)) {
-    throw new Error(`Cannot prove process ${record.pid} owns Meilisearch database ${databasePath}; refusing to start or clear it.`);
-  }
-  await stopProcess(record.pid);
-  if (isAlive(record.pid)) throw new Error(`Meilisearch process ${record.pid} did not exit; refusing to start or clear ${databasePath}.`);
   await rm(pidFile, { force: true });
 }
 
-function isPidRecord(value: unknown): value is PidRecord {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.pid === 'number'
-    && Number.isInteger(record.pid)
-    && record.pid > 0
-    && typeof record.binaryPath === 'string'
-    && record.binaryPath.length > 0
-    && path.isAbsolute(record.binaryPath)
-    && typeof record.databasePath === 'string'
-    && record.databasePath.length > 0
-    && path.isAbsolute(record.databasePath);
+async function recordedPid(pidFile: string): Promise<number | null> {
+  let recorded: string;
+  try {
+    recorded = await readFile(pidFile, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  const pid = Number(recorded.trim());
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
-function namesEngine(commandLine: string, binaryPath: string, databasePath: string): boolean {
-  const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
-  const line = normalize(commandLine);
-  return line.includes(normalize(binaryPath)) && line.includes(normalize(databasePath));
+async function checkPinnedVersion(binaryPath: string): Promise<void> {
+  const expected = `meilisearch ${runtimePins.version}`;
+  const { stdout } = await run(binaryPath, ['--version'], { timeout: 10_000, windowsHide: true });
+  const version = stdout.trim();
+  if (version !== expected) throw new Error(`Meilisearch runtime version is ${version || 'unknown'}, expected ${expected}.`);
 }
 
 function isAlive(pid: number): boolean {
@@ -149,15 +134,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function processCommandLine(pid: number): Promise<string | null> {
+async function executableName(pid: number): Promise<string | null> {
   try {
-    const { stdout } = process.platform === 'win32'
-      ? await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        `[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
-        { windowsHide: true, env: windowsPowerShellEnvironment() })
-      : await run('ps', ['-ww', '-o', 'command=', '-p', String(pid)]);
-    const line = stdout.trim();
-    return line || null;
+    // On macOS, `ps -o comm=` prints the executable's full path, not only its name.
+    const { stdout } = await run('ps', ['-p', String(pid), '-o', 'comm=']);
+    return path.basename(stdout.trim()) || null;
   } catch {
     return null;
   }
@@ -179,11 +160,8 @@ async function stopProcess(pid: number): Promise<void> {
 }
 
 async function removePidFile(pidFile: string, pid: number | undefined): Promise<void> {
-  try {
-    const record = JSON.parse(await readFile(pidFile, 'utf8')) as PidRecord;
-    if (record.pid === pid) await rm(pidFile, { force: true });
-  } catch {
-  }
+  const recorded = await readFile(pidFile, 'utf8').catch(() => null);
+  if (recorded !== null && Number(recorded.trim()) === pid) await rm(pidFile, { force: true });
 }
 
 async function availableLoopbackPort(): Promise<number> {

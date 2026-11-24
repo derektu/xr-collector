@@ -16,8 +16,8 @@ import { windowsPowerShellEnvironment } from './windows-powershell.mjs';
 import { inspectOwnedProcessTree, runOwnedProcess } from './owned-process.mjs';
 import { BUILDER_TIMINGS_ENV, createStageTimer, noStageTimer, recordBuilderTimings, runWithTimingReport } from './stage-timings.mjs';
 import {
-  DEVELOPER_ID_POLICY, RUNTIME_SIGNING_MANIFEST, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
-  runCaptured, signedBuilderEnvironment, validateNotarizedApplication, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory,
+  DEVELOPER_ID_POLICY, describeArtifact, loadMacSigningConfiguration, notarizeAndStaple,
+  runCaptured, signedBuilderEnvironment, validateNotarizedApplication, verifyDeveloperIdApplication, verifyDeveloperIdDiskImage,
   withTemporarySigningKeychain,
 } from './mac-signing.mjs';
 
@@ -180,7 +180,7 @@ export async function packageApplication(options, dependencies = {}) {
       ...(options.validationProductName ? { productName: options.validationProductName, appId: options.validationAppId } : {}),
       updateRepository: options.validationUpdateRepository ?? productionUpdateRepository };
     const verified = await timer.group('verify: packaged App (BuildInfo, runtime, resources)', (child) => verifyPackagedApplication({ outputDir, ...expected,
-      signingPolicy: signingReceipt?.policy, expectedTeamId: signingConfiguration?.teamId, verifiedAppIdentity }, { run: verifyRun, timer: child }));
+      signingPolicy: signingReceipt?.policy, verifiedAppIdentity }, { run: verifyRun, timer: child }));
     const artifacts = await findInstallerArtifacts(outputDir, expected, signingReceipt?.policy);
     const { host, toolVersions } = await timer.time('read host and tool versions', async () => ({
       host: await probeHost(),
@@ -195,7 +195,6 @@ export async function packageApplication(options, dependencies = {}) {
       toolVersions, runtimeIdentity: {
         dependencies: verified.dependencyManifest,
         meilisearch: verified.meiliManifest,
-        signed: verified.signedRuntimeIdentity ?? null,
         searchLexicon: verified.lexiconManifest,
         windowsCrt: options.target === 'win32-x64'
           ? JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).windowsCrt
@@ -304,7 +303,7 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
  * the stapled App that already passed the Developer ID, runtime signature and notarization gates,
  * so those gates are not repeated.
  */
-export async function verifyPackagedApplication({ outputDir, commit, version, target, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, expectedTeamId, verifiedAppIdentity }, dependencies = {}) {
+export async function verifyPackagedApplication({ outputDir, commit, version, target, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, verifiedAppIdentity }, dependencies = {}) {
   const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;
   const resources = appPath
     ? path.join(appPath, 'Contents/Resources')
@@ -327,18 +326,13 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
   if (typeof buildInfo.buildId !== 'string' || !buildInfo.buildId || !Number.isFinite(Date.parse(buildInfo.builtAt))) throw new Error('Packaged BuildInfo identity is incomplete.');
   const bin = path.join(resources, 'bin');
   const dependencyManifest = JSON.parse(await readFile(path.join(bin, 'runtime-dependencies.json'), 'utf8'));
-  let signedRuntimeIdentity = null;
   if (signingPolicy === DEVELOPER_ID_POLICY) {
     const trustedDependencies = JSON.parse(await readFile(path.join(projectRoot, 'resources/bin/mac/runtime-dependencies.json'), 'utf8'));
     if (dependencyManifest.target !== target || JSON.stringify(dependencyManifest) !== JSON.stringify(trustedDependencies)) throw new Error('Signed package raw runtime producer identity is invalid.');
-    signedRuntimeIdentity = await timer.group('signed runtime inventory', (child) => (dependencies.verifySignedRuntimeInventory ?? verifySignedRuntimeInventory)(bin, expectedTeamId, { verifySignatures: false, timer: child }));
   } else if (dependencyManifest.target !== target || !await timer.time('yt-dlp/Deno inventory', () => verifyRuntimeDependencyInstallation(bin, dependencyManifest))) throw new Error('Packaged yt-dlp/Deno inventory is invalid.');
-  const meiliManifest = JSON.parse(await readFile(path.join(bin, 'meilisearch-build.json'), 'utf8'));
-  if (meiliManifest.target !== target) throw new Error('Packaged Meilisearch target does not match the package target.');
-  const runtimeDirectory = target === 'win32-x64' ? 'win' : 'mac';
-  const trustedManifest = dependencies.trustedManifest
-    ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/bin', runtimeDirectory, 'meilisearch-build.json'), 'utf8'));
-  if (JSON.stringify(meiliManifest) !== JSON.stringify(trustedManifest)) throw new Error('Packaged Meilisearch manifest does not match the prepared producer identity.');
+  const meiliManifest = dependencies.trustedManifest
+    ?? JSON.parse(await readFile(path.join(projectRoot, 'resources/bin', target === 'win32-x64' ? 'win' : 'mac', 'meilisearch-build.json'), 'utf8'));
+  if (meiliManifest.target !== target) throw new Error('Prepared Meilisearch target does not match the package target.');
   const executable = path.join(bin, target === 'win32-x64' ? 'meilisearch.exe' : 'meilisearch');
   if (signingPolicy !== DEVELOPER_ID_POLICY
     && await timer.time('hash Meilisearch', async () => (await stat(executable)).size !== meiliManifest.binary.bytes || await sha256(executable) !== meiliManifest.binary.sha256)) throw new Error('Packaged Meilisearch bytes do not match its manifest.');
@@ -374,7 +368,7 @@ export async function verifyPackagedApplication({ outputDir, commit, version, ta
     const pin = JSON.parse(await readFile(path.join(projectRoot, 'scripts/runtime-dependency-pins.json'), 'utf8')).windowsCrt;
     if ((await stat(crt)).size !== pin.bytes || await sha256(crt) !== pin.sha256) throw new Error('Packaged Windows CRT does not match its pin.');
   } else if (await exists(crt)) throw new Error('Only the Windows package contains vcruntime140.dll.');
-  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, signedRuntimeIdentity, lexiconManifest };
+  return { resources, buildInfo, packageMetadata, dependencyManifest, meiliManifest, lexiconManifest };
 }
 
 export async function verifyMacBundleSignature(appPath, run = runVerificationCommand) {

@@ -1,5 +1,5 @@
 // What a Mac user receives from a signed build: the App and the DMG each notarized once and stapled,
-// passing Gatekeeper with the expected Team, hardened runtime and a sealed runtime inventory. The
+// passing Gatekeeper with the expected Team, hardened runtime and Developer ID signed runtime files. The
 // signing credentials and temporary keychain never disturb other sessions and are cleaned up after a
 // kill or signal; those cases skip Windows.
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, utimes, writeFile } from 'node:fs/promises';
@@ -13,7 +13,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import {
   DEVELOPER_ID_INTERMEDIATE_FIX, RUNTIME_SIGNING_CONCURRENCY, checkDeveloperIdIdentity, describeArtifact, loadMacSigningConfiguration, mapConcurrent, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList,
   selectDeveloperIdIdentity, signStagedMacRuntimes, signedBuilderEnvironment, validateNotarizedApplication,
-  verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeInventory, withTemporarySigningKeychain,
+  verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeFiles, withTemporarySigningKeychain,
   // @ts-expect-error The script is executable JavaScript without type declarations.
 } from '../../scripts/mac-signing.mjs';
 // @ts-expect-error The script is executable JavaScript without type declarations.
@@ -636,7 +636,7 @@ it('resumes the same notarization receipt after stapling when validation was int
 });
 
 it.skipIf(process.platform === 'win32')('repairs the embedded Python framework and signs staged runtime code inside-out without changing raw sources', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-signing-'));
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-sign-'));
   roots.push(root);
   const sourceBin = path.join(root, 'source');
   const appBin = path.join(root, 'XR.app/Contents/Resources/bin');
@@ -664,12 +664,8 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
     executables: { ytDlp: pins.ytDlp.installedExecutable, deno: pins.deno.installedExecutable },
     files: [...runtimeFiles].map(([relative, bytes]) => ({ path: relative, ...identity(bytes) })).sort((left, right) => left.path.localeCompare(right.path)),
   };
-  const meiliIdentity = identity(machO('meili'));
-  const meili = { binary: meiliIdentity };
-  for (const base of [sourceBin, appBin]) {
-    await writeFile(path.join(base, 'runtime-dependencies.json'), JSON.stringify(dependencies));
-    await writeFile(path.join(base, 'meilisearch-build.json'), JSON.stringify(meili));
-  }
+  for (const base of [sourceBin, appBin]) await writeFile(path.join(base, 'runtime-dependencies.json'), JSON.stringify(dependencies));
+  await writeFile(path.join(sourceBin, 'meilisearch-build.json'), JSON.stringify({ binary: identity(machO('meili')) }));
   const signCalls: string[] = [];
   const finishedSigns: string[] = [];
   let signsInFlight = 0;
@@ -705,12 +701,11 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
   expect(leavesFinishedBeforeFramework).toBe(4);
   expect(signCalls.slice(0, -1).sort()).toEqual(['meilisearch', 'xr-mac-update-helper', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']
     .map((relative) => path.join(appBin, relative)).sort());
-  expect(Object.keys(signed.executableSignatures)).toEqual([...signCalls.slice(0, -1).map((file) => path.relative(appBin, file)), 'yt-dlp/_internal/Python.framework', 'deno']);
+  expect(Object.keys(signed).sort()).toEqual(['deno', 'meilisearch', 'xr-mac-update-helper', 'yt-dlp/_internal/Python.framework', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']);
   expect(await readlink(path.join(appBin, 'yt-dlp/_internal/Python.framework/Versions/Current'))).toBe('3.14');
   expect(await readlink(path.join(appBin, 'yt-dlp/_internal/Python.framework/Python'))).toBe('Versions/Current/Python');
-  expect(signed).toMatchObject({ policy: 'developer-id-notarized', expectedAppTeamId: 'ABCDE12345', meilisearch: { source: meiliIdentity } });
-  await expect(verifySignedRuntimeInventory(appBin, 'ABCDE12345', { run })).resolves.toMatchObject({ expectedAppTeamId: 'ABCDE12345' });
-  await expect(verifySignedRuntimeInventory(appBin, 'ABCDE12345', { run: async (command: string, args: string[]) => {
+  expect(signed.meilisearch).toMatchObject({ teamId: 'ABCDE12345' });
+  await expect(verifySignedRuntimeFiles(appBin, 'ABCDE12345', { run: async (command: string, args: string[]) => {
     const result = await run(command, args);
     return args[0] === '-d' ? { stdout: '<dict><key>com.apple.security.cs.allow-jit</key><true/></dict>', stderr: '' } : result;
   } })).rejects.toThrow(/pinned five-key policy/u);
@@ -779,34 +774,24 @@ it('requires the selected certificate and the stapled DMG to match the expected 
     .toEqual({ PATH: '/tools', CSC_KEYCHAIN: '/tmp/keychain', CSC_IDENTITY_AUTO_DISCOVERY: 'false', XR_MAC_SIGNING_IDENTITY_SHA1: 'A'.repeat(40), XR_MAC_SIGNING_TEAM_ID: 'ABCDE12345', XR_MAC_SIGNING_SOURCE_ROOT: '/source' });
 });
 
-it('requires a hardened outer App, safe JIT entitlements, sealed runtime inventory, and matching Team', async () => {
+it('requires a hardened outer App, safe JIT entitlements, signed runtime files, and matching Team', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-app-signature-'));
   roots.push(root);
   const app = path.join(root, 'XR Collector.app');
   const bin = path.join(app, 'Contents/Resources/bin');
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, 'meilisearch'), machO('meili'), { mode: 0o755 });
-  await writeFile(path.join(bin, 'runtime-dependencies.json'), '{}');
-  const raw = { bytes: machO('meili').length, sha256: createHash('sha256').update(machO('meili')).digest('hex') };
-  await writeFile(path.join(bin, 'meilisearch-build.json'), JSON.stringify({ binary: raw }));
-  const entry = async (relative: string) => {
-    const file = path.join(bin, relative); const bytes = await readFile(file);
-    return { path: relative, type: 'file', mode: (await stat(file)).mode & 0o777, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
-  };
-  const files = await Promise.all(['meilisearch', 'meilisearch-build.json', 'runtime-dependencies.json'].map(entry));
-  files.sort((left, right) => left.path.localeCompare(right.path));
-  await writeFile(path.join(bin, 'runtime-signing.json'), JSON.stringify({
-    schemaVersion: 1, policy: 'developer-id-notarized', expectedAppTeamId: 'ABCDE12345',
-    sourceIdentity: { dependencyManifest: files.find((file) => file.path === 'runtime-dependencies.json'), meilisearchManifest: files.find((file) => file.path === 'meilisearch-build.json') },
-    meilisearch: { source: raw, final: raw }, files, executableSignatures: {},
-  }));
   const signature = 'Authority=Developer ID Application: Example (ABCDE12345)\nTeamIdentifier=ABCDE12345\nCodeDirectory=v=20500 flags=0x10000(runtime)\nTimestamp=Oct 28, 2026\n';
   const safeRun = async (_command: string, args: string[]) => ({ stdout: args[0] === '-d' ? '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>' : '', stderr: args[0] === '-dv' ? signature : '' });
-  await expect(verifyDeveloperIdApplication(app, 'ABCDE12345', { run: safeRun, verifySignatures: false })).resolves.toMatchObject({ signature: { teamId: 'ABCDE12345' } });
+  await expect(verifyDeveloperIdApplication(app, 'ABCDE12345', { run: safeRun })).resolves.toMatchObject({ signature: { teamId: 'ABCDE12345' }, runtime: { meilisearch: { teamId: 'ABCDE12345' } } });
   await expect(verifyDeveloperIdApplication(app, 'ABCDE12345', { run: async (command: string, args: string[]) => {
     const result = await safeRun(command, args);
     return args[0] === '-d' ? { stdout: '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.application-groups</key><array><string>unexpected</string></array></dict></plist>', stderr: '' } : result;
-  }, verifySignatures: false })).rejects.toThrow(/unexpected entitlements/u);
+  } })).rejects.toThrow(/unexpected entitlements/u);
+  await expect(verifyDeveloperIdApplication(app, 'ABCDE12345', { run: async (command: string, args: string[]) => {
+    const result = await safeRun(command, args);
+    return args[0] === '-dv' && args.at(-1)!.endsWith('/meilisearch') ? { stdout: '', stderr: signature.replaceAll('ABCDE12345', 'ZZZZZ99999') } : result;
+  } })).rejects.toThrow(/meilisearch/u);
 });
 
 function machO(label: string): Buffer {

@@ -109,7 +109,7 @@ export async function run({ instance, page, record, waitFor }) {
       return current.indexed === vault.documents && current.vault === vault.documents;
     }, 'search card counts after the deletions');
     const shownSearch = await searchCounts();
-    const index = (await instance.state()).index.indexes.find((candidate) => ['documents_v4', 'documents_v2'].includes(candidate.uid));
+    const index = (await instance.state()).index.indexes.find((candidate) => candidate.uid === 'documents');
     const expectedSearch = { indexed: vault.documents, vault: vault.documents, engine: vault.documents };
     const actualSearch = { ...shownSearch, engine: index?.numberOfDocuments ?? null, api: { indexed: search.indexedDocuments, vault: search.vaultDocuments } };
     expect(shownSearch.indexed === vault.documents && shownSearch.vault === vault.documents && search.vaultDocuments === vault.documents

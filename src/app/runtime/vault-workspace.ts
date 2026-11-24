@@ -23,7 +23,7 @@ import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { SourcePlugin } from '../../shared/sources/source-contract.js';
 import { ActivityLog } from '../../domain/activity/index.js';
-import { startSearchRuntime, prepareOwnedSearchProjection, searchDatabasePath, type SearchRuntime } from '../../domain/search/index.js';
+import { startSearchRuntime, type SearchRuntime } from '../../domain/search/index.js';
 
 interface Bundle {
   vault: OpenedVault;
@@ -188,14 +188,7 @@ export class VaultWorkspace {
     const searchChanged = () => this.noteChange({ kind: 'search' });
     const runtime = this.options.createSearch ? await this.options.createSearch(root, searchChanged) : await startSearchRuntime({
       vault: vault.documents, sources: this.options.sources, binaryPath: this.options.searchBinary,
-      databasePath: searchDatabasePath(this.options.searchData, root),
-      lexiconPath: this.options.searchLexicon,
-      prepareProjection: (profile) => prepareOwnedSearchProjection({
-        searchData: this.options.searchData,
-        vaultRoot: root,
-        binaryPath: this.options.searchBinary,
-        profile,
-      }),
+      lexiconPath: this.options.searchLexicon, searchData: this.options.searchData, vaultRoot: root,
       ...(port ? { port } : {}),
       statusChanged: searchChanged,
     });

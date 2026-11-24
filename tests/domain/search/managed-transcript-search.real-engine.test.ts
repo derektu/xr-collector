@@ -16,7 +16,6 @@ import {
   type RunningMeilisearch,
 } from '../../../src/domain/search/meilisearch-process.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
-import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const roots: string[] = [];
@@ -78,13 +77,6 @@ async function withSearch<T>(
   }
 }
 
-async function engineRequest(engine: RunningMeilisearch, pathName: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${engine.url}${pathName}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${engine.apiKey}`, 'Content-Type': 'application/json' },
-  });
-}
-
 describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
   it('masks the engine key in any text the app writes or shows', async () => {
     const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: await tempDatabase() });
@@ -130,20 +122,6 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
 
     await withSearch(databasePath, () => changed, async (_search, _engine, rebuilds) => {
       expect(rebuilds).toBe(0);
-    });
-  });
-
-  it('replaces an index written by the earlier schema with a fully rebuilt one', async () => {
-    const databasePath = await tempDatabase();
-    await withSearch(databasePath, () => [document], async (_search, engine) => {
-      const created = await engineRequest(engine, '/indexes', { method: 'POST', body: JSON.stringify({ uid: 'transcripts', primaryKey: 'key' }) });
-      expect(created.status).toBe(202);
-      await eventually(async () => expect((await engineRequest(engine, '/indexes/transcripts')).status).toBe(200));
-    });
-
-    await withSearch(databasePath, () => [document], async (search, engine) => {
-      expect((await engineRequest(engine, '/indexes/transcripts')).status).toBe(404);
-      expect((await search.search({ query: '森林觀測' })).hits[0]?.id).toBe(document.id);
     });
   });
 

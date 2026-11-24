@@ -607,7 +607,6 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
     releaseAsset: 'meilisearch-macos-apple-silicon', releaseUrl: 'https://example.test/meilisearch-macos-apple-silicon', target: 'darwin-arm64',
     binary: { version: '1.53.2', versionOutput: 'meilisearch 1.53.2', bytes: meiliFile.bytes, sha256: meiliFile.sha256, format: 'Mach-O 64', arch: 'arm64' },
   };
-  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
   await mkdir(path.join(resources, 'search'), { recursive: true });
   await writeFile(path.join(resources, 'search/coct-main.txt'), '測試 1 n\n');
   const lexiconBytes = await readFile(path.join(resources, 'search/coct-main.txt'));
@@ -630,15 +629,10 @@ it.skipIf(process.platform === 'win32')('verifies BuildInfo and every packaged r
     throw new Error('code has no resources but signature indicates they must be present');
   })).rejects.toThrow(/no resources.*signature/u);
   await expect(verify(meiliManifest, 'meilisearch 1.52.0')).rejects.toThrow(/expected meilisearch 1\.53\.2/u);
-  const windowsManifest = { ...meiliManifest, target: 'win32-x64' };
-  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(windowsManifest));
-  await expect(verify(windowsManifest)).rejects.toThrow(/package target/u);
-  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
-  await expect(verify({ ...meiliManifest, releaseTag: 'v1.53.1' })).rejects.toThrow(/prepared producer identity/u);
+  await expect(verify({ ...meiliManifest, target: 'win32-x64' })).rejects.toThrow(/package target/u);
   await writeFile(path.join(resources, 'bin/vcruntime140.dll'), 'crt');
   await expect(verify()).rejects.toThrow(/Only the Windows package contains vcruntime140\.dll/u);
   await rm(path.join(resources, 'bin/vcruntime140.dll'));
-  await writeFile(path.join(resources, 'bin/meilisearch-build.json'), JSON.stringify(meiliManifest));
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'stale skill');
   await expect(verify()).rejects.toThrow(/Agent Skill/u);
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'skill');

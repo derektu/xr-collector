@@ -50,7 +50,7 @@ function stoppedRun() {
   write(path.join(profile, 'jobs', 'events', '2026-10-23.jsonl'), '{"event":"queued"}\n{"event":"done"}\n');
   write(path.join(profile, 'broken.json'), '{"half":');
   write(path.join(profile, 'search-0123', 'data.mdb'), 'meilisearch');
-  write(path.join(profile, 'search-0123.pid'), '{"pid":1}');
+  write(path.join(profile, 'search-0123.pid'), '1');
   return { runDir, vault, profile };
 }
 

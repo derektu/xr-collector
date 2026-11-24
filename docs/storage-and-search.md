@@ -184,11 +184,25 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 收集先保存 Markdown，再更新索引。索引失敗不刪除已保存文件；列表與全文可從 Vault 讀取，搜尋依索引狀態回報結果或錯誤。匯入（合併與完全取代）只對寫入或移除的文件更新索引。匯入的檔案都已到位後，更新索引或重新載入訂閱失敗時只寫入程式記錄，匯入照樣完成；匯入在放到位階段失敗時也不另外更新索引。這兩種情況下索引與 Vault 不一致，由下次啟動時的比對重建。從匯出檔建立的 Vault 開啟時建立自己的索引。
 
-索引名稱帶 schema 版本（`documents_v4`）；schema 改變時使用新名稱並從 Vault 全量重建。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。狀態篩選使用索引文件的 `status`（`draft`／`published`）。搜尋同時回傳套用狀態以外所有條件時各狀態的篇數：Latin 查詢由引擎的 `status` facet 計算，中文片段查詢由篩選前的命中 ID 集合計算，兩者都與不篩狀態時的總數相同。變更文件狀態寫入 Vault 後立即更新該筆索引，回應時搜尋已反映新狀態。
+索引名稱是 `documents`。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。狀態篩選使用索引文件的 `status`（`draft`／`published`）。搜尋同時回傳套用狀態以外所有條件時各狀態的篇數：Latin 查詢由引擎的 `status` facet 計算，中文片段查詢由篩選前的命中 ID 集合計算，兩者都與不篩狀態時的總數相同。變更文件狀態寫入 Vault 後立即更新該筆索引，回應時搜尋已反映新狀態。
 
 搜尋索引另存 title、publisher name 與 body 的正規化投影；Vault 與回傳的 metadata、Reader 內文、摘要文字都保留原文。文件與 query 共用固定順序：Unicode NFKC、ASCII A–Z 小寫、OpenCC `s2t`、OpenCC `t2tw`、`臺` 轉 `台`，最後把 Unicode `White_Space` 連續區段收成一個 ASCII 空格並去掉頭尾空白。OpenCC 使用固定的純 JavaScript `opencc-js` 1.4.2 及其內嵌字典，不需要平台 binary 或執行時下載；不使用 `s2twp`，因此不做「服务器／伺服器」這類地區用詞替換。filter ID、日期、URL 與文件 ID 不經正規化。命中位置以正規化文字的 UTF-8 byte offset 映回原文後才產生 `<mark>` 摘要。
 
-中文引擎從 App 的獨立 COCT 主詞庫資源建立 Jieba 第一輪詞界，不把詞庫編入 Meilisearch binary，也不作搜尋用的二次拆詞。啟動先核對 provenance manifest、檔案 SHA-256、UTF-8 與正整數詞頻格式，再讓引擎實際初始化中文 tokenizer；資源不完整時搜尋維持不可用。詞庫身分與查詢策略都在搜尋 profile，換檔後從 Vault 重建投影，不需要重建相同的通用引擎 binary。
+中文引擎從 App 的獨立 COCT 主詞庫資源（`resources/search/coct-main.txt`）建立 Jieba 第一輪詞界，不把詞庫編入 Meilisearch binary，也不作搜尋用的二次拆詞。啟動時讀入詞庫並檢查 UTF-8 與每行「詞 正整數詞頻 [詞性]」的格式、詞不重複；讀不到或格式不符時搜尋維持不可用。詞庫旁的 `coct-main.json` 記錄詞庫的來源與產生方式，App 不讀它。
+
+### 索引版本
+
+每個 Vault 的搜尋資料放在裝置的搜尋資料目錄旁：`<搜尋資料目錄>-<Vault 路徑雜湊>-v<索引版本>`，同名加上 `-state.json` 是重建時間，加上 `.pid` 是執行中引擎的程序編號。索引版本是 `src/domain/search/search-projection.ts` 的 `SEARCH_INDEX_VERSION`，目前為 1。版本不同就是另一個目錄：新版本的目錄一開始是空的，啟動時的比對發現索引與 Vault 不一致，從 Vault 全量重建。啟動時刪除同一個 Vault 其他版本的目錄與它們的 state、pid 檔；刪不掉時只寫入程式記錄，搜尋照常啟動。
+
+下列任一項改變時，把 `SEARCH_INDEX_VERSION` 加 1，否則裝置上沿用舊索引，查詢結果與新規則不一致：
+
+- Meilisearch 版本（`src/domain/search/meilisearch-runtime-pins.json`）
+- 索引的欄位、設定或索引文件的形式
+- 文件與查詢的正規化或分詞，包括 `opencc-js` 的版本
+- 查詢策略
+- 詞庫內容
+
+`tests/domain/search/search-projection.index-version.test.ts` 記錄版本 1 使用的 Meilisearch 版本、`opencc-js` 版本與詞庫的 SHA-256，換了其中一項而沒有調版本時失敗。其他幾項由修改的人自行判斷。
 
 查詢以相同 COCT 詞頻執行 Jieba 加權路徑；COCT 辨識的多詞維持 AND，相鄰未知單字組成的短片段即使跨 COCT 詞界也維持逐字連續，引號內文字整段連續。每個中文片段必須在同一個正規化欄位逐字相鄰，可位於較長詞內，但不能跨空白、標點或欄位。Meilisearch 的合格 primary 排序優先，片段補回結果按 Vault 順序穩定接續；純 Latin 沿用引擎查詢，中英混合由引擎處理 Latin typo／prefix，再驗中文連續性。衍生的 normalized fields 與 unique-character postings 只存在 Node 記憶體，從 Vault 重建並在增刪成功後同步；任何同步或重建失敗都不提供 stale-ready 搜尋。
 

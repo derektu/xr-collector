@@ -1,8 +1,6 @@
 import { normalizeSearchText } from './search-normalization.js';
 import type { SearchLexicon } from './search-lexicon.js';
 
-export const SEARCH_QUERY_STRATEGY_REVISION = 1;
-
 export interface FragmentQueryPlan {
   normalized: string;
   groups: string[];

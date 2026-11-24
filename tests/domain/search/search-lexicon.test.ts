@@ -1,8 +1,7 @@
-// The bundled Chinese word lexicon that splits search queries: it loads only when its manifest
-// matches, cuts text like the jieba-rs reference, and plans query groups for Chinese words and
-// Latin terms, so a query looks for the words a user typed.
-import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// The bundled Chinese word lexicon that splits search queries: it cuts text like the jieba-rs
+// reference, plans query groups for Chinese words and Latin terms, so a query looks for the words a
+// user typed, and a malformed dictionary stops search from starting instead of splitting wrongly.
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -18,17 +17,6 @@ afterAll(async () => {
 });
 
 describe('external COCT search lexicon', () => {
-  it('validates the independently replaceable resource and provenance manifest', async () => {
-    const lexicon = await lexiconPromise;
-    expect(lexicon.identity).toEqual({
-      id: 'coct-news-1141208',
-      sha256: '4b2d026eaa353ffde900f36049e72f1fa6902fbf25b14dbcb0b675d541e01264',
-      bytes: 2_212_252,
-      formatRevision: 1,
-      normalizationRevision: 1,
-    });
-  });
-
   it('matches a frozen Rust jieba-rs 0.10.3 cut(false) oracle', async () => {
     const lexicon = await lexiconPromise;
     const oracle: Array<[string, string[]]> = [
@@ -54,47 +42,29 @@ describe('external COCT search lexicon', () => {
     expect(planFragmentQuery('離岸風', lexicon).groups).toEqual(['離岸風']);
   });
 
-  it('rejects missing, malformed and hash-mismatched resources before engine startup', async () => {
+  it('buffers ASCII like cut(false)', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-search-lexicon-'));
     try {
-      await expect(loadSearchLexicon(path.join(root, 'missing.txt'))).rejects.toThrow(/missing or invalid/u);
-      const dictionary = '觀光 8 n\n半導體 3 n\n';
       const dictionaryPath = path.join(root, 'dictionary.txt');
-      const manifestPath = path.join(root, 'dictionary.json');
-      await writeFile(dictionaryPath, dictionary);
-      await writeFile(manifestPath, JSON.stringify({
-        schemaVersion: 1, id: 'fixture', uniqueTerms: 2, normalization: { revision: 1 },
-        output: { file: 'dictionary.txt', bytes: Buffer.byteLength(dictionary), sha256: createHash('sha256').update(dictionary).digest('hex') },
-      }));
-      await expect(loadSearchLexicon(dictionaryPath)).resolves.toMatchObject({ identity: { id: 'fixture' } });
-      await writeFile(dictionaryPath, `${await readFile(dictionaryPath, 'utf8')}壞行\n`);
-      await expect(loadSearchLexicon(dictionaryPath)).rejects.toThrow(/manifest does not match/u);
+      await writeFile(dictionaryPath, 'abc 100 n\ns 1 n\n');
+      expect((await loadSearchLexicon(dictionaryPath)).cut('abcs').map(({ word }) => word)).toEqual(['abc', 's']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('matches cut(false) ASCII buffering and rejects unsupported dictionary semantics', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'xr-search-lexicon-ascii-'));
-    const dictionaryPath = path.join(root, 'dictionary.txt');
-    const manifestPath = path.join(root, 'dictionary.json');
-    const writeFixture = async (dictionary: Buffer, normalizationRevision = 1) => {
-      await writeFile(dictionaryPath, dictionary);
-      await writeFile(manifestPath, JSON.stringify({
-        schemaVersion: 1, id: 'ascii-fixture', uniqueTerms: dictionary.toString('utf8').trim().split('\n').length,
-        normalization: { revision: normalizationRevision },
-        output: { file: 'dictionary.txt', bytes: dictionary.length, sha256: createHash('sha256').update(dictionary).digest('hex') },
-      }));
-    };
+  it.each([
+    ['a missing file', null, /missing/u],
+    ['a zero frequency', Buffer.from('詞 0 n\n'), /invalid frequency/u],
+    ['a duplicate word', Buffer.from('詞 1 n\n詞 2 n\n'), /duplicate word/u],
+    ['a line without a frequency', Buffer.from('詞\n'), /word frequency/u],
+    ['bytes that are not UTF-8', Buffer.from([0xff, 0xfe]), /valid UTF-8/u],
+  ])('refuses %s before the engine starts', async (_label, bytes, error) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-search-lexicon-'));
     try {
-      await writeFixture(Buffer.from('abc 100 n\ns 1 n\n'));
-      expect((await loadSearchLexicon(dictionaryPath)).cut('abcs').map(({ word }) => word)).toEqual(['abc', 's']);
-      await writeFixture(Buffer.from('詞 0 n\n'));
-      await expect(loadSearchLexicon(dictionaryPath)).rejects.toThrow(/invalid frequency/u);
-      await writeFixture(Buffer.from('詞 1 n\n'), 2);
-      await expect(loadSearchLexicon(dictionaryPath)).rejects.toThrow(/manifest does not match/u);
-      await writeFixture(Buffer.from([0xff, 0xfe]));
-      await expect(loadSearchLexicon(dictionaryPath)).rejects.toThrow(/valid UTF-8/u);
+      const dictionaryPath = path.join(root, 'dictionary.txt');
+      if (bytes) await writeFile(dictionaryPath, bytes);
+      await expect(loadSearchLexicon(dictionaryPath)).rejects.toThrow(error);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
