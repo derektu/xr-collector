@@ -241,7 +241,7 @@ export class VaultWorkspace {
   }
 
   async close(): Promise<void> {
-    await this.operations.finished();
+    await step('Data exchange shutdown failed', () => this.operations.finished());
     this.operations.dropPreview();
     const drained = await Promise.allSettled([
       this.current.schedule.close(),

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CollectorError } from '../../shared/lib/collector-error.js';
 import { replaceFile } from '../../shared/lib/json-file.js';
 import { inOwnStep, jobEventSubject } from '../../shared/jobs/job-role.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
@@ -21,6 +22,7 @@ export class JobStore {
   private readonly jobs = new Map<string, CollectionJob>();
   private flushing: Promise<void> | null = null;
   private dirty = false;
+  private writeFailure: CollectorError | null = null;
 
   private constructor(
     private readonly directory: string | null,
@@ -59,7 +61,7 @@ export class JobStore {
     for (const job of stopped) {
       store.interrupt(job, '服務在工作完成前停止；已保存的內容保留。', { stop: 'crash', unclean: inOwnStep(sources, job) });
     }
-    if (stopped.length > 0) await store.flush();
+    if (stopped.length > 0) await store.flushOrLog();
     return store;
   }
 
@@ -122,18 +124,25 @@ export class JobStore {
   }
 
   /**
-   * Resolves once every job change so far is written to disk, or its write failed and was logged; a
-   * memory store resolves at once.
+   * Resolves once every job change so far is written to disk, writing again when the last write
+   * failed; rejects with `jobs_write_failed` when the latest write fails. A memory store resolves at
+   * once.
    */
   async flush(): Promise<void> {
+    if (this.writeFailure) this.scheduleFlush();
     while (this.dirty || this.flushing) {
       if (this.flushing) await this.flushing;
       else this.scheduleFlush();
     }
+    if (this.writeFailure) throw this.writeFailure;
   }
 
   async close(): Promise<void> {
-    await this.flush();
+    await this.flushOrLog();
+  }
+
+  private async flushOrLog(): Promise<void> {
+    await this.flush().catch((error: unknown) => console.error('Collection jobs are not written', error));
   }
 
   private scheduleFlush(): void {
@@ -146,8 +155,10 @@ export class JobStore {
         this.dirty = false;
         try {
           await this.write(directory);
+          this.writeFailure = null;
         } catch (error) {
           console.error('Collection jobs write failed', error);
+          this.writeFailure = new CollectorError('jobs_write_failed', '無法寫入工作紀錄，請確認磁碟空間後再試。', { cause: error });
         }
       }
     })().finally(() => { this.flushing = null; });

@@ -2,7 +2,10 @@
 // add, pause, check and removal, search filters and page bounds, and pasted addresses becoming
 // video or channel jobs, with malformed requests refused by stable error codes before any job
 // starts. The server answers only requests addressed to its own loopback name and port.
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
@@ -12,6 +15,7 @@ import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { Subscription } from '../../../src/shared/subscriptions/subscription-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
+import { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { createHttpApp } from '../../../src/transport/server/app.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
@@ -38,7 +42,9 @@ function makeCollector(): Collector {
 }
 
 /** Real job manager over an in-memory Vault; capture fails with the given error when supplied. */
-function makeServices(captureFailure?: CollectorError, captureGate?: Promise<void>): { collector: Collector; jobs: JobManager } {
+function makeServices(
+  captureFailure?: CollectorError, captureGate?: Promise<void>, store: JobStore = memoryJobRecords(PRODUCT_SOURCES).jobs,
+): { collector: Collector; jobs: JobManager } {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
     sources: PRODUCT_SOURCES,
@@ -67,7 +73,7 @@ function makeServices(captureFailure?: CollectorError, captureGate?: Promise<voi
   const collector = new Collector(vault, { index: async () => undefined });
   const jobs = new JobManager({
     vaultPath: '/vault', vaultId: 'vault-id',
-    store: memoryJobRecords(PRODUCT_SOURCES).jobs,
+    store,
     sources: PRODUCT_SOURCES,
     plugins: [youtubePlugin({
       resolveChannel: async () => ({ id: 'UC-http', title: 'HTTP 頻道', url: 'https://www.youtube.com/channel/UC-http/videos' }),
@@ -444,6 +450,26 @@ describe('HTTP app', () => {
     });
     await jobs.close();
     await app.close();
+  });
+
+  it('answers a submit with an error rather than 202 when the job cannot be written', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'xr-http-jobs-'));
+    const directory = path.join(root, 'jobs');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const store = await JobStore.open(directory, PRODUCT_SOURCES, { event: () => undefined });
+      await writeFile(directory, '');
+      const { collector, jobs } = makeServices(undefined, undefined, store);
+      const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
+      const response = await app.inject({ method: 'POST', url: '/api/items', payload: { url: captured.sourceUrl } });
+      expect(response.statusCode).toBe(500);
+      expect(response.json().error.code).toBe('jobs_write_failed');
+      await jobs.close();
+      await app.close();
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('rejects malformed requests without accepting a job', async () => {

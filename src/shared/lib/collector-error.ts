@@ -26,6 +26,7 @@ export type CoreErrorCode =
   | 'job_not_found'
   | 'job_not_retryable'
   | 'job_not_dismissable'
+  | 'jobs_write_failed'
   | 'unsupported_url'
   | 'queue_full'
   | 'file_exists'

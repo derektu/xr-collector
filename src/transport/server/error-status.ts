@@ -19,6 +19,7 @@ const ERROR_STATUS: Record<CoreErrorCode, number> = {
   job_not_found: 404,
   job_not_retryable: 409,
   job_not_dismissable: 409,
+  jobs_write_failed: 500,
   unsupported_url: 400,
   queue_full: 503,
   file_exists: 409,

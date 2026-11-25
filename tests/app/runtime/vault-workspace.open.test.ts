@@ -1,7 +1,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { TranscriptSearch } from '../../../src/shared/api/search-types.js';
 import { openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
@@ -9,6 +9,7 @@ import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { createVaultDirectory, inspectVaultDirectory, readVaultId, VAULT_MARKER } from '../../../src/domain/vault/vault-directory.js';
 import { VaultSelection } from '../../../src/domain/vault/vault-selection.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../../src/app/runtime/vault-workspace.js';
+import { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { withYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
@@ -163,6 +164,34 @@ describe('opening another Vault (A-13)', () => {
     expect((await workspace.jobs.whenSettled(aLeft.job.id)).state).toBe('completed');
     expect(await new MarkdownVault(new VaultFileWriter(copy, PRODUCT_SOURCES)).read(`youtube:${IDS[1]}`)).toBeNull();
   });
+});
+
+it('reports the switch unfinished while the job records it changed cannot be written, and finished once they can', async () => {
+  const context = await setup('A');
+  const b = path.join(context.root, 'B');
+  await seed(b);
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES, { event: () => undefined });
+    const gate = gatedCapture(new Set([IDS[0]!]));
+    const workspace = await open(context, { jobStore, capture: gate.capture });
+    await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
+    await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
+    await eventually(() => expect(gate.started.length).toBe(1));
+    await jobStore.flush();
+    await rm(context.jobsDir, { recursive: true });
+    await writeFile(context.jobsDir, '');
+    await workspace.operations.openOther(b);
+    gate.open();
+    await expect(workspace.operations.finished()).rejects.toMatchObject({ code: 'jobs_write_failed' });
+
+    await rm(context.jobsDir);
+    await mkdir(context.jobsDir);
+    await workspace.operations.finished();
+    expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: b });
+  } finally {
+    error.mockRestore();
+  }
 });
 
 it('creates a new Vault while one is active, switches to it and leaves the previous Vault as it was', async () => {

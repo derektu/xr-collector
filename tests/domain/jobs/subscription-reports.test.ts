@@ -57,4 +57,26 @@ describe('a check', () => {
     ]);
     await manager.close();
   });
+
+  it('does not report an item whose job record could not be written as a source failure, so the item is not skipped', async () => {
+    const { source, subs, manager } = setup();
+    const [key] = source.addFeed('f', new Date(), [0]);
+    source.fail(key!, new CollectorError('jobs_write_failed', '無法寫入工作紀錄。'));
+    const subscription = subs.add('fake', { id: 'f', title: 'f', url: 'https://fake.example/feed/f' });
+    const check = await manager.whenSettled((await manager.submitCheck('fake', subscription, 'manual')).job.id);
+    expect(check.items).toEqual([expect.objectContaining({ sourceId: key, state: 'failed' })]);
+    expect(subs.of('failed')).toEqual([]);
+    await manager.close();
+  });
+
+  it('ends uncounted when its own job record could not be written, so the subscription gains no consecutive failure', async () => {
+    const { source, subs, manager } = setup();
+    source.addFeed('f', new Date(), [0]);
+    source.listFailures.push(new CollectorError('jobs_write_failed', '無法寫入工作紀錄。'));
+    const subscription = subs.add('fake', { id: 'f', title: 'f', url: 'https://fake.example/feed/f' });
+    const check = await manager.whenSettled((await manager.submitCheck('fake', subscription, 'manual')).job.id);
+    expect(check).toMatchObject({ state: 'failed', error: { code: 'jobs_write_failed' } });
+    expect(subs.of('ended')).toEqual([expect.objectContaining({ id: 'f', errorCode: 'jobs_write_failed', counted: false })]);
+    await manager.close();
+  });
 });

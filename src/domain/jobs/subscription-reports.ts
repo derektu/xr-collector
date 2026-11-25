@@ -8,6 +8,11 @@ import { INTERRUPTED_REPEATEDLY } from './job-recovery.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
 
 const STOP_REASONS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed']);
+const NOT_SOURCE_FAILURES: ReadonlySet<string> = new Set([INTERRUPTED_REPEATEDLY, 'jobs_write_failed']);
+
+function isSourceFailure(error: JobError): boolean {
+  return !NOT_SOURCE_FAILURES.has(error.code);
+}
 
 export interface ReportHost {
   sources: SourceDeclarations;
@@ -42,7 +47,7 @@ export class SubscriptionReports {
 
   async failed(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
     const target = this.checkItemOf(item);
-    if (!target) return;
+    if (!target || !isSourceFailure(error)) return;
     const recorded = await nullOnWriteFailure(() => this.host.port().itemFailed(target.type, target.subscriptionId, {
       key: target.key, title: item.source.title, url: item.source.url,
     }, error, failureClass));
@@ -67,7 +72,7 @@ export class SubscriptionReports {
     if (job.result?.skipReason && STOP_REASONS.has(job.result.skipReason)) return null;
     const error = job.state === 'failed' ? job.error ?? null : null;
     const failureClass = error ? this.host.classify(job, error) : null;
-    const counted = !this.host.stoppedCheck(job.id) && (job.state === 'completed' || (error !== null && error.code !== INTERRUPTED_REPEATEDLY));
+    const counted = !this.host.stoppedCheck(job.id) && (job.state === 'completed' || (error !== null && isSourceFailure(error)));
     return { at: job.finishedAt, error, failureClass, counted };
   }
 
