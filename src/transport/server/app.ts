@@ -6,7 +6,7 @@ import type { Socket } from 'node:net';
 import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { maskSecrets, maskSecretsJson, redact } from '../../shared/lib/redact.js';
+import { maskSecrets, redact } from '../../shared/lib/redact.js';
 import type { LoginStartupAccess } from '../../shared/api/login-startup.js';
 import { loadBuildInfo, type UpdateAccess } from '../../domain/updates/index.js';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
@@ -63,15 +63,14 @@ export interface HttpAppOptions {
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
   const closing = closeInOrder(app);
-  // Set on each reply in the first hook: an answer without a matching route (404, or refused by a
-  // hook) gets no app-level serializer from Fastify. A reply's own serializer leaves the content type
-  // to the serializer. https://fastify.dev/docs/latest/Reference/Reply/#serializerfunc
-  app.addHook('onRequest', async (_request, reply) => {
-    void reply.serializer((payload) => {
-      if (typeof payload === 'string') return maskSecrets(payload);
-      if (!reply.hasHeader('content-type')) void reply.type('application/json; charset=utf-8');
-      return maskSecretsJson(payload);
-    });
+  // Fastify hands every payload to onSend after serialization, including a string it sends as
+  // text/plain without calling a serializer and the answers of the not-found and error handlers.
+  // https://github.com/fastify/fastify/blob/v5.12.7/lib/reply.js (Reply.prototype.send)
+  // https://fastify.dev/docs/v5.12.x/Reference/Hooks/#onsend
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (typeof payload !== 'string') return payload;
+    const handsOutSecret = request.routeOptions.config.revealsSecret === true && reply.statusCode < 400;
+    return handsOutSecret ? payload : maskSecrets(payload);
   });
   const buildInfo = Object.freeze({ ...options.buildInfo ?? await loadBuildInfo() });
   const subscriptions = options.subscriptions ?? [];

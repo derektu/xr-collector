@@ -4,6 +4,7 @@ import type { ApiRoute, ResponseOf, RouteVaultAccess } from '../../shared/api/ap
 declare module 'fastify' {
   interface FastifyContextConfig {
     vaultAccess?: RouteVaultAccess;
+    revealsSecret?: boolean;
   }
 }
 
@@ -18,11 +19,10 @@ export function serve<Route extends ApiRoute<unknown, unknown, unknown>, Generic
   app.route({
     method: route.method,
     url: route.path,
-    ...(route.access ? { config: { vaultAccess: route.access } } : {}),
+    config: { ...(route.access ? { vaultAccess: route.access } : {}), ...(revealsSecret ? { revealsSecret } : {}) },
     handler: async (request, reply) => {
       if (status !== undefined) void reply.code(status);
       const answer = await (handler as (request: FastifyRequest<Generic>, reply: FastifyReply) => Promise<unknown>)(request as FastifyRequest<Generic>, reply);
-      if (revealsSecret) void reply.type('application/json; charset=utf-8').serializer(JSON.stringify);
       return answer;
     },
   });

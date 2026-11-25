@@ -50,6 +50,17 @@ describe('HTTP answers', () => {
     expect(error.json()).toEqual({ error: { code: 'invalid_request', message: '無效：[已遮蔽]' } });
   });
 
+  it('mask known secrets in a string answer, sent as text without the serializer or as a declared type', async () => {
+    const app = await start();
+    app.get('/api/test/secret-text', async () => `失敗：${SECRET}`);
+    app.get('/api/test/secret-html', async (_request, reply) => reply.type('text/html; charset=utf-8').send(`<p>${SECRET}</p>`));
+
+    const text = await app.inject({ method: 'GET', url: '/api/test/secret-text' });
+    expect(text.headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(text.body).toBe('失敗：[已遮蔽]');
+    expect((await app.inject({ method: 'GET', url: '/api/test/secret-html' })).body).toBe('<p>[已遮蔽]</p>');
+  });
+
   it('send document text and addresses that look like credentials unchanged', async () => {
     const app = await start();
     const document = {
@@ -77,6 +88,16 @@ describe('HTTP answers', () => {
     expect((await app.inject({ method: 'POST', url: '/api/device/agent/key/reset' })).json().connection.token).toBe(SECRET);
     expect((await app.inject({ method: 'GET', url: '/api/device/agent' })).json()).toEqual({ agent: { state: 'available', message: '金鑰 [已遮蔽]' } });
     expect((await app.inject({ method: 'GET', url: '/api/device/agent/skill' })).body).toBe(`zip ${SECRET}`);
+  });
+
+  it('mask known secrets in an error answer of the connection data', async () => {
+    const app = await appWithEveryRoute({
+      agentConnection: anyService({ connection: () => { throw new CollectorError('agent_connection_unavailable', `無法使用 ${SECRET}`); } }),
+    });
+    apps.push(app);
+    const answer = await app.inject({ method: 'GET', url: '/api/device/agent/connection' });
+    expect(answer.statusCode).toBe(409);
+    expect(answer.json()).toEqual({ error: { code: 'agent_connection_unavailable', message: '無法使用 [已遮蔽]' } });
   });
 
   it('mask the changes a waiting read and the event stream send', async () => {
