@@ -21,23 +21,14 @@ export type InitialVault =
   | { kind: 'unset' }
   | { kind: 'unusable'; path: string; reason: string };
 
-/**
- * The Vaults of this device: which one the device selection names, what a start opens, and the
- * Onboarding steps that check, create, import or open a Vault while none is in use.
- */
 export class DeviceVaults {
   readonly selection: VaultSelection;
-  /** Name of a new Vault folder when the person gives none. */
   readonly defaultName = DEFAULT_VAULT_NAME;
 
   constructor(private readonly options: DeviceVaultsOptions) {
     this.selection = new VaultSelection(options.profilePath);
   }
 
-  /**
-   * Finds the Vault a start opens. `explicitPath` replaces the selection, and an empty directory
-   * there becomes a new Vault; a selected Vault that is now missing or empty is never recreated.
-   */
   async initial(explicitPath?: string): Promise<InitialVault> {
     const { sources, createdBy } = this.options;
     if (explicitPath) {
@@ -61,31 +52,18 @@ export class DeviceVaults {
     return { kind: 'unusable', path: selected, reason: inspection.reason };
   }
 
-  /** What the directory `vaultPath` holds: a Vault, nothing, or something that is not a Vault. */
   inspect(vaultPath: string): Promise<VaultInspection> {
     return inspectVaultDirectory(vaultPath, this.options.sources);
   }
 
-  /**
-   * Checks a new Vault folder before it is created; see `checkNewVault`. The folder may not be
-   * inside `vaultRoot`, the Vault in use, or inside the program data directory.
-   */
-  checkNew(location: unknown, name: unknown, vaultRoot: string | null): Promise<NewVaultCheck> {
-    return checkNewVault(location, name, { vaultRoot, profilePath: this.options.profilePath });
+  checkNew(location: unknown, name: unknown, vaultInUse: string | null): Promise<NewVaultCheck> {
+    return checkNewVault(location, name, { vaultRoot: vaultInUse, profilePath: this.options.profilePath });
   }
 
-  /** What an export file holds; see `describePackage`. */
   describePackage(file: unknown): Promise<PackageDescription> {
     return describePackage(file, this.options.sources);
   }
 
-  /**
-   * Creates, imports or opens a Vault while none is in use, starts its services with `start` and
-   * makes the selection name it. A new Vault, empty or imported, is the new folder `name` in
-   * `location`; an import fills it from the export file `packagePath` and keeps the automatic
-   * collection switch the export file holds. A Vault this call created or imported is removed again
-   * when it cannot become the one in use.
-   */
   async setUp<W extends { close(): Promise<void> }>(
     request: VaultSetupRequest,
     start: (root: string) => Promise<W>,

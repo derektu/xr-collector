@@ -32,11 +32,6 @@ export interface CollectorOptions {
   noteChange?: NoteChange;
 }
 
-/**
- * Saves captured documents to one Vault and keeps its search projection in step. Saving, indexing
- * and deleting the same item run one at a time, so a deletion never interleaves with a save or an
- * index update of that item.
- */
 export class Collector implements DocumentCollector {
   private readonly locks = new Map<string, Promise<void>>();
 
@@ -50,24 +45,16 @@ export class Collector implements DocumentCollector {
     return this.vault.getByKey(key);
   }
 
-  /** Whether discovery should pass over this item: it is in the Vault or the user deleted it. */
   async isKnown(key: DocumentKey): Promise<boolean> {
     if (await this.vault.getByKey(key)) return true;
     return (await this.vault.deletions.get(documentId(key))) != null;
   }
 
-  /** Whether a deletion keeps this request from collecting the item: a record exists and the request does not postdate it. */
   async isDeletedFor(key: DocumentKey, intent: SaveIntent): Promise<boolean> {
     const deletion = await this.vault.deletions.get(documentId(key));
     return deletion != null && !explicitAfter(intent, deletion.deletedAt);
   }
 
-  /**
-   * Saves a captured item. A deleted item is saved only for an explicit request made after the
-   * deletion: the document is stamped after the deletion time, then the record is lifted, so a stop
-   * in between still leaves the document visible. Any other save of a deleted item fails with
-   * `document_deleted`.
-   */
   save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<{ document: SavedDocument }> {
     const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
@@ -90,10 +77,6 @@ export class Collector implements DocumentCollector {
     });
   }
 
-  /**
-   * Indexes the document as the Vault holds it now. A document deleted meanwhile is not indexed.
-   * The Vault is authoritative: a failed index update reports itself and keeps the saved document.
-   */
   index(document: SavedDocument): Promise<IndexOutcome> {
     return this.exclusive(document.id, async () => {
       const current = await this.vault.read(document.id);
@@ -110,13 +93,6 @@ export class Collector implements DocumentCollector {
     });
   }
 
-  /**
-   * Deletes a document: the deletion record goes first and hides the document at once, then the
-   * file is removed and the search excludes the document. The index entry is removed in the
-   * background, so a deletion never waits for a rebuild; a failed removal is recorded as a warning
-   * and the document stays excluded until the index catches up. A file left behind after the record
-   * stays hidden until the user removes it.
-   */
   delete(id: string): Promise<DocumentDeletion> {
     return this.exclusive(id, async () => {
       const { deletions } = this.vault;
@@ -163,12 +139,6 @@ export class Collector implements DocumentCollector {
     });
   }
 
-  /**
-   * Sets a document's status, then indexes the document so search filters follow it. Setting the
-   * status a document already has changes nothing: no file write, change notice or event. A failed
-   * index update keeps the new status and is recorded as `document.index_failed`; the next search
-   * start finds the index stale and rebuilds it.
-   */
   setStatus(id: string, status: DocumentStatus): Promise<SavedDocument> {
     return this.exclusive(id, async () => {
       const current = await this.read(id);
@@ -213,7 +183,6 @@ export class Collector implements DocumentCollector {
     return this.vault.list();
   }
 
-  /** One page of Vault documents; only the returned page is read for excerpts. */
   async listDocuments(filter: DocumentFilter, page: { offset: number; limit: number }): Promise<DocumentPage> {
     const { status, ...others } = filter;
     const statusCounts: DocumentStatusCounts = { draft: 0, published: 0 };
@@ -238,10 +207,6 @@ export class Collector implements DocumentCollector {
     };
   }
 
-  /**
-   * Document counts per source type and publisher, named after the type's subscription list when
-   * present, otherwise after the removal record of a removed subscription.
-   */
   async sources(byType: Readonly<Record<string, TypeSubscriptions>>): Promise<DocumentSources> {
     const documents = await this.vault.list();
     const groups = new Map<DocumentMetadata['sourceType'], Map<string, DocumentSourcePublisher>>();

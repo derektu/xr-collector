@@ -59,10 +59,8 @@ export class VaultFileWriter implements VaultFiles {
     await rm(this.absolute(relative), { force: true });
   }
 
-  /**
-   * A rename within one file system replaces the target atomically:
-   * https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
-   */
+  // A rename within one file system replaces the target atomically:
+  // https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html
   async place(relative: string, from: string): Promise<boolean> {
     try {
       await access(from);
