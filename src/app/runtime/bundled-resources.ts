@@ -3,7 +3,9 @@ import { fileURLToPath } from 'node:url';
 
 export type ResourceLayout =
   | { packaged: false; checkout: string }
-  | { packaged: true; /** The package's resources folder: Electron's [`process.resourcesPath`](https://www.electronjs.org/docs/latest/api/process#processresourcespath-readonly). */ resourcesPath: string };
+  // Electron's `process.resourcesPath` is the path to the package's resources folder.
+  // https://github.com/electron/electron/blob/v44.10.0/docs/api/process.md#processresourcespath-readonly
+  | { packaged: true; resourcesPath: string };
 
 export interface BundledResources {
   program(name: string, environmentName: string): string;
@@ -18,7 +20,6 @@ export interface ResourceEnvironment {
   env?: Readonly<Record<string, string | undefined>>;
 }
 
-/** The paths of the bundled resources for `layout` on `platform`. */
 export function bundledResources(layout: ResourceLayout, environment: ResourceEnvironment = {}): BundledResources {
   const platform = environment.platform ?? process.platform;
   const env = environment.env ?? process.env;
@@ -37,10 +38,7 @@ export function bundledResources(layout: ResourceLayout, environment: ResourceEn
   };
 }
 
-/**
- * The checkout this module runs from, whether from source (`src/app/runtime`) or from the build
- * (`dist/node/app/runtime`). Only development entry points use it; a package has no checkout.
- */
+/** Only development entry points call it; a package has no checkout. */
 export function checkoutRoot(): string {
   const compiled = new URL('../../', import.meta.url).pathname.endsWith('/dist/node/');
   return path.resolve(fileURLToPath(new URL(compiled ? '../../../../' : '../../../', import.meta.url)));

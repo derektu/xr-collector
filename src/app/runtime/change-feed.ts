@@ -14,12 +14,6 @@ export interface ChangeFeedOptions {
 export const KEEP_BATCHES = 1000;
 export const KEEP_MS = 10 * 60_000;
 
-/**
- * The process's change stream. Every component records a change once readers can see it; the
- * changes noted together are published as one batch under the next revision. Revisions start over
- * with each process, which has its own epoch, and recent batches are kept so a reader that lost
- * its connection catches up from its last revision.
- */
 export class ChangeFeed {
   readonly epoch: string;
   private number = 0;
@@ -67,7 +61,6 @@ export class ChangeFeed {
     return this.revision;
   }
 
-  /** The batches after `cursor`; `reset` when it names another epoch or batches after it are no longer kept. */
   since(cursor: ChangeCursor): Catchup {
     if (cursor.epoch !== this.epoch || cursor.number > this.number) return { kind: 'reset' };
     this.prune(this.now().getTime());
@@ -77,7 +70,7 @@ export class ChangeFeed {
     return { kind: 'batches', batches: this.kept.filter((batch) => batch.number > cursor.number).map(publicBatch) };
   }
 
-  /** Calls `listener` with each batch published from now on; returns the function that stops it. */
+  /** Calls `listener` with each batch published after this call; returns the function that unsubscribes it. */
   subscribe(listener: (batch: ChangeBatch) => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
