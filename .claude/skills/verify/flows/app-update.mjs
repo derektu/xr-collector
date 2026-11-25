@@ -77,7 +77,7 @@ export async function run({ instance, page, record, waitFor }) {
     await instance.updateCatalog((value) => { value.updates.holdPayload = false; value.updates.payloadMode = 'corrupt'; });
     await page.getByTestId('update-download').click();
     await waitFor(async () => (await update()).phase === 'error', 'download error state');
-    await waitFor(async () => await page.getByTestId('update-download').isVisible(), 'error retry download action');
+    await page.locator('[data-testid="update-message"][data-phase="error"]').waitFor();
     const failed = await update();
     expect(failed.phase === 'error' && failed.errorCode === 'update_download_failed' && failed.ready === null
       && await page.getByTestId('update-apply').count() === 0,
