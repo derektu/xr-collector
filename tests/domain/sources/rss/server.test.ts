@@ -160,3 +160,23 @@ describe('collecting an article from its feed', () => {
       .rejects.toMatchObject({ code: 'out_of_range' });
   });
 });
+
+describe('the listing a check reads', () => {
+  it('is newest first whatever the feed order, undated articles ahead in feed order, so a check that stops at the first article before its range misses none inside it', async () => {
+    const entries = [
+      { title: '三天前', guid: 'd3', publishedAt: ago(3) },
+      { title: '沒日期一', guid: 'u1' },
+      { title: '一天前', guid: 'd1', publishedAt: ago(1) },
+      { title: '五天前', guid: 'd5', publishedAt: ago(5) },
+      { title: '沒日期二', guid: 'u2' },
+      { title: '兩天前', guid: 'd2', publishedAt: ago(2) },
+    ];
+    const expected = ['沒日期一', '沒日期二', '一天前', '兩天前', '三天前', '五天前'];
+    const oldestFirst = [...entries].sort((left, right) => (left.publishedAt?.getTime() ?? 0) - (right.publishedAt?.getTime() ?? 0));
+    for (const [path, order] of [['/shuffled.xml', entries], ['/oldest-first.xml', oldestFirst]] as const) {
+      feeds.set(path, { body: rss2('站', [...order]) });
+      const items = await listed(plugin(), { id: 'x', title: '站', url: feeds.url(path) });
+      expect(items.map((item) => item.title), path).toEqual(expected);
+    }
+  });
+});
