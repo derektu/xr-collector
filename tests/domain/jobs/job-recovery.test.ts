@@ -7,7 +7,9 @@ import type { DocumentVault } from '../../../src/shared/documents/document-vault
 import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
+import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../../src/domain/jobs/job-manager.js';
+import { resumeInterrupted } from '../../../src/domain/jobs/job-recovery.js';
 import type { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
 import { CollectionPause } from '../../../src/shared/jobs/collection-pause.js';
@@ -768,5 +770,39 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
     expect(g2.store.get(check.job.id)).toBeUndefined();
 
     expect(await subscriptionEvents(g2.records, subscribed.id, itemId)).toContain('job.interrupted');
+  });
+});
+
+describe('the order interrupted jobs are restored in', () => {
+  const interrupted = (id: string, videoKey: string, minute: number): CollectionJob => {
+    const at = new Date(T0.getTime() + minute * 60_000).toISOString();
+    return {
+      id, kind: 'youtube.video', state: 'interrupted', phase: 'capture', vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
+      source: { type: 'youtube', id: videoKey, url: watchUrl(videoKey), title: null },
+      createdAt: at, startedAt: at, finishedAt: at, updatedAt: at, progress: null, items: null, result: null,
+      error: { code: 'interrupted', message: '中斷' },
+      recovery: { resumedCount: 0, uncleanStops: 0, lastInterruptedAt: at, lastResumedAt: null, lastStop: 'shutdown' },
+    };
+  };
+
+  it.each([
+    ['oldest first', ['old-a', 'b', 'new-a']],
+    ['newest first', ['new-a', 'b', 'old-a']],
+  ])('is oldest to newest whatever order the records come in (%s), so the newest job of a work key is restored last and owns it', async (_order, ids) => {
+    const jobs = new Map([
+      ['old-a', interrupted('old-a', videoId(1), 0)],
+      ['b', interrupted('b', videoId(2), 1)],
+      ['new-a', interrupted('new-a', videoId(1), 2)],
+    ]);
+    const restored: string[] = [];
+    await resumeInterrupted({
+      sources: PRODUCT_SOURCES,
+      stored: () => ids.map((id) => jobs.get(id)!),
+      runs: () => true,
+      stopped: async () => null,
+      settle: () => { throw new Error('nothing settles'); },
+      restore: (job) => { restored.push(job.id); },
+    });
+    expect(restored).toEqual(['old-a', 'b', 'new-a']);
   });
 });
