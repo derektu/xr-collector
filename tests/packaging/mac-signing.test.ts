@@ -790,7 +790,7 @@ it('requires a hardened outer App, safe JIT entitlements, signed runtime files, 
   } })).rejects.toThrow(/unexpected entitlements/u);
   await expect(verifyDeveloperIdApplication(app, 'ABCDE12345', { run: async (command: string, args: string[]) => {
     const result = await safeRun(command, args);
-    return args[0] === '-dv' && args.at(-1)!.endsWith('/meilisearch') ? { stdout: '', stderr: signature.replaceAll('ABCDE12345', 'ZZZZZ99999') } : result;
+    return args[0] === '-dv' && path.basename(args.at(-1)!) === 'meilisearch' ? { stdout: '', stderr: signature.replaceAll('ABCDE12345', 'ZZZZZ99999') } : result;
   } })).rejects.toThrow(/meilisearch/u);
 });
 

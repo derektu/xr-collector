@@ -4,7 +4,7 @@
 // reads and an inventory, and one package run per checkout.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -586,6 +586,12 @@ it('verifies BuildInfo, the update repository and every packaged runtime before 
   await writeFile(path.join(asarSource, 'dist/node/build-info.json'), JSON.stringify(buildInfo));
   await mkdir(resources, { recursive: true });
   await createPackage(asarSource, path.join(resources, 'app.asar'));
+  const validationProductName = 'XR Update Verify Public';
+  const validationAppId = 'com.xrcollector.verify.public';
+  const validationAsar = path.join(root, 'validation.asar');
+  await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0',
+    productName: validationProductName, xrCollectorAppId: validationAppId }));
+  await createPackage(asarSource, validationAsar);
   await writeFile(path.join(resources, 'build-info.json'), JSON.stringify(buildInfo));
   await mkdir(path.join(resources, 'skills/xr-collector-agent'), { recursive: true });
   await writeFile(path.join(resources, 'skills/xr-collector-agent/SKILL.md'), 'skill');
@@ -651,13 +657,9 @@ it('verifies BuildInfo, the update repository and every packaged runtime before 
   await writeFile(path.join(resources, 'bin/meilisearch'), meiliBinary);
   await updateConfig('xr-collector-test');
   await expect(verify()).rejects.toThrow(/app-update\.yml does not name the GitHub repository derektu\/xr-collector/u);
-  const validationProductName = 'XR Update Verify Public';
-  const validationAppId = 'com.xrcollector.verify.public';
-  await writeFile(path.join(asarSource, 'package.json'), JSON.stringify({ name: 'xr-collector', version: '0.1.0',
-    productName: validationProductName, xrCollectorAppId: validationAppId }));
-  await rm(path.join(resources, 'app.asar'));
-  await createPackage(asarSource, path.join(resources, 'app.asar'));
-  await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), path.join(outputDir, `mac-arm64/${validationProductName}.app`));
+  const validationApp = path.join(outputDir, `mac-arm64/${validationProductName}.app`);
+  await rename(path.join(outputDir, 'mac-arm64/XR Collector.app'), validationApp);
+  await copyFile(validationAsar, path.join(validationApp, 'Contents/Resources/app.asar'));
   await expect(verifyPackagedApplication({ outputDir, commit, version: '0.1.0', target: 'darwin-arm64',
     productName: validationProductName, appId: validationAppId, updateRepository: 'derektu/xr-collector-test' },
   { trustedManifest: meiliManifest, trustedLexiconManifest: lexiconManifest, sourceSkillPath: sourceSkill,
