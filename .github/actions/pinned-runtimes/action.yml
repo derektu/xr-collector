@@ -1,0 +1,27 @@
+name: Pinned runtimes
+description: Runs a runtime prepare command with the runtime cache restored from and saved to the Actions cache; later steps in the job use the same runtime cache.
+inputs:
+  prepare:
+    description: The npm command that fills the runtime cache and installs into resources/bin.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Use one runtime cache directory for this job
+      shell: bash
+      run: echo "XR_COLLECTOR_RUNTIME_CACHE=${{ runner.temp }}/xr-collector-runtime" >> "$GITHUB_ENV"
+    - name: Restore the runtime cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/xr-collector-runtime
+        key: runtime-${{ runner.os }}-${{ inputs.prepare }}-${{ hashFiles('src/domain/search/meilisearch-runtime-pins.json', 'scripts/runtime-dependency-pins.json', 'scripts/runtime-cache.mjs', 'scripts/runtime-dependencies.mjs', 'scripts/prepare-meilisearch.mjs') }}
+    - name: Prepare the pinned runtimes
+      shell: bash
+      run: ${{ inputs.prepare }}
+    - name: Save the runtime cache
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/xr-collector-runtime
+        key: ${{ steps.restore.outputs.cache-primary-key }}

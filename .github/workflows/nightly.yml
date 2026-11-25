@@ -76,7 +76,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Install pinned runtimes for the real-engine tests
-        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
       - name: Place the pinned Visual C++ runtime beside Meilisearch
         if: runner.os == 'Windows'
         run: node scripts/prepare-windows-crt.mjs
@@ -113,7 +115,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Install pinned runtimes
-        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
       - name: Place the pinned Visual C++ runtime beside Meilisearch
         if: runner.os == 'Windows'
         run: node scripts/prepare-windows-crt.mjs
@@ -157,7 +161,9 @@ jobs:
       - name: Install Chromium
         run: npx playwright install chromium
       - name: Prepare pinned search engine
-        run: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run prepare:meilisearch -- --target darwin-arm64 --require-native
       - name: Run every Web flow
         run: node .claude/skills/verify/scripts/verify.mjs flows run --web --issue nightly --label web --jobs 3
       - name: Save results and failure evidence
@@ -205,7 +211,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Prepare pinned runtimes in the runtime cache
-        run: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run prepare:runtime -- ${{ matrix.runtime_platform }}
       - name: Build unsigned test package
         run: npm run ${{ matrix.package_command }}
       - name: Startup check of the packaged app
