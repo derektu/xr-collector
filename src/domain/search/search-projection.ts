@@ -9,16 +9,10 @@ function vaultPrefix(searchData: string, vaultRoot: string): string {
   return `${path.resolve(searchData)}-${createHash('sha256').update(vaultRoot).digest('hex').slice(0, 16)}`;
 }
 
-/** The search database of `vaultRoot` for the current `SEARCH_INDEX_VERSION`; another version is another directory. */
 export function searchDatabasePath(searchData: string, vaultRoot: string): string {
   return `${vaultPrefix(searchData, vaultRoot)}-v${SEARCH_INDEX_VERSION}`;
 }
 
-/**
- * Returns the Vault's search database path after deleting the Vault's databases of other index
- * versions, with their state and process files. A database the current version has not built yet
- * does not exist, so the startup comparison indexes every document into it.
- */
 export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string }): Promise<string> {
   const databasePath = searchDatabasePath(options.searchData, options.vaultRoot);
   const prefix = vaultPrefix(options.searchData, options.vaultRoot);

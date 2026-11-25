@@ -2,7 +2,6 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 const PRODUCTION_APP_ID = 'com.moneydj.xrcollector';
 
-/** The appId electron-builder packaged this App under: a validation package carries its own in package.json. */
 export function appIdOf(packageMetadata: unknown): string {
   const appId = packageMetadata && typeof packageMetadata === 'object'
     ? (packageMetadata as Record<string, unknown>).xrCollectorAppId : undefined;

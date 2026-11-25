@@ -18,7 +18,7 @@ export interface DesktopDialogOptions {
 
 export function registerDesktopDialogs(options: DesktopDialogOptions): void {
   const { ipc, dialog } = options;
-  // Electron shows `message` only on macOS, above the dialog's input boxes.
+  // External: Electron shows `message` only on macOS, above the dialog's input boxes.
   // https://github.com/electron/electron/blob/v44.10.0/docs/api/dialog.md
   const chooseFolder = async (event: IpcMainInvokeEvent, start: unknown, text: { title: string; buttonLabel: string; message: string },
     properties: NonNullable<OpenDialogOptions['properties']>): Promise<string | null> => {
@@ -85,7 +85,7 @@ function transferFile(status: TransferStatus | undefined): string | undefined {
   return undefined;
 }
 
-// The Windows folder dialog asks whether to create its default path when that folder does not exist, as soon as it opens.
+// External: The Windows folder dialog asks whether to create its default path when that folder does not exist, as soon as it opens.
 export async function existingDirectory(start: string, fallback: string): Promise<string> {
   let current = start;
   for (;;) {

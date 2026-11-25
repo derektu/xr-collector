@@ -99,7 +99,7 @@ export class YtDlpChannelSource implements YouTubeChannelSource {
       output = await this.gate.run(options.priority ?? 'background', () => this.commandRunner([
         ...this.runtimeArgs(),
         '--flat-playlist',
-        // yt-dlp fills an approximate upload_date and timestamp for flat-playlist entries only with approximate_date.
+        // External: yt-dlp fills an approximate upload_date and timestamp for flat-playlist entries only with approximate_date.
         // https://github.com/yt-dlp/yt-dlp#youtubetab-youtube-playlists-channels-feeds-etc
         '--extractor-args',
         'youtubetab:approximate_date',

@@ -5,8 +5,7 @@ import { serve } from '../api-route.js';
 
 export function registerVaultTransferRoutes(app: FastifyInstance, transfer: VaultOperations): void {
   serve(app, API_ROUTES.vaultStatus, async () => transfer.status());
-  // Export and import name local files by absolute path. JSON requests need a CORS preflight,
-  // which this server never grants, so only the app's own pages and authorized Agents can name files.
+  // External: A browser sends a JSON request from another site only after a CORS preflight.
   // https://fetch.spec.whatwg.org/#cors-safelisted-request-header
   serve(app, API_ROUTES.exportSuggestion, async () => transfer.exportSuggestion());
   serve(app, API_ROUTES.exportVault, async (request: FastifyRequest<{ Body: { path?: unknown; overwrite?: unknown } | undefined }>) => {

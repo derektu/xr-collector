@@ -41,7 +41,7 @@ function windows() {
   const load = deferred();
   const created: FakeWindow[] = [];
   class FakeWindow {
-    readonly handlers = new Map<string, ((...args: any[]) => void)[]>();
+    readonly handlers = new Map<string, ((...args: unknown[]) => void)[]>();
     readonly sent: unknown[] = [];
     shows = 0;
     readonly webContents = {
@@ -50,8 +50,8 @@ function windows() {
       send: (_channel: string, value: unknown) => { this.sent.push(value); },
     };
     constructor(readonly options: BrowserWindowConstructorOptions) { created.push(this); }
-    once(event: string, listener: (...args: any[]) => void) { this.on(event, listener); }
-    on(event: string, listener: (...args: any[]) => void) { this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]); }
+    once(event: string, listener: (...args: unknown[]) => void) { this.on(event, listener); }
+    on(event: string, listener: (...args: unknown[]) => void) { this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]); }
     async loadURL() {
       await load.promise;
       for (const listener of this.handlers.get('ready-to-show') ?? []) listener();

@@ -180,7 +180,7 @@ export class MarkdownVault implements DocumentVault {
       for (const document of batch) {
         if (!document || hidden(document, deletions)) continue;
         const { bodyMarkdown: _body, contentExtent: _extent, ...rest } = document;
-        // V8 keeps a whole file's text alive while a substring sliced from it lives: https://crbug.com/v8/2869
+        // External: V8 keeps a whole file's text alive while a substring sliced from it lives: https://crbug.com/v8/2869
         metadata.push(structuredClone(rest));
       }
     }

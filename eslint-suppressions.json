@@ -1,0 +1,255 @@
+{
+  ".claude/skills/verify/flows/lib/watch.mjs": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  ".claude/skills/verify/flows/live-updates.mjs": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  ".claude/skills/verify/scripts/lib/electron.mjs": {
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  ".claude/skills/verify/scripts/server.mts": {
+    "xr-collector/no-timers": {
+      "count": 6
+    }
+  },
+  ".claude/skills/verify/tests/flows.test.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  ".claude/skills/verify/tests/processes.test.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "scripts/dev.mjs": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "scripts/meilisearch-api-smoke.mjs": {
+    "xr-collector/no-timers": {
+      "count": 5
+    }
+  },
+  "scripts/owned-directory-lock.mjs": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "scripts/owned-process.mjs": {
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  "src/desktop/electron/tray.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/desktop/electron/update-check-scheduler.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/activity/activity-log.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/jobs/connectivity.ts": {
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  "src/domain/jobs/job-manager.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/pacing/pacing-gate.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/search/meilisearch-backend.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/search/meilisearch-process.ts": {
+    "xr-collector/no-timers": {
+      "count": 3
+    }
+  },
+  "src/domain/sources/rss/http.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/subscriptions/scheduler.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/domain/subscriptions/subscription-service.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/shared/lib/json-file.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/server/routes/changes.ts": {
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  "src/transport/web/Activity.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/AddContent.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    },
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/web/AddMenu.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/AgentConnection.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 2
+    }
+  },
+  "src/transport/web/AgentConnectionHelp.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 2
+    },
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/web/App.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    },
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/web/BuildInfoCard.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/ConfirmApplySettings.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/ConfirmDeleteDocument.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/ConfirmRemove.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/Documents.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 2
+    },
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/web/LoginStartup.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/NewVaultFields.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    },
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "src/transport/web/Reader.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/SourceDetail.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/Sources.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/VaultExchange.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/VaultLocation.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/VaultOnboarding.tsx": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/floating-menu.ts": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    }
+  },
+  "src/transport/web/use-changes.ts": {
+    "xr-collector/no-effect-hooks": {
+      "count": 1
+    },
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  "tests/packaging/mac-signing.test.ts": {
+    "xr-collector/no-timers": {
+      "count": 2
+    }
+  },
+  "tests/transport/server/agent-access.test.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  },
+  "tests/transport/web/read-until.test.ts": {
+    "xr-collector/no-timers": {
+      "count": 1
+    }
+  }
+}

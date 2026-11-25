@@ -37,7 +37,7 @@ class ChangeHub implements ChangeSource {
     source.addEventListener('change', (event: MessageEvent<string>) => {
       this.notify({ kind: 'changes', changes: (JSON.parse(event.data) as ChangeBatch).changes });
     });
-    // EventSource reconnects by itself after a network error, but a refused response closes it for good.
+    // External: EventSource reconnects by itself after a network error, but a refused response closes it for good.
     // https://html.spec.whatwg.org/multipage/server-sent-events.html#sse-processing-model
     source.addEventListener('error', () => {
       if (source.readyState !== EventSource.CLOSED || this.source !== source) return;

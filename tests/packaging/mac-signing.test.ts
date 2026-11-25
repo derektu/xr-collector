@@ -97,6 +97,7 @@ const matchingListing = (matching: string[], valid: string[]) => [
 /** What `withTemporarySigningKeychain` passes its work. */
 type SigningKeychain = { keychain: string; identity: unknown; signal: AbortSignal };
 type Identities = { valid: string[]; matching?: string[]; importError?: string };
+type SigningError = Error & { detail: string; fix: string };
 
 function fakeSecurity(identities: Identities, keychains: string[]) {
   const calls: string[][] = [];
@@ -120,10 +121,10 @@ async function identityCheck(identities: Identities) {
   const userKeychains = [path.resolve('fixture/login.keychain-db')];
   const keychains = [...userKeychains];
   const { run, calls } = fakeSecurity(identities, keychains);
-  const result: { identity?: any; error?: any } = await checkDeveloperIdIdentity(
+  const result: { identity?: unknown; error?: SigningError } = await checkDeveloperIdIdentity(
     { certificatePath: '/protected/certificate.p12', certificatePassword: 'p12-secret', teamId: 'ABCDE12345' },
     { run, randomPassword: () => 'temporary-password', tempRoot, keychainSearchLock: path.join(tempRoot, 'search-list.lock') },
-  ).then((identity: any) => ({ identity }), (error: any) => ({ error }));
+  ).then((identity: unknown) => ({ identity }), (error: SigningError) => ({ error }));
   const created = calls.find((args) => args[0] === 'create-keychain')?.at(-1);
   return {
     ...result, calls, created,
@@ -153,9 +154,9 @@ it.skipIf(process.platform === 'win32')('checks the Developer ID identity in a t
     const outcome = await identityCheck(identities);
     if (detail) {
       expect(outcome.error?.detail, name).toMatch(detail);
-      if (typeof fix === 'string') expect(outcome.error.fix, name).toBe(fix); else expect(outcome.error.fix, name).toMatch(fix!);
-      expect(outcome.error.message, name).not.toContain('p12-secret');
-      expect(outcome.error.message, name).not.toContain('temporary-password');
+      if (typeof fix === 'string') expect(outcome.error?.fix, name).toBe(fix); else expect(outcome.error?.fix, name).toMatch(fix!);
+      expect(outcome.error?.message, name).not.toContain('p12-secret');
+      expect(outcome.error?.message, name).not.toContain('temporary-password');
     } else {
       expect(outcome.identity, name).toMatchObject({ sha1: SHA_A, teamId: 'ABCDE12345' });
     }
@@ -435,7 +436,7 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
   await mkdir(ended, { mode: 0o700 });
   await writeFile(path.join(ended, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
   // `package:mac` prints the message of the error signing rejects with.
-  const endedFailure = await sign(ended).catch((error: any) => error);
+  const endedFailure = await sign(ended).catch((error: unknown) => error);
   expect(endedFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ended });
   expect(endedFailure.message).toBe(`Owned lock ${ended} was left by process 424242 (started stale), which has ended, as have the child processes it recorded. `
     + `The lock is not removed automatically. Confirm that no Developer ID signing or identity check on this Mac is running, then delete it with: rm -r '${ended}'`);
@@ -445,7 +446,7 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
   await mkdir(ownerless, { mode: 0o700 });
   const longAgo = new Date(Date.now() - 60_000);
   await utimes(ownerless, longAgo, longAgo);
-  const ownerlessFailure = await sign(ownerless).catch((error: any) => error);
+  const ownerlessFailure = await sign(ownerless).catch((error: unknown) => error);
   expect(ownerlessFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ownerless });
   expect(ownerlessFailure.message).toContain(`then delete it with: rm -r '${ownerless}'`);
   expect(await readdir(ownerless)).toEqual([]);
@@ -466,7 +467,7 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
   }, {
     run, randomPassword: () => 'temporary-password', keychainSearchLock: later, tempRoot: root,
     processIdentity: async (pid: number) => pid === process.pid ? { pid, uid, startedAt: 'current' } : null,
-  }).catch((error: any) => error);
+  }).catch((error: unknown) => error);
   expect(laterFailure.message).toBe(`Signing failed and its temporary keychain cleanup also failed. Owned lock ${later} was left by process 424242 (started stale), `
     + `which has ended, as have the child processes it recorded. The lock is not removed automatically. Confirm that no Developer ID signing or identity check on this Mac is running, then delete it with: rm -r '${later}'`);
   expect(laterFailure.errors.map(String)).toEqual(['Error: simulated signing failure', expect.stringContaining('Owned lock')]);

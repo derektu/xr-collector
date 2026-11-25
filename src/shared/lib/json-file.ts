@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-// On Windows, renaming over a target that another process holds open without delete sharing fails
+// External: On Windows, renaming over a target that another process holds open without delete sharing fails
 // with EPERM; antivirus and indexing scans open a file just written this way for a short time.
 const REPLACE_RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 320, 640];
 

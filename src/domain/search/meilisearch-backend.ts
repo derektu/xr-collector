@@ -71,7 +71,7 @@ interface MeilisearchSearchResponse {
   hitsPerPage?: number;
 }
 
-// Meilisearch document ids allow only A-Z, a-z, 0-9, '-' and '_':
+// External: Meilisearch document ids allow only A-Z, a-z, 0-9, '-' and '_':
 // https://www.meilisearch.com/docs/learn/getting_started/primary_key#formatting-the-document-id
 export function indexKey(documentId: string): string {
   return Buffer.from(documentId, 'utf8').toString('base64url');
@@ -116,7 +116,7 @@ export class MeilisearchBackend implements SearchBackend {
         }),
       },
     );
-    // Updating filterableAttributes re-indexes every stored document, in time proportional to the index size.
+    // External: Updating filterableAttributes re-indexes every stored document, in time proportional to the index size.
     // https://www.meilisearch.com/docs/learn/filtering_and_sorting/filter_search_results#configure-index-settings
     await this.waitForTask(settingsTask.taskUid, SETTINGS_TASK_TIMEOUT_MS);
 
@@ -212,7 +212,7 @@ export class MeilisearchBackend implements SearchBackend {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
     const [result, counted] = await Promise.all([
-      // Only page/hitsPerPage pagination returns an exact totalHits; offset/limit returns an estimate:
+      // External: Only page/hitsPerPage pagination returns an exact totalHits; offset/limit returns an estimate:
       // https://www.meilisearch.com/docs/guides/front_end/pagination
       this.request<MeilisearchSearchResponse>(
         `/indexes/${INDEX_UID}/search`,

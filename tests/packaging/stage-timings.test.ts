@@ -18,13 +18,16 @@ function manualClock(start = 1_000) {
   return { now: () => current, advance: (ms: number) => { current += ms; } };
 }
 
+type StageTimer = { time: (name: string, work: (stage: { bytes?: number }) => Promise<unknown>) => Promise<unknown> };
+type Stage = { name: string; status: string };
+
 it('records nested, counted and failed stages in start order with their wall time', async () => {
   const clock = manualClock();
   const timer = createStageTimer({ now: clock.now });
   await timer.time('build', async () => { clock.advance(1_200); });
-  await timer.group('notarize: App', async (child: any) => {
+  await timer.group('notarize: App', async (child: StageTimer) => {
     clock.advance(5);
-    await child.time('notarytool submit', async (stage: any) => { stage.bytes = 4096; clock.advance(30_000); });
+    await child.time('notarytool submit', async (stage: { bytes?: number }) => { stage.bytes = 4096; clock.advance(30_000); });
     await child.time('notarytool wait', async () => { clock.advance(90_000); });
   });
   await timer.time('codesign runtime files', async () => { clock.advance(800); }, { count: 110 });
@@ -38,7 +41,7 @@ it('records nested, counted and failed stages in start order with their wall tim
     { name: 'codesign runtime files', ms: 800, status: 'ok', depth: 0, offsetMs: 121_205, count: 110 },
     { name: 'verify: ZIP contents', ms: 50, status: 'failed', depth: 0, offsetMs: 122_005 },
   ]);
-  await expect(noStageTimer.group('ignored', async (child: any) => child.time('ignored', async () => 7))).resolves.toBe(7);
+  await expect(noStageTimer.group('ignored', async (child: StageTimer) => child.time('ignored', async () => 7))).resolves.toBe(7);
   expect(noStageTimer.stages).toEqual([]);
 });
 
@@ -95,7 +98,7 @@ it('writes the table and JSON up to the failing stage and rethrows the original 
   await expect(runWithTimingReport(timer, () => ({ file: path.join(root, 'report.json'), ...identity }), async () => {
     await timer.time('build', async () => { clock.advance(10); });
     identity.version = '0.1.0';
-    await timer.group('notarize: App', async (child: any) => {
+    await timer.group('notarize: App', async (child: StageTimer) => {
       await child.time('notarytool submit', async () => { clock.advance(20); });
       await child.time('notarytool wait', async () => { clock.advance(30); throw failure; });
     });
@@ -105,7 +108,7 @@ it('writes the table and JSON up to the failing stage and rethrows the original 
   expect(later).toBe(false);
   const report = JSON.parse(await readFile(path.join(root, 'report.json'), 'utf8'));
   expect(report).toMatchObject({ status: 'failed', error: 'notarytool wait timed out', version: '0.1.0', totalMs: 60 });
-  expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
+  expect(report.stages.map((stage: Stage) => [stage.name, stage.status])).toEqual([
     ['build', 'ok'], ['notarize: App', 'failed'], ['notarize: App / notarytool submit', 'ok'], ['notarize: App / notarytool wait', 'failed'],
   ]);
   expect(output[0]).toMatch(/Stage timings: package failed/u);
@@ -144,7 +147,7 @@ it('turns electron-builder hook events into pack, afterPack, App codesign and ar
 
   const builderClock = manualClock(0);
   const timer = createStageTimer({ now: builderClock.now });
-  await timer.group('electron-builder --mac', async (child: any) => { builderClock.advance(300_000); await recordBuilderTimings(child, file); });
+  await timer.group('electron-builder --mac', async (child: StageTimer) => { builderClock.advance(300_000); await recordBuilderTimings(child, file); });
   await recordBuilderTimings(timer, path.join(root, 'missing.jsonl'));
 
   expect(orderedStages(timer).map(({ name, ms, depth, count, bytes }: { name: string; ms: number; depth: number; count?: number; bytes?: number }) => ({ name, ms, depth, count, bytes }))).toEqual([

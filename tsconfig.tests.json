@@ -7,6 +7,6 @@
     "jsx": "react-jsx",
     "types": ["node", "vite/client"]
   },
-  "include": ["tests/**/*.ts", "vitest.config.ts"],
+  "include": ["tests/**/*.ts", "tooling/**/*.ts", "eslint.config.ts", "vitest.config.ts"],
   "exclude": ["tests/tooling/fixtures/**"]
 }

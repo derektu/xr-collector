@@ -88,11 +88,14 @@ App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno）、搜尋詞�
 | --- | --- |
 | `npm test` | 全部 Vitest 測試 |
 | `npm run test:watch` | Vitest watch 模式 |
+| `npm run lint` | ESLint，規則見 `eslint.config.ts` 與 [程式規範](code-guidelines.md) |
 | `npm run typecheck` | 產品程式 typecheck；`build` 先跑它 |
-| `npm run typecheck:tests` | 測試（`tests/`）typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
-| `npm run verify` | Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
+| `npm run typecheck:tests` | 測試（`tests/`）、lint 規則（`tooling/`）與 `eslint.config.ts` 的 typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
+| `npm run verify` | lint、Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
 
 `npm run build` 的輸出在 `dist/`：`build:node` 先清空 `dist/node` 再以 `tsc` 編譯，Vite 也先清空 `dist/web`。`tsc` 不會刪除對不到 src 檔的輸出，先清空讓 `dist/` 只有這次 build 的檔案，打包收進的 `dist/node/**` 因此不含舊檔。
+
+typecheck 與 build 用 TypeScript 7 的 `tsc`，以 `node node_modules/typescript-7/bin/tsc` 呼叫（套件 `typescript-7`）。`typescript` 套件是 TS 6 的相容套件 `@typescript/typescript6`，給 typescript-eslint 解析程式碼，因為 typescript-eslint 不支援 TS 7，見 [TypeScript 7.0 發布說明](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0)。`node_modules/.bin/tsc` 不一定指向 TS 7，所以腳本與測試不用它。
 
 **Vitest 測試**在 `tests/`，路徑與受測的 `src/` 檔相同（`src/domain/jobs/job-queue.ts` 的測試是 `tests/domain/jobs/job-queue.test.ts`），不對應單一 src 檔的只在 `tooling`、`packaging` 與 `support`。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 

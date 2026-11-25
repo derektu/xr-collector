@@ -7,7 +7,7 @@ function invalid(message: string): never {
   throw new CollectorError('invalid_request', message);
 }
 
-// On a case-insensitive volume (the macOS and Windows defaults), realpath returns the spelling stored
+// External: On a case-insensitive volume (the macOS and Windows defaults), realpath returns the spelling stored
 // on disk, so two spellings of one folder resolve to the same location.
 const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
 

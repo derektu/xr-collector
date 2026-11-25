@@ -34,7 +34,7 @@ export class AppTray {
 
   constructor(private readonly options: AppTrayOptions) {
     this.tray = new Tray(this.image('idle'));
-    // Windows shows a notification area icon's context menu on right click and leaves left click to the app;
+    // External: Windows shows a notification area icon's context menu on right click and leaves left click to the app;
     // macOS opens a menu bar item's menu on left click.
     if (options.platform === 'win32') this.tray.on('click', () => options.show());
     this.draw();
@@ -160,7 +160,7 @@ export class AppTray {
     if (!response.ok) throw new Error(`${route.method} ${route.path} answered ${response.status}: ${await response.text()}`);
   }
 
-  // macOS tints menu bar template images: black plus alpha, file name ending in Template.
+  // External: macOS tints menu bar template images: black plus alpha, file name ending in Template.
   // https://www.electronjs.org/docs/latest/api/native-image#template-image-macos
   private image(icon: TrayIcon, updateBadge = false): Electron.NativeImage {
     const state = `${icon}${updateBadge ? '-update' : ''}`;

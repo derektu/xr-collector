@@ -36,6 +36,10 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 Agent 金鑰在讀出與重設時登記為已知機密；搜尋引擎每次啟動都產生新金鑰，並在啟動時登記。這些訊息遮蔽後再截到長度上限：訊息保留開頭；診斷輸出保留結尾，因為工具把讓它停下的錯誤印在最後。
 
+## 本機網頁的存取
+
+listener 只接受 Host 是 server 自己名稱（`127.0.0.1`、`localhost` 或監聽的位址，加上埠號）的請求，其他回 403 `forbidden_host`。本機開啟的任何網頁都連得到 loopback 上的 server，其他網站把自己的網域重新綁定到 127.0.0.1（DNS rebinding）時，Host 仍是它自己的名稱，因此進不了 UI 不需授權的 route。server 不回應 CORS preflight，其他網站的頁面送不出 JSON 請求；匯出與匯入以絕對路徑指定本機檔案，所以只有 App 自己的頁面與已授權的 Agent 能指定檔案。
+
 ## Runtime 生命週期
 
 `CollectorRuntime` 是 process 內的服務 owner。Standalone server 與 Electron 提供各自的 profile、runtime binary 與 UI listener 參數，兩者都經 `startCollectorServer` 由同一個 runtime 建立 `VaultWorkspace`、scheduler、搜尋 process 及已授權 Agent listener。

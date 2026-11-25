@@ -14,7 +14,6 @@ function isInterrupted(job: CollectionJob): job is InterruptedJob {
 
 export interface RecoveryHost {
   sources: SourceDeclarations;
-  /** Any order; jobs created in the same millisecond are restored in the reverse of the order given. */
   stored(): CollectionJob[];
   runs(type: string): boolean;
   stopped(type: string, id: string): Promise<SkipReason | null>;

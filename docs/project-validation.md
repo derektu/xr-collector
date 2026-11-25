@@ -4,11 +4,11 @@ XR Collector 套用 [開發驗證流程](development-validation.md) 時的指令
 
 ## 自動檢查
 
-`npm run verify`：單元、HTTP 與檔案系統整合測試（含真實 Meilisearch 的案例）、typecheck、build。改到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。執行時不接 `| tee`，或先 `set -o pipefail`，保留 exit code。
+`npm run verify`：lint、單元、HTTP 與檔案系統整合測試（含真實 Meilisearch 的案例）、typecheck、build。改到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。執行時不接 `| tee`，或先 `set -o pipefail`，保留 exit code。
 
 只改 Markdown 的修改不跑 `npm run verify`，CI 也不執行，只確認連結有效與呈現正確。`skills/xr-collector-agent/SKILL.md` 例外：測試會讀它，改它時照常跑。同一次修改含有其他檔案時照常跑。
 
-**測試的等待**：可直接等的 promise 就等它，其餘經 `tests/support/wait.ts` 的共用 helper 輪詢，上限統一 10 秒。Vitest 的 `testTimeout` 與 `hookTimeout` 統一 30 秒。`tests/tooling/test-waits.test.ts` 擋下直接輪詢、睡眠與個別上限。證明「某件事沒有發生」時，等產品排在那件事之後的步驟，再斷言；要證明某個狀態在一段時間內不變時，觀察窗寫成具名的取樣並註明為什麼需要。
+**測試的等待**：可直接等的 promise 就等它，其餘經 `tests/support/wait.ts` 的共用 helper 輪詢，上限統一 10 秒。Vitest 的 `testTimeout` 與 `hookTimeout` 統一 30 秒。由什麼強制見 [程式規範](code-guidelines.md#時間與非同步)。證明「某件事沒有發生」時，等產品排在那件事之後的步驟，再斷言；要證明某個狀態在一段時間內不變時，觀察窗寫成具名的取樣並註明為什麼需要。
 
 ## 驗證層級
 

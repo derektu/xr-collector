@@ -111,7 +111,7 @@ it('reports busy for an owner file not yet written, reports one that stays empty
   const abandoned = await heldLock([], '');
   const longAgo = new Date(Date.now() - 60_000);
   await utimes(abandoned, longAgo, longAgo);
-  const failure = await withOwnedDirectoryLock(abandoned, async () => 'acquired', lockOptions('b2', holderAlive)).catch((error: any) => error);
+  const failure = await withOwnedDirectoryLock(abandoned, async () => 'acquired', lockOptions('b2', holderAlive)).catch((error: unknown) => error);
   expect(failure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: abandoned });
   expect(failure.message).toContain(`Owned lock ${abandoned} has had an empty owner record for `);
   expect(failure.message).toContain('the process that created it ended before recording itself');

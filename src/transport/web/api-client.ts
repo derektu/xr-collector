@@ -49,7 +49,7 @@ interface ErrorResponse {
 
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
-  // Fastify rejects a request labelled application/json whose body is empty.
+  // External: Fastify rejects a request labelled application/json whose body is empty.
   // https://fastify.dev/docs/latest/Reference/Errors/#fst_err_ctp_empty_json_body
   const response = await fetch(path, {
     ...init,

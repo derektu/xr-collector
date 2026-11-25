@@ -176,7 +176,7 @@ describe('single items of a type the core does not name (P-T2)', () => {
     expect(w.sources.fake.captures).toEqual(['alpha-1']);
 
     const file = path.join(w.root, 'documents/fake/alpha-1.md');
-    const front = parse((await readFile(file, 'utf8')).split('\n---\n')[0]!.replace(/^---\n/u, '')) as Record<string, any>;
+    const front = parse((await readFile(file, 'utf8')).split('\n---\n')[0]!.replace(/^---\n/u, '')) as Record<string, unknown>;
     expect(front).toMatchObject({
       type: 'Article', title: '單篇 alpha-1', resource: itemUrl('fake', 'alpha-1'),
       collector: { id: 'fake:alpha-1', source: 'fake', source_id: 'alpha-1', publisher: 'fake 作者', fake_detail: { rating: 7 } },

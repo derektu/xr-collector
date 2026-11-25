@@ -102,10 +102,14 @@ describe('YtDlpCapture subtitle track (P-T1)', () => {
     expect(subtitleCall).toContain('--load-info-json');
     expect(subtitleCall).not.toContain('https://www.youtube.com/watch?v=JHo-aiePjoM');
     expect(gatePasses).toEqual(['background', 'background']);
-    // Without the page address yt-dlp cannot load the page again after a failed download.
-    expect(infoFiles[0]).not.toHaveProperty('webpage_url');
     expect(infoFiles[0]).toMatchObject({ id: 'JHo-aiePjoM', automatic_captions: expect.any(Object) });
     expect(result).toMatchObject({ sourceUrl: 'https://www.youtube.com/watch?v=JHo-aiePjoM' });
+  });
+
+  it('hands yt-dlp the video information without its page address, so a failed subtitle download is not retried from the page past the request channel', async () => {
+    const { infoFiles, gatePasses } = await captureWith(lennyInfo({ en: englishGroups(), 'en-orig': group('English (Original)', null) }));
+    expect(infoFiles[0]).not.toHaveProperty('webpage_url');
+    expect(gatePasses).toEqual(['background', 'background']);
   });
 
   it('takes an automatic track when its last json3 format, the one yt-dlp downloads, is in the spoken language', async () => {

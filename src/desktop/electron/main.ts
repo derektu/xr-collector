@@ -44,7 +44,7 @@ if (validationHidden) app.dock?.hide();
 const validationControl = process.env.XR_COLLECTOR_VALIDATION_CONTROL === '1';
 const validationNotifications: { id?: string; title: string; content: string }[] = [];
 
-// Windows shows an app's notifications only when its Start menu shortcut carries the same AppUserModelID.
+// External: Windows shows an app's notifications only when its Start menu shortcut carries the same AppUserModelID.
 // https://www.electronjs.org/docs/latest/tutorial/notifications#windows
 if (process.platform === 'win32') app.setAppUserModelId(appId);
 
@@ -114,7 +114,7 @@ app.whenReady().then(async () => {
     exports,
     vaultStatus: () => runtime?.transferStatus() ?? undefined,
   });
-  // Electron's powerMonitor suspend and resume follow macOS's sleep and wake notifications, which
+  // External: Electron's powerMonitor suspend and resume follow macOS's sleep and wake notifications, which
   // macOS does not post for dark wakes (Power Nap, maintenance wakes).
   stopSleepWatch = watchSleep(powerMonitor, { asleep: pauseForSleep, awake: continueAfterSleep });
   const sources = await createSourcePlugins({
@@ -149,7 +149,7 @@ app.whenReady().then(async () => {
     profilePath: app.getPath('userData'),
     sources: sources.registry,
     pause: collectionPause,
-    // Electron's net module follows the system proxy configuration, including WPAD and PAC files.
+    // External: Electron's net module follows the system proxy configuration, including WPAD and PAC files.
     // https://www.electronjs.org/docs/latest/api/net
     connectivity: { probe: internetProbe((input, init) => net.fetch(input instanceof URL ? input.href : input, init)) },
     workspace: {
@@ -213,7 +213,7 @@ app.whenReady().then(async () => {
   app.quit();
 });
 
-// Electron quits the app once every window has closed unless something listens for window-all-closed.
+// External: Electron quits the app once every window has closed unless something listens for window-all-closed.
 // https://www.electronjs.org/docs/latest/api/app#event-window-all-closed
 app.on('window-all-closed', () => undefined);
 
@@ -256,7 +256,7 @@ app.on('before-quit', (event) => {
         return;
       }
     }
-    // The NSIS installer that quitAndInstall starts ends every process running from the install folder, forcibly after about two seconds.
+    // External: The NSIS installer that quitAndInstall starts ends every process running from the install folder, forcibly after about two seconds.
     // https://github.com/electron-userland/electron-builder/blob/electron-builder%4026.15.3/packages/app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh
     if (installAfterQuit && updater) updater.quitAndInstall();
     else app.quit();

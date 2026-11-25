@@ -6,6 +6,7 @@
 - [開發驗證流程](docs/development-validation.md)：驗收計畫、回歸流程、門檻、審查與交付
 - [專案驗證設定](docs/project-validation.md)：本專案的指令、驗證層級、平台、真實資料、nightly 與打包簽章
 - [verify skill](.claude/skills/verify/SKILL.md)：實際操作 App 並留下證據
+- [程式規範](docs/code-guidelines.md)：lint 與結構測試強制的寫法，以及尚未強制的規則
 
 新讀者先從 [README 文件導航](README.md#從這裡開始閱讀) 了解現況。開發依據為當前 issue，以及 issue 引用的 `docs/` 規格與 [Agent Skill](skills/xr-collector-agent/SKILL.md)。
 

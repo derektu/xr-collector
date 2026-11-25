@@ -23,7 +23,7 @@ export interface Launch {
 }
 
 export function claimLaunch(host: LaunchHost, show: () => void, quitting: () => boolean): Launch | null {
-  // Electron records macOS's launched-as-login-item flag, which wasOpenedAtLogin reports, in
+  // External: Electron records macOS's launched-as-login-item flag, which wasOpenedAtLogin reports, in
   // applicationDidFinishLaunching just before it emits ready.
   // https://github.com/electron/electron/blob/v44.10.0/shell/browser/mac/electron_application_delegate.mm#L88-L97
   const startedAtLogin = isLoginStartupLaunch(host.platform, host.argv,
