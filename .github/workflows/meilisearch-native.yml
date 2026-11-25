@@ -12,6 +12,7 @@ on:
       - scripts/runtime-dependencies.mjs
       - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
+      - .github/actions/pinned-runtimes/action.yml
       - package.json
   push:
     branches: [main]
@@ -24,6 +25,7 @@ on:
       - scripts/runtime-dependencies.mjs
       - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
+      - .github/actions/pinned-runtimes/action.yml
       - package.json
 
 permissions:
@@ -50,7 +52,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Download pinned runtime
-        run: npm run prepare:meilisearch -- --target ${{ matrix.target }} --require-native
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run prepare:meilisearch -- --target ${{ matrix.target }} --require-native
       - name: Place the pinned Visual C++ runtime beside Meilisearch
         if: runner.os == 'Windows'
         run: node scripts/prepare-windows-crt.mjs

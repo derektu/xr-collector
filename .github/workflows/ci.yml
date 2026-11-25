@@ -37,7 +37,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Install pinned runtimes for the real-engine tests
-        run: npm run download:runtime
+        uses: ./.github/actions/pinned-runtimes
+        with:
+          prepare: npm run download:runtime
       - name: Test, typecheck, and build
         run: npm run verify
       - name: Test the verify skill when its scripts or tests changed

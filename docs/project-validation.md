@@ -88,6 +88,8 @@ node .claude/skills/verify/scripts/verify.mjs flows run --jobs 3 --issue <issue>
 | Web flows | Mac：`flows run --web --jobs 3` |
 | Package and startup | Mac 與 Windows：未簽章測試包，再以 `startup --app` 檢查打包版 |
 
+CI、nightly 與 Meilisearch native 的 job 都經由 `.github/actions/pinned-runtimes` 準備 runtime。它先從 Actions cache 還原 runtime cache，cache key 包含平台、準備指令，以及兩個 pins 檔與 runtime cache 相關腳本的 hash。命中時不連 GitHub Releases；沒命中時照常下載，準備完成後立即存回 cache，後面的測試失敗也不影響這一份 cache。
+
 Windows runner 在 job 開始時把 workspace 與 TEMP 加進 Defender 排除；開發者與公司的機器不改 Defender。每次 run 的 `results.json`、截圖與 server log 上傳成 artifact，保存 14 天。
 
 失敗時，report job 在帶 `nightly` label 的 open issue 留言，沒有就開一張並加入看板 Todo（以 repo secret `NIGHTLY_PROJECT_TOKEN` 寫看板）。nightly issue 排在所有新功能之前；修正照一般的票交付，PR 寫 `Closes #<nightly issue>`，merge 後手動觸發 nightly 並勾選 `report` 確認通過。
