@@ -20,7 +20,7 @@ import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import type { LoginStartupAccess } from '../../shared/api/login-startup.js';
 import { Connectivity, type ConnectivityOptions, type JobManager } from '../../domain/jobs/index.js';
 import { openJobRecords, type JobRecords } from './job-records.js';
-import { openAgentConnection, type AgentConnectionService } from './agent-connection.js';
+import { openAgentConnection, type AgentConnectionHandle, type OpenedAgentConnection } from './agent-connection.js';
 import { DEVELOPMENT_AGENT_PORT } from './agent-connection-defaults.js';
 import { DeviceVaults, type Collector, type VaultOperations } from '../../domain/vault/index.js';
 import { forwarding, subscriptionCollections, VaultWorkspace, type WorkspaceOptions } from './vault-workspace.js';
@@ -73,7 +73,7 @@ export interface RuntimeServices {
   /** Why business routes are unavailable, or null once a Vault is open. */
   notReady: () => string | null;
   vaultSetup: VaultSetup;
-  agentConnection: AgentConnectionService;
+  agentConnection: OpenedAgentConnection;
 }
 
 export interface RuntimeListeners {
@@ -88,7 +88,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   readonly instanceId: string;
   readonly profilePath: string;
   readonly listeners: L;
-  readonly agentConnection: AgentConnectionService;
+  readonly agentConnection: AgentConnectionHandle;
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
   readonly notifications: NotificationCenter;
@@ -106,7 +106,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     private readonly vaults: DeviceVaults,
     instanceId: string,
     initial: Opening,
-    agentConnection: AgentConnectionService,
+    agentConnection: AgentConnectionHandle,
     listeners: L,
     private readonly records: JobRecords | null,
     pause: CollectionPause,
@@ -146,7 +146,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       profilePath: options.profilePath, sources, createdBy: options.createdBy ?? 'XR Collector',
     });
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
-    let agentConnection: AgentConnectionService | null = null;
+    let agentConnection: OpenedAgentConnection | null = null;
     let runtime: CollectorRuntime<L> | null = null;
     const currentWorkspace = (): VaultWorkspace | null => runtime ? runtime.workspaceValue : initial.workspace;
     const current = (): VaultWorkspace => {
@@ -237,11 +237,11 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
         ...(activity ? { activity } : {}),
         runtimeStatus, notReady, vaultSetup, agentConnection,
       });
-      runtime = new CollectorRuntime(options, workspaceServices, vaults, instanceId, initial, agentConnection, listeners, records, pause, connectivity,
+      runtime = new CollectorRuntime(options, workspaceServices, vaults, instanceId, initial, agentConnection.access, listeners, records, pause, connectivity,
         notifications, changes, stopFollowing);
       return runtime;
     } catch (error) {
-      await agentConnection?.close().catch(() => undefined);
+      await agentConnection?.access.close().catch(() => undefined);
       await initial.workspace?.close().catch(() => undefined);
       await records?.close().catch(() => undefined);
       connectivity.close();

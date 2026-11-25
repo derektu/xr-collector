@@ -25,23 +25,38 @@ export interface AgentListener {
   close(): Promise<void>;
 }
 
+/** What starting the Agent listener needs; a connection offers it only once its settings are read or saved. */
+export interface AgentListenerControl {
+  candidatePorts(): number[];
+  /** Makes `listener` the one this connection reports and closes. */
+  attach(listener: AgentListener): void;
+  listenFailed(code: string): void;
+}
+
+export interface AgentConnectionHandle extends AgentConnectionAccess {
+  /** Closes the attached listener, if any. */
+  close(): Promise<void>;
+}
+
+export interface OpenedAgentConnection {
+  access: AgentConnectionHandle;
+  /** Null when the settings could not be read or saved: the connection has no key to listen with. */
+  listener: AgentListenerControl | null;
+}
+
 type AgentEvent = (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void;
 interface SavedAgentSettings { schemaVersion: 1; token: string; port: AgentPortSetting }
 
-export class AgentConnectionService implements AgentConnectionAccess {
+class AgentConnectionService implements AgentConnectionHandle, AgentListenerControl {
   private configured: AgentPortSetting = { mode: 'auto' };
   private activeConfigured: AgentPortSetting = { mode: 'auto' };
   private token = '';
   private server: AgentListener | null = null;
   private unavailableMessage = 'AI 助理連線尚未啟動。';
   private writes: Promise<void> = Promise.resolve();
-  private openedValue = false;
 
   constructor(private readonly settingsFile: string, private readonly skillPath: string, private readonly autoStartPort: number,
     private readonly event?: AgentEvent) {}
-
-  /** Whether the saved settings were read, or new ones saved; only then can the listener start. */
-  get opened(): boolean { return this.openedValue; }
 
   async open(): Promise<void> {
     let saved: SavedAgentSettings | null = null;
@@ -57,7 +72,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
     protectSecret(this.token);
     if (!saved) await this.save({ schemaVersion: 1, token: this.token, port: this.configured });
     else await chmod(this.settingsFile, 0o600);
-    this.openedValue = true;
   }
 
   candidatePorts(): number[] {
@@ -65,7 +79,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
       : [...Array.from({ length: AGENT_PORT_RANGE }, (_, offset) => this.autoStartPort + offset), 0];
   }
 
-  /** Makes `listener` the one this connection reports and closes. */
   attach(listener: AgentListener): void {
     this.server = listener;
     this.unavailableMessage = '';
@@ -105,14 +118,14 @@ export class AgentConnectionService implements AgentConnectionAccess {
     this.event?.('warning', 'device.agent_connection_key_reset', 'AI 助理連線金鑰已重設，既有連線資料已失效。');
     return this.connection();
   }); }
-  authorize(header: string | undefined): boolean { const supplied = Buffer.from(header ?? ''); const expected = Buffer.from(`Bearer ${this.token}`); return supplied.length === expected.length && timingSafeEqual(supplied, expected); }
+  authorize(header: string | undefined): boolean { if (!this.token) return false; const supplied = Buffer.from(header ?? ''); const expected = Buffer.from(`Bearer ${this.token}`); return supplied.length === expected.length && timingSafeEqual(supplied, expected); }
   async download(): Promise<Buffer> {
     const skill = await readFile(path.join(this.skillPath, 'SKILL.md'));
     return zipFiles([{ name: 'xr-collector-agent/SKILL.md', data: skill },
       { name: 'xr-collector-agent/connection.json', data: Buffer.from(`${JSON.stringify({ schemaVersion: 1, ...this.connection() }, null, 2)}\n`) }]);
   }
   async close(): Promise<void> { await this.server?.close(); this.server = null; }
-  fail(message: string): void { this.unavailableMessage = message; }
+  fail(message: string): void { this.unavailableMessage = message; this.token = ''; }
   private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.writes.then(work, work); this.writes = result.then(() => undefined, () => undefined); return result; }
   private async save(settings: SavedAgentSettings): Promise<void> {
     const temporary = `${this.settingsFile}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
@@ -126,20 +139,24 @@ export interface AgentSettingsOptions {
   event?: AgentEvent;
 }
 
-export async function openAgentConnection(options: AgentSettingsOptions): Promise<AgentConnectionService> {
+export async function openAgentConnection(options: AgentSettingsOptions): Promise<OpenedAgentConnection> {
   const service = new AgentConnectionService(options.settingsFile, options.skillPath, options.preferredPort, options.event);
-  try { await service.open(); }
-  catch {
+  try {
+    await service.open();
+    return { access: service, listener: service };
+  } catch {
     const message = 'AI 助理連線設定無法讀取或保存。XR Collector 其他功能仍可使用。';
     service.fail(message);
     options.event?.('error', 'device.agent_connection_unavailable', message, 'agent_settings_failed');
+    return { access: service, listener: null };
   }
-  return service;
 }
 
 function parseSettings(text: string): SavedAgentSettings {
   const value = JSON.parse(text) as Partial<SavedAgentSettings>;
-  if (value.schemaVersion !== 1 || typeof value.token !== 'string' || !value.token) throw new Error('Invalid Agent settings');
+  if (value.schemaVersion !== 1 || typeof value.token !== 'string' || !value.token || JSON.stringify(value.token) !== `"${value.token}"`) {
+    throw new Error('Invalid Agent settings');
+  }
   return { schemaVersion: 1, token: value.token, port: validatePortSetting(value.port) };
 }
 function validatePortSetting(value: unknown): AgentPortSetting {

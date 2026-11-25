@@ -54,7 +54,7 @@ Electron 版關閉視窗只會把它隱藏，視窗只在結束 App 時才真正
 
 UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋服務。Agent 使用獨立 loopback HTTP 入口及 profile 持久保存的 Bearer token，可操作所有業務 routes；人或 Agent 從設定頁下載 Skill 與目前 active 連線資料，不掃描裝置入口。
 
-`AgentConnectionService` 在 profile 內保存私有金鑰與連線埠模式；金鑰跨重啟維持，只有使用者重設後才更新。自動模式從起始埠（桌面版 7222、開發 server 7232，可由 `XR_COLLECTOR_AGENT_PORT` 覆寫）往後試十個候選埠，都被占用時交由作業系統配置可用埠；固定模式只嘗試指定埠，失敗只讓 Agent listener 顯示無法連線，不阻止 UI、Vault 與已接受工作啟動。設定修改先持久化，於下次啟動套用，現有 listener 不熱換。App 只透過設定頁輸出目前 active URL 與金鑰；下載包包含通用 Skill 與同層 `connection.json`，產品不發布作業系統固定 discovery file，也不以安裝目錄、Vault 或 instance ID 配對。
+Agent 連線（`agent-connection.ts` 的 `openAgentConnection`）在 profile 內保存私有金鑰與連線埠模式；金鑰跨重啟維持，只有使用者重設後才更新。設定讀不出也存不了時，連線沒有金鑰：`openAgentConnection` 只交出 route 用的 `access`，沒有啟動 listener 用的 `listener`，授權一律不通過。自動模式從起始埠（桌面版 7222、開發 server 7232，可由 `XR_COLLECTOR_AGENT_PORT` 覆寫）往後試十個候選埠，都被占用時交由作業系統配置可用埠；固定模式只嘗試指定埠，失敗只讓 Agent listener 顯示無法連線，不阻止 UI、Vault 與已接受工作啟動。設定修改先持久化，於下次啟動套用，現有 listener 不熱換。App 只透過設定頁輸出目前 active URL 與金鑰；下載包包含通用 Skill 與同層 `connection.json`，產品不發布作業系統固定 discovery file，也不以安裝目錄、Vault 或 instance ID 配對。
 
 ## 收集工作與訂閱
 
