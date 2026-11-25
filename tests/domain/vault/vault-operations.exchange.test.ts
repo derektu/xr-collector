@@ -252,12 +252,12 @@ const DOCUMENT_RULES: Rule[] = [
     documents: { [D1]: has('A 在刪除之後修改'), [D3]: deleted(at(2)), [D4]: has('B 在刪除之後修改'), [D2]: deleted(at(2)) },
   },
   {
-    name: 'A04 the newer of two deletion records is kept and written without being counted',
+    name: 'A04 the newer of two deletion records is kept and counted as a removal; a replace counts both records it writes',
     change: async (a, b) => {
       await remove(a, D1, at(1)); await remove(b, D1, at(2));
       await remove(a, D3, at(2)); await remove(b, D3, at(1));
     },
-    preview: { merge: counts({}), localNewer: 0, mergeRecords: true },
+    preview: { merge: counts({ removed: 1 }), replace: counts({ removed: 2 }), localNewer: 0 },
     documents: { [D1]: deleted(at(2)), [D3]: deleted(at(2)) },
   },
   {
@@ -287,15 +287,15 @@ const DOCUMENT_RULES: Rule[] = [
     refused: '本機內容已與匯入檔相同。',
   },
   {
-    name: 'A09 deletion records of documents A never had come along uncounted, so collection passes over the video',
+    name: 'A09 deletion records of documents A never had come along as removals, so collection passes over the video',
     change: async (_a, b) => { await add(b, X); await remove(b, X, at(1)); await remove(b, D2, at(1)); },
-    preview: { merge: counts({ removed: 1 }), localNewer: 0 },
+    preview: { merge: counts({ removed: 2 }), replace: counts({ removed: 2 }), localNewer: 0 },
     documents: { [X]: deleted(at(1)), [D2]: deleted(at(1)) },
   },
   {
-    name: 'A09 deletion records are written by a merge even when they are all the file brings',
+    name: 'A09 deletion records are written by a merge even when they are all the file brings, and both modes count them',
     change: async (_a, b) => { await add(b, X); await remove(b, X, at(1)); },
-    preview: { merge: counts({}), localNewer: 0, mergeRecords: true },
+    preview: { merge: counts({ removed: 1 }), replace: counts({ removed: 1 }), localNewer: 0 },
     documents: { [X]: deleted(at(1)) },
   },
 ];

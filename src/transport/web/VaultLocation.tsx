@@ -4,7 +4,7 @@ import { api } from './api-client.js';
 import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
 import { useLiveRead } from './use-changes.js';
 import { fileName, relocationPhase, revealLabel, switchesVault, transferRunning } from './transfer-presentation.js';
-import { NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
+import { failureNotInPreview, NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 
 type Open = { kind: 'create' } | { kind: 'open'; source?: string };
 
@@ -133,7 +133,7 @@ function CreateDialog({ onClose }: { onClose: (switched: boolean) => void }) {
       : null}
     {phase === 'running' ? <Progress progress={progress} fallback="正在建立知識庫…" /> : null}
     {phase === 'done' && outcome ? <SwitchOutcome outcome={outcome} done="已建立並開啟知識庫。" testId="create-vault-result-path" /> : null}
-    {failure ? <p className="add-problem" role="alert" data-testid="create-vault-failure">{failure}</p> : null}
+    {failureNotInPreview(failure, phase === 'input' ? check : null) ? <p className="add-problem" role="alert" data-testid="create-vault-failure">{failure}</p> : null}
     <div className="dialog-actions">
       {phase === 'input' ? <>
         <button type="button" className="button" onClick={() => onClose(false)}>取消</button>

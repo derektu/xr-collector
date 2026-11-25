@@ -20,7 +20,7 @@ import {
 import { backupFileName, checkExportFile, checkPackageFile, exportFileName, isSameFolder } from './transfer-files.js';
 import { inspectVaultDirectory, notAVault } from './vault-directory.js';
 import { stageImport } from './vault-import.js';
-import { changeTotal, chosenKeys, compareItems, itemStates, planChanges, type Comparison, type FileSource, type ItemStates } from './vault-merge.js';
+import { chosenKeys, compareItems, itemStates, planChanges, type Comparison, type FileSource, type ItemStates } from './vault-merge.js';
 import {
   checkPackageContent, machineName, openPackage, registeredFiles, registeredSource, writePackage, type PackageReader,
 } from './vault-package.js';
@@ -186,7 +186,6 @@ export class VaultOperations {
           id: randomUUID(),
           package: { fileName: path.basename(source), exportedAt: exportedAt ?? null, machine: from?.machine ?? null },
           merge: comparison.merge, replace: comparison.replace, localNewer: comparison.localNewer,
-          mergeRecords: comparison.mergeKeys.length > 0 && !changeTotal(comparison.merge),
         };
         this.preview = { value, comparison, file: source };
         return { value, message: '比對完成。', result: null };
@@ -330,10 +329,11 @@ export class VaultOperations {
   async createNew(location: unknown, name: unknown): Promise<TransferStatus> {
     const problem = this.relocationProblem();
     if (problem) throw problem;
-    await newVaultFolder(location, name);
+    const folders = { vaultRoot: this.host.current().vault.root, profilePath: this.options.selection.profilePath };
+    await newVaultFolder(location, name, folders);
     this.dropPreview();
     void this.run('create', '建立知識庫', async (reporter) => {
-      const root = await createNewVault(location, name, this.options.createdBy);
+      const root = await createNewVault(location, name, this.options.createdBy, folders);
       try {
         return await this.openOnce(root, reporter, 'created');
       } catch (error) {

@@ -1,10 +1,12 @@
 // Creating a new Vault from a location and a name: names macOS or Windows cannot use, and locations
-// that are missing, unwritable or already hold the name, are refused; an export file's date, counts
-// and folder name are read for creating a Vault from it.
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+// that are missing, unwritable, already hold the name, or lie inside the Vault in use or the program
+// data directory, are refused; an export file's date, counts and folder name are read for creating a
+// Vault from it.
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DeviceVaults } from '../../../src/domain/vault/index.js';
 import { checkNewVault, createNewVault, describePackage, nameProblem } from '../../../src/domain/vault/new-vault.js';
 import { inspectVaultDirectory, VAULT_MARKER } from '../../../src/domain/vault/vault-directory.js';
 import { packageOf } from '../../support/package-fixtures.js';
@@ -22,6 +24,8 @@ async function temp(): Promise<string> {
   roots.push(root);
   return root;
 }
+
+const UNPROTECTED = { vaultRoot: null, profilePath: path.join(tmpdir(), 'xr-new-vault-no-profile') };
 
 const RESERVED = '系統保留';
 describe('nameProblem', () => {
@@ -59,13 +63,46 @@ describe('checkNewVault', () => {
   ])('checks %s', async (_label, prepare, expected) => {
     const parent = await temp();
     const [location, name] = await prepare(parent);
-    expect(await checkNewVault(location, name)).toEqual(expected(parent));
+    expect(await checkNewVault(location, name, UNPROTECTED)).toEqual(expected(parent));
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('refuses a location it cannot write', async () => {
     const parent = await temp();
     await chmod(parent, 0o500);
-    expect((await checkNewVault(parent, 'XR')).problem).toBe('沒有權限在這個位置建立資料夾。');
+    expect((await checkNewVault(parent, 'XR', UNPROTECTED)).problem).toBe('沒有權限在這個位置建立資料夾。');
+  });
+});
+
+describe('DeviceVaults.checkNew location', () => {
+  const INSIDE_VAULT = '不能建立在目前的知識庫裡。';
+  const INSIDE_PROFILE = '不能建立在程式資料目錄裡。';
+
+  async function device() {
+    const root = await temp();
+    const vault = path.join(root, 'Vault');
+    const profile = path.join(root, 'profile');
+    for (const folder of [path.join(vault, 'notes'), path.join(profile, 'cache'), path.join(root, 'Other')]) await mkdir(folder, { recursive: true });
+    return { root, vault, profile, vaults: new DeviceVaults({ profilePath: profile, sources: PRODUCT_SOURCES, createdBy: 'test' }) };
+  }
+
+  it.each<[string, string | null, (at: { root: string; vault: string; profile: string }) => [string, string | null]]>([
+    ['a folder inside the Vault in use', INSIDE_VAULT, ({ vault }) => [path.join(vault, 'notes'), vault]],
+    ['the Vault in use itself', INSIDE_VAULT, ({ vault }) => [vault, vault]],
+    ['the program data directory', INSIDE_PROFILE, ({ vault, profile }) => [profile, vault]],
+    ['a folder inside the program data directory, with no Vault in use', INSIDE_PROFILE, ({ profile }) => [path.join(profile, 'cache'), null]],
+    ['the folder beside the Vault in use', null, ({ root, vault }) => [root, vault]],
+    ['a sibling folder of the Vault in use', null, ({ root, vault }) => [path.join(root, 'Other'), vault]],
+    ['a folder inside some Vault while none is in use', null, ({ vault }) => [path.join(vault, 'notes'), null]],
+  ])('answers %s with %j, so deleting or moving one folder never takes another Vault with it', async (_label, problem, pick) => {
+    const { vaults, ...at } = await device();
+    const [location, vaultRoot] = pick(at);
+    expect((await vaults.checkNew(location, 'New', vaultRoot)).problem).toBe(problem);
+  });
+
+  it('refuses another spelling of the Vault in use on a case-insensitive volume, since realpath returns the spelling on disk', async (context) => {
+    const { root, vault, vaults } = await device();
+    if (!await stat(path.join(root, 'vault')).then(() => true, () => false)) context.skip();
+    expect((await vaults.checkNew(path.join(root, 'VAULT', 'NOTES'), 'New', vault)).problem).toBe(INSIDE_VAULT);
   });
 });
 
@@ -73,7 +110,7 @@ describe('createNewVault', () => {
   it('creates the named folder as an empty Vault and leaves the location otherwise as it was', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'Other'));
-    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test');
+    const root = await createNewVault(parent, 'XR Collector', 'XR Collector test', UNPROTECTED);
     expect(root).toBe(path.join(parent, 'XR Collector'));
     expect(await readdir(root)).toEqual([VAULT_MARKER]);
     expect(JSON.parse(await readFile(path.join(root, VAULT_MARKER), 'utf8'))).toMatchObject({ createdBy: 'XR Collector test' });
@@ -84,7 +121,7 @@ describe('createNewVault', () => {
   it('never creates a Vault in an existing folder, even an empty one', async () => {
     const parent = await temp();
     await mkdir(path.join(parent, 'XR Collector'));
-    await expect(createNewVault(parent, 'XR Collector', 'test')).rejects.toMatchObject({
+    await expect(createNewVault(parent, 'XR Collector', 'test', UNPROTECTED)).rejects.toMatchObject({
       code: 'vault_invalid', message: '這個位置已經有「XR Collector」，請換個名稱。',
     });
     expect(await readdir(path.join(parent, 'XR Collector'))).toEqual([]);

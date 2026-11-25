@@ -6,7 +6,11 @@ import { errorCode } from './errno.js';
 
 /** Device-local record of which Vault this profile uses; never stored inside a Vault. */
 export class VaultSelection {
-  constructor(readonly file: string) {}
+  readonly file: string;
+
+  constructor(readonly profilePath: string) {
+    this.file = path.join(profilePath, 'vault-selection.json');
+  }
 
   /** Returns the saved absolute Vault path, or null when this device has not chosen one. */
   async read(): Promise<string | null> {

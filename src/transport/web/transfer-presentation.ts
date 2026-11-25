@@ -83,10 +83,6 @@ export function changeText(counts: ChangeCounts): string {
     .filter(Boolean).join('；') || '沒有變更';
 }
 
-export function removalText(counts: ChangeCounts): string | null {
-  return partsText('會移除', changes(counts).removed);
-}
-
 export function localNewerText(count: number): string {
   return `本機有 ${count} 項較新的修改或刪除`;
 }

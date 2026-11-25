@@ -45,7 +45,7 @@ Preconditions:
 ## Gotchas
 
 - 搜尋走 Meilisearch，寫入後有短暫的索引延遲；斷言用 `waitFor` 而不是固定等待。
-- 中文精簡引擎在啟動時讀外置的 `resources/search/coct-main.txt`。詞庫缺檔、不是 UTF-8、格式錯誤（含重複詞）或 Meilisearch `--version` 與 pin 不符時，App 不啟動引擎，搜尋狀態為 `error`，訊息為「無法啟動搜尋引擎：…」，App 其他功能照常。索引目錄是 `<搜尋資料目錄>-<Vault 雜湊>-v<SEARCH_INDEX_VERSION>`，啟動時刪除同一 Vault 其他版本的目錄；何時調版本見 [docs/storage-and-search.md](../../../../docs/storage-and-search.md) 的「索引版本」。UI 流程不修改共用詞庫；壞資源與啟動失敗使用獨立 profile／資源副本驗證。
+- 中文精簡引擎在啟動時讀外置的 `resources/search/coct-main.txt`。詞庫缺檔、不是 UTF-8、格式錯誤（含重複詞）或 Meilisearch `--version` 與 pin 不符時，App 不啟動引擎，搜尋狀態為 `unavailable`，設定頁顯示「無法啟動搜尋引擎。」且沒有「重建索引」，原因只寫進程式記錄，App 其他功能照常。索引目錄是 `<搜尋資料目錄>-<Vault 雜湊>-v<SEARCH_INDEX_VERSION>`，啟動時刪除同一 Vault 其他版本的目錄；何時調版本見 [docs/storage-and-search.md](../../../../docs/storage-and-search.md) 的「索引版本」。UI 流程不修改共用詞庫；壞資源與啟動失敗使用獨立 profile／資源副本驗證。
 - 正文摘要才有 mark；只命中標題或發布者時，可顯示未標記的正文摘要。完整詞優先的固定案例不能當成所有查詢的相關性保證：合格的 Meili 結果在前，片段補回結果依當次投影順序接續。完整重建後同級片段的相對順序可能改變；記錄重建前後順序，另驗重啟沿用投影的順序。Latin typo／prefix 沿用 Meili，中文不加名稱錯字或公司別名擴張。
 - `page-documents` 出現只代表已切回頁面；截取刪除後的列表前，等摘要與來源選單的文件數完成更新，避免把載入中的畫面當成完成證據。
 - `documents-source` 是原生 `<select>`，展開的選單截不到；把選項文字寫進 observations，必要時在頁面加一個標示「驗收註記」的浮層再截圖，截完移除。

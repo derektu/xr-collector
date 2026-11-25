@@ -83,7 +83,6 @@ export interface ImportPreview {
   merge: ChangeCounts;
   replace: ChangeCounts;
   localNewer: number;
-  mergeRecords: boolean;
 }
 
 export interface VaultSetup {

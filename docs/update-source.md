@@ -6,6 +6,8 @@ App 更新整套交給 electron-updater：macOS 用 `MacUpdater`（由 Squirrel.
 
 版本更新不送作業系統通知。可用版本、下載與安裝結果只透過設定頁、側欄、原生選單、系統匣圖示、裝置更新 API 與持久事件呈現。
 
+設定頁、側欄與原生選單對同一階段用同一組詞：「有新版本」「下載中 n%」「可安裝」「安裝中」，原生選單前面加「App 更新：」（`src/shared/api/update-step.ts`）。檢查失敗時設定頁以錯誤色顯示「無法檢查更新，請稍後再試。」，下載失敗顯示「下載失敗，請重新下載。」；electron-updater 的原文是英文、可能帶網址，只記在持久事件與裝置更新 API 的 `detail`。
+
 ## Feed
 
 每個平台的 feed 是 electron-builder 打包時產生的 `latest-mac.yml` 或 `latest.yml`，記錄版本、更新檔名、大小與 sha512。打包時 `package:*` 檢查 feed 的版本與檔名對得上這次的產物，`release:upload` 把 feed 連同安裝檔、更新檔與 blockmap 上傳到 Release。Mac 的更新檔是 ZIP（DMG 給使用者下載安裝），Windows 的更新檔與安裝檔是同一個 NSIS 安裝檔。
@@ -33,13 +35,13 @@ App 要先能在舊來源找到下一版，才能透過更新改用新來源。�
 3. runtime 關閉後才呼叫 `quitAndInstall`。Windows 的 NSIS 安裝程式一啟動就會結束安裝資料夾裡所有還在執行的程序，所以必須等 runtime 與搜尋引擎都關閉。macOS 由 Squirrel.Mac 驗證更新檔的簽章，ShipIt 替換 App 後啟動新版。
 4. runtime 無法正常關閉，或安裝程式沒有接手（例如 Squirrel 拒絕簽章）時，原因寫進同一筆紀錄，App 重新啟動舊版。
 
-下次啟動時，服務比對執行中的版本（`app.getVersion()`）與紀錄中的版本：相同記為「已安裝」，不同記為「未完成」並附上紀錄的原因，各記一筆持久事件，然後清除紀錄。結果顯示在設定頁與裝置更新 API 的 `lastAttempt`，只保留到 App 結束。
+下次啟動時，服務比對執行中的版本（`app.getVersion()`）與紀錄中的版本：相同記為「已安裝」，不同記為「未完成」，各記一筆持久事件，然後清除紀錄。結果在裝置更新 API 的 `lastAttempt`，只保留到 App 結束；設定頁只顯示「未完成」，內容是 `message` 的短句（「<版本> 未完成安裝，請手動下載安裝。」）。紀錄的原因是安裝程式的原文，放在 `lastAttempt.detail` 與持久事件，不上畫面。
 
 ## 限制
 
-- 只有 Developer ID 簽章並公證的 Mac 包能做 App 內更新。Squirrel.Mac 以執行中 App 的簽章要求驗證新版，ad-hoc 簽章的包會被拒絕；按下安裝後 App 重開，設定頁顯示 Squirrel 的原因。這類包要手動下載安裝。
+- 只有 Developer ID 簽章並公證的 Mac 包能做 App 內更新。Squirrel.Mac 以執行中 App 的簽章要求驗證新版，ad-hoc 簽章的包會被拒絕；按下安裝後 App 重開，設定頁顯示未完成安裝，Squirrel 的原因記在 `lastAttempt.detail` 與 Activity。這類包要手動下載安裝。
 - 新版啟動失敗時不會自動退回舊版。ShipIt 替換完成就算成功，使用者需要重新下載安裝。
-- macOS 上，Squirrel 需要寫入 App 所在的目錄：非 admin 帳號、`/Applications` 不能寫入，或從 DMG、下載資料夾直接執行（App Translocation）時更新失敗，App 重開後顯示原因，使用者手動安裝。
+- macOS 上，Squirrel 需要寫入 App 所在的目錄：非 admin 帳號、`/Applications` 不能寫入，或從 DMG、下載資料夾直接執行（App Translocation）時更新失敗，App 重開後顯示未完成安裝，使用者手動安裝。
 - Windows 包沒有 Authenticode 簽章，`app-update.yml` 也就沒有 `publisherName`，NsisUpdater 只以 feed 的 sha512 驗證安裝檔。feed 與安裝檔來自同一個 Release，所以這只能偵測傳輸損毀，不能偵測來源被換掉。
 
 ## 驗收身分

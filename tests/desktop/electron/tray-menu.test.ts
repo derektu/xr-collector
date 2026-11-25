@@ -25,7 +25,7 @@ const schedule = (overrides: Partial<CollectionScheduleView> = {}): CollectionSc
 });
 const update = (overrides: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus => ({ phase: 'up_to_date', currentVersion: '0.1.0',
   target: 'darwin-arm64', installerAvailable: true, offer: null, ready: null, lastAttempt: null, progress: null,
-  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '', errorCode: null, ...overrides });
+  lastCheckAttemptAt: '2026-10-24T00:00:00.000Z', checkedAt: '2026-10-24T00:00:00.000Z', message: '', errorCode: null, detail: null, ...overrides });
 
 const status = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'status' ? [item.label] : []);
 const actions = (menu: TrayModel) => menu.items.flatMap((item) => item.kind === 'action' ? [item.action] : []);

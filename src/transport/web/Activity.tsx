@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type {
   ActivityGroupPage,
   ActivityLogHealth,
@@ -168,12 +168,6 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     }
   }
 
-  function open(event: MouseEvent, action: () => void): void {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-    event.preventDefault();
-    action();
-  }
-
   const dropped = log?.health.dropped ?? 0;
   const unlistedSubscriptionId = state.subscriptionId !== null && !subscriptions.some((subscription) => subscription.id === state.subscriptionId)
     ? state.subscriptionId : null;
@@ -238,7 +232,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
       {log === null ? <p className="job-empty activity-pad">正在讀取…</p>
         : (effectiveMode === 'summary' ? log.entries.length : log.events.length) === 0 ? <p className="job-empty activity-pad">這段期間沒有符合的記錄。</p>
           : effectiveMode === 'summary' ? <ol className="summary-rows">{log.entries.map((entry) => entry.kind === 'event'
-            ? <SummaryEvent key={entry.event.eventId} event={entry.event} />
+            ? <SummaryEvent key={entry.event.eventId} event={entry.event} onOpenDocument={onOpenDocument} onOpenSource={onOpenSource} />
             : <li key={entry.groupId} className={`summary-row level-${eventLevel(entry)}`} data-testid="summary-check"
               data-group={entry.groupId} data-result={entry.result} data-count={entry.count} data-severity={entry.severity}>
               <Icon name={entry.severity === 'error' ? 'error' : 'jobs'} size={16} />
@@ -248,10 +242,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
           : <ol className="log-rows">{log.events.map((event) => {
             const level = eventLevel(event);
             const text = eventText(declarations, event);
-            const documentId = event.documentId;
-            const subscriptionId = event.subscriptionId;
-            const sourceType = event.sourceType;
-            const type = sourceType ? declarations.get(sourceType) : undefined;
+            const type = event.sourceType ? declarations.get(event.sourceType) : undefined;
             return <li key={event.eventId} className={`log-row level-${level.toLowerCase()}`} data-testid="log-row"
               data-event-type={event.eventType} data-severity={event.severity}>
               <time dateTime={event.timestamp}>{logTime(event.timestamp)}</time>
@@ -259,11 +250,7 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
               <span className={type ? `log-type type-${type.icon}` : 'log-type'}>
                 {type ? <Icon name={type.icon} size={14} label={type.label} /> : null}
               </span>
-              {documentId
-                ? <a href={readerPath(documentId)} onClick={(click) => open(click, () => onOpenDocument(documentId))}>{text}</a>
-                : subscriptionId && sourceType
-                  ? <a href={sourcePath(sourceType, subscriptionId)} onClick={(click) => open(click, () => onOpenSource(sourceType, subscriptionId))}>{text}</a>
-                  : <span>{text}</span>}
+              <EventLink event={event} text={text} onOpenDocument={onOpenDocument} onOpenSource={onOpenSource} fallback={<span>{text}</span>} />
             </li>;
           })}</ol>}
       {log?.nextCursor ? <div className="activity-more"><button type="button" className="button small" disabled={loadingOlder} onClick={() => void loadOlder()} data-testid="load-older">
@@ -273,12 +260,32 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   </>;
 }
 
-function SummaryEvent({ event }: { event: JobEvent }) {
+interface EventNavigation {
+  onOpenDocument: (id: string) => void;
+  onOpenSource: (type: string, id: string) => void;
+}
+
+function SummaryEvent({ event, onOpenDocument, onOpenSource }: { event: JobEvent } & EventNavigation) {
   const declarations = useSourceDeclarations();
+  const text = eventText(declarations, event);
   return <li className="summary-row" data-testid="summary-event" data-event-type={event.eventType} data-severity={event.severity}><Icon name="activity" size={16} />
-    <span><strong>{event.documentId ? <a href={readerPath(event.documentId)}>{eventText(declarations, event)}</a>
-      : event.subscriptionId && event.sourceType ? <a href={sourcePath(event.sourceType, event.subscriptionId)}>{eventText(declarations, event)}</a>
-        : eventText(declarations, event)}</strong><small>{logTime(event.timestamp)}</small></span></li>;
+    <span><strong><EventLink event={event} text={text} onOpenDocument={onOpenDocument} onOpenSource={onOpenSource} fallback={text} /></strong>
+      <small>{logTime(event.timestamp)}</small></span></li>;
+}
+
+function EventLink({ event, text, fallback, onOpenDocument, onOpenSource }: { event: JobEvent; text: string; fallback: ReactNode } & EventNavigation) {
+  const { documentId, subscriptionId, sourceType } = event;
+  if (documentId) return <a href={readerPath(documentId)} onClick={(click) => openInApp(click, () => onOpenDocument(documentId))}>{text}</a>;
+  if (subscriptionId && sourceType) {
+    return <a href={sourcePath(sourceType, subscriptionId)} onClick={(click) => openInApp(click, () => onOpenSource(sourceType, subscriptionId))}>{text}</a>;
+  }
+  return <>{fallback}</>;
+}
+
+function openInApp(event: MouseEvent, action: () => void): void {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+  event.preventDefault();
+  action();
 }
 
 function summaryCheckTitle(declarations: SourceDeclarations, entry: Extract<ActivitySummaryEntry, { kind: 'check' }>): string {

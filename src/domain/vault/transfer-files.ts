@@ -9,9 +9,15 @@ function invalid(message: string): never {
 
 // On a case-insensitive volume (the macOS and Windows defaults), realpath returns the spelling stored
 // on disk, so two spellings of one folder resolve to the same location.
+const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
+
 export async function isSameFolder(one: string, other: string): Promise<boolean> {
-  const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
   return await real(one) === await real(other);
+}
+
+export async function isWithin(target: string, folder: string): Promise<boolean> {
+  const relative = path.relative(await real(folder), await real(target));
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function absolute(value: unknown, message: string): string {

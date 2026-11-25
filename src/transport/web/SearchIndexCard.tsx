@@ -5,7 +5,7 @@ import { dateTimeLabel } from './document-presentation.js';
 import { useLiveRead } from './use-changes.js';
 
 const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
-  starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用',
+  starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用', unavailable: '無法使用',
 };
 
 export function SearchIndexCard() {
@@ -37,10 +37,11 @@ export function SearchIndexCard() {
       <p className="index-state" data-testid="search-index-state" data-state={state}><span className={`status-light ${state}`} aria-hidden="true" />{STATE_LABELS[state]}</p>
       <p data-testid="search-index-counts" data-indexed={status.indexedDocuments} data-vault={status.vaultDocuments}>已索引 {status.indexedDocuments} 份／知識庫 {status.vaultDocuments} 份</p>
       <p>上次重建：{status.lastRebuiltAt ? dateTimeLabel(status.lastRebuiltAt) : '尚未重建'}</p>
-      {status.state === 'error' && status.message ? <p className="index-problem">原因：{status.message}</p> : null}
+      {(status.state === 'error' || status.state === 'unavailable') && status.message ? <p className="index-problem">{status.message}</p> : null}
       {mismatch ? <p className="index-problem">索引篇數與知識庫不同，可以重建索引。</p> : null}
       {rebuildError ? <p className="index-problem">{rebuildError}</p> : null}
     </> : !loadError ? <p className="loading">正在讀取…</p> : null}
-    <button type="button" className="button" disabled={busy || !status} onClick={() => void rebuild()}>{rebuilding ? '重建中…' : '重建索引'}</button>
+    {status?.state === 'unavailable' ? null
+      : <button type="button" className="button" disabled={busy || !status} onClick={() => void rebuild()} data-testid="search-rebuild">{rebuilding ? '重建中…' : '重建索引'}</button>}
   </section>;
 }

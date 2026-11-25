@@ -135,7 +135,7 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
   const declarations = useSourceDeclarations();
   if (recognition.status === 'unsupported' || recognition.status === 'unavailable') {
     return <div className="recognition-card problem" role="alert" data-testid="recognition-card">
-      <p className="card-kind">{recognition.status === 'unsupported' ? '無法加入這個網址' : `無法讀取${recognition.kindLabel ?? '這個網址'}`}</p>
+      <p className="card-kind">{recognition.status === 'unsupported' ? '無法加入這個網址' : recognition.kindLabel ? `無法讀取 ${recognition.kindLabel}` : '無法讀取這個網址'}</p>
       <p>{recognition.message}</p>
     </div>;
   }

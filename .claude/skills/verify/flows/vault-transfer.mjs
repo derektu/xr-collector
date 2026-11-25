@@ -166,12 +166,12 @@ export async function run({ instance, page, openPage, record, waitFor }) {
         { id: 'merge.subscription', expected: { enabled: true, state: '非暫停', autoPausedAt: null, backfillDays: DONOR_BACKFILL_DAYS }, actual: mergedE });
       await compareThroughUI(donorZip);
       if (await button('import-replace-instead').count()) await click('import-replace-instead');
-      else { await click('import-mode-replace'); await click('import-next'); }
-      await visible('import-replace-confirm');
-      const removed = await button('import-replace-counts').getAttribute('data-documents-removed');
-      expect(removed === '1', '完全取代確認列出會移除的一份文件', { id: 'replace.removed', expected: '1', actual: removed });
-      await shot('replace-confirm');
-      await click('import-replace-confirm-button');
+      else await click('import-mode-replace');
+      await visible('import-replace');
+      const removed = await button('import-counts').getAttribute('data-documents-removed');
+      expect(removed === '1', '選完全取代時上方數量列出刪除的一份文件', { id: 'replace.removed', expected: '1', actual: removed });
+      await shot('replace-preview');
+      await click('import-replace');
       await visible('import-done');
       await shot('replace-done');
       await click('transfer-close');

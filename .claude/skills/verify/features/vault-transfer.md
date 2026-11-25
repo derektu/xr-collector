@@ -8,9 +8,9 @@
 - `vault-actions`：一般寬度單排；左側「建立新的知識庫…」「開啟既有知識庫…」及桌面版 Finder／檔案總管入口，右側「匯入…」「匯出…」。窄視窗可換行，鍵盤順序與畫面一致。
 - `vault-native-dialogs`：Desktop 的「開啟既有知識庫…」直接開原生資料夾選擇器（從目前知識庫的上一層開始），匯入開啟檔案、匯出儲存檔案。
 - `vault-export`：匯出 zip，檔案已存在時選擇「覆蓋」（`export-replace`）或「取消」（`export-keep`）。
-- `vault-import-merge`：預覽差異後以較新為準合併。
-- `vault-import-replace`：完全取代，含二次確認。
-- `vault-import-nothing`：沒有需要匯入的內容。本機有較新的修改或刪除時另顯示筆數與「完全取代…」；只剩紀錄可合併時，按「完成」先合併那些紀錄再關閉。
+- `vault-import-merge`：預覽差異後以較新為準合併。本機沒有的項目帶來的刪除紀錄計入「刪除」，只有紀錄時也走同樣的預覽、「取消」與「匯入」。
+- `vault-import-replace`：預覽選「完全取代」後，上方數量改為完全取代的變更，按鈕為「取消」「取代」，按「取代」直接套用。本機沒有的項目帶來的刪除紀錄同樣計入上方的「刪除」。
+- `vault-import-nothing`：沒有需要匯入的內容，只有「完成」（`import-close`），不寫入。本機有較新的修改或刪除時另顯示筆數與「完全取代…」，按下進入已選「完全取代」的預覽。
 - `vault-import-partial`：套用時檔案放到定位途中失敗，顯示「匯入未完成」與匯入前備份的路徑，Desktop 另有「顯示位置」（`src/transport/web/VaultExchange.tsx`、`src/domain/vault/vault-operations.ts`）。放到定位之前失敗時回到輸入階段，顯示「匯入失敗，知識庫未變更。」。
 - `vault-create`：以名稱＋位置表單建立新的知識庫並切換過去，原知識庫留在原處。
 - `vault-open-other`：開啟另一個既有的知識庫。
@@ -32,10 +32,10 @@ Preconditions:
 - **資訊。** `nav-settings` → `settings-vault`。`vault-path` 是目前選用的 Vault，初始為 run 目錄內的 `vault`；`vault-counts` 與文件數一致。保持設定頁開啟，再經 Agent 刪除文件，知識庫數量與搜尋卡應跟著更新，不必離開頁面；`live-updates` 的 LIVE-3 比對 API 與引擎實際索引。
 - **匯出。** `vault-export` → `export-dialog`，`export-path` 預填 `<runDir>/documents/XR Collector 匯出/…zip`；改成 run 目錄內的路徑後點 `export-confirm`。出現 `export-result-path`，檔案存在且是 zip。同路徑再匯出一次出現 `export-exists`，`export-replace`／`export-keep` 各驗一次。
 - **匯入合併。** `vault-import` → `import-path` 填另一個 instance 的 zip → `import-compare`。`import-preview` 與 `import-counts` 顯示新增／更新數；`import-mode-merge` → `import-confirm` → `import-done`。文件頁多出另一邊的文件；`<runDir>/documents/XR Collector 備份/` 多一份匯入前備份。
-- **完全取代。** 同上選 `import-mode-replace`，再按 `import-next`。`import-replace-confirm` 顯示將移除的數量（`import-replace-counts`），按 `import-replace-confirm-button`。文件只剩匯入檔的內容。
-- **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`，按 `import-close`（「完成」）關閉。匯出後再經 Agent 改一個訂閱設定或刪一份文件，再匯入同一個 zip：另出現 `import-local-newer` 與 `import-replace-instead`，按下進入 `import-replace-confirm`。
+- **完全取代。** 同上選 `import-mode-replace`。`import-counts` 改顯示完全取代的數量（`data-documents-removed`、`data-subscriptions-removed` 為刪除數），按 `import-replace`（「取代」）。文件只剩匯入檔的內容。
+- **沒有需要匯入。** 匯入自己剛匯出的 zip，出現 `import-nothing`，按 `import-close`（「完成」）關閉。匯出後再經 Agent 改一個訂閱設定或刪一份文件，再匯入同一個 zip：另出現 `import-local-newer` 與 `import-replace-instead`，按下進入選好 `import-mode-replace` 的 `import-preview`；這時改選 `import-mode-merge` 回到 `import-nothing`。
 - **匯入未完成。** 套用到一半失敗時，狀態為 error 並帶 `result.partiallyApplied` 與 `backupPath`；對話框出現 `import-partial` 與 `import-backup-path`。Web 模式難以穩定製造這種失敗；狀態有單元測試，對話框沒有測試。
-- **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 不等檢查結果；不能建立時按下由伺服器拒絕，`create-vault-failure` 顯示原因。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
+- **建立新的知識庫。** `vault-create` → `create-vault-dialog`，`new-vault-name` 預設 `XR Collector`、`new-vault-location-input` 預填目前知識庫的上一層（Web）；`new-vault-preview` 顯示「知識庫位置：…」或不能建立的原因，`create-vault-confirm` 不等檢查結果；不能建立時按下由伺服器拒絕；原因與預覽相同時只留在預覽，不另顯示 `create-vault-failure`。完成出現 `create-vault-result-path`，原知識庫資料夾不變。
 - **開啟其他。** Web：`vault-open-other` → `open-vault-path` 填另一個既有 Vault 的路徑 → `open-vault-confirm` 先檢查該資料夾是知識庫再切換（不是知識庫時顯示 `open-vault-failure`），`open-vault-result-path` 出現，文件頁換成那個 Vault 的內容。
 - **固定位置。** `launch --vault fixed`，設定頁出現 `vault-relocation-unavailable`，「建立新的知識庫…」「開啟既有知識庫…」disabled。
 - **等待。** 以慢速收集製造進行中的工作，再開始匯入比對。等待期間工作頁、原始活動與摘要 API 仍可讀；收集步驟結束後比對完成，套用後確認收集繼續。
@@ -55,7 +55,7 @@ Preconditions:
 - `vault-actions`：斷言 `vault-actions`、`vault-native-dialogs`；Desktop 的操作順序、Finder／檔案總管路徑與匯入／匯出原生對話框呼叫與起始位置。shell 與對話框回應使用替身，不代表 OS 畫面已開啟。視窗隱藏即可執行。
 
 - `vault-transfer`：`vault-info`、`vault-actions`、`vault-export`、`vault-import-merge`、`vault-import-replace`、`vault-import-nothing`、`vault-open-other`；串接匯出同名檔、雙庫合併與取代（畫面是沒有需要匯入時改按「完全取代…」進入取代）、切換 Vault、收集中匯入比對、等待時的工作頁及原始／摘要 API 可讀。兩邊都訂閱沒有影片的頻道 E：另一邊的 E 自動暫停後改了收集設定，合併取得設定且這邊的 E 仍啟用；這邊之後再改 E 的設定並匯出；切換到另一邊的 Vault 後匯入它，那邊的 E 取用較新的設定、維持自動暫停。Web 模式，合成 YouTube；不涵蓋原生對話框。
-- `onboarding`：斷言 `vault-create`；設定頁以改過的名稱與位置建立並切換，預設值與目前的知識庫同名時預覽說明原因、按下「建立」由伺服器拒絕並顯示原因，原知識庫資料夾內容不變，再以開啟既有知識庫切回。Web 模式。
+- `onboarding`：斷言 `vault-create`；設定頁以改過的名稱與位置建立並切換，預設值與目前的知識庫同名時預覽說明原因、按下「建立」由伺服器拒絕且原因只顯示一次，原知識庫資料夾內容不變，再以開啟既有知識庫切回。Web 模式。
 - `live-updates`：斷言 `vault-info`。設定頁開著時 Agent 刪除文件，不離開設定，知識庫的文件與訂閱數與 API 相同。
 
 ## Backlog

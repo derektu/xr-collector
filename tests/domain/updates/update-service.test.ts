@@ -52,13 +52,19 @@ const failure = (code?: string): Error => Object.assign(new Error('Cannot find l
 
 describe('checking for an update', () => {
   it.each<[string, () => Promise<UpdateOffer | null>, object]>([
-    ['a newer release', async () => offer, { phase: 'available', offer, errorCode: null }],
+    ['a newer release', async () => offer, { phase: 'available', offer, errorCode: null, message: '有新版本 0.1.2' }],
     ['no newer release', async () => null, { phase: 'up_to_date', offer: null, errorCode: null }],
     ['a release without this platform\'s feed yet', async () => { throw failure('ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'); }, { phase: 'up_to_date', offer: null, errorCode: null }],
-    ['an unreachable source', async () => { throw failure('ERR_UPDATER_LATEST_VERSION_NOT_FOUND'); }, { phase: 'error', errorCode: 'update_source_failed', message: 'Cannot find latest-mac.yml in the latest release artifacts' }],
+    ['an unreachable source', async () => { throw failure('ERR_UPDATER_LATEST_VERSION_NOT_FOUND'); }, { phase: 'error', errorCode: 'update_source_failed', message: '無法檢查更新，請稍後再試。', detail: 'Cannot find latest-mac.yml in the latest release artifacts' }],
   ])('reports %s', async (_case, found, expected) => {
     const { service } = await open({ updater: new FakeUpdater(found) });
     expect(await service.check()).toMatchObject(expected);
+  });
+
+  it('keeps the updater\'s own words of a failed check in the activity log, beside the short message the person reads', async () => {
+    const { service, events } = await open({ updater: new FakeUpdater(async () => { throw failure(); }) });
+    await service.check();
+    expect(events).toEqual(['device.update_check_failed: Cannot find latest-mac.yml in the latest release artifacts']);
   });
 
   it('keeps when it last tried across restarts, which paces the daily automatic check', async () => {
@@ -76,21 +82,22 @@ describe('downloading an update', () => {
     await service.check();
     const download = service.download({ version: offer.version });
     updater.downloads[0]!.progress(62, 100);
-    expect(service.status()).toMatchObject({ phase: 'downloading', ready: null, progress: { transferred: 62, total: 100, percent: 62 } });
+    expect(service.status()).toMatchObject({ phase: 'downloading', ready: null, progress: { transferred: 62, total: 100, percent: 62 }, message: '下載中 62%' });
     updater.downloads[0]!.finish();
-    expect(await download).toMatchObject({ phase: 'ready', ready: offer, progress: null });
+    expect(await download).toMatchObject({ phase: 'ready', ready: offer, progress: null, message: '可安裝 0.1.2' });
     expect(events).toContain('device.update_ready: 版本 0.1.2 已下載。');
   });
 
   it('returns to the same offer when cancelled, and to an error with nothing installable when the download fails', async () => {
-    const { service, updater } = await open();
+    const { service, updater, events } = await open();
     await service.check();
     const cancelled = service.download({ version: offer.version });
     await service.cancel();
     expect(await cancelled).toMatchObject({ phase: 'available', offer, ready: null, errorCode: null });
     const failed = service.download({ version: offer.version });
     updater.downloads[1]!.fail(new Error('sha512 checksum mismatch'));
-    expect(await failed).toMatchObject({ phase: 'error', ready: null, errorCode: 'update_download_failed', message: 'sha512 checksum mismatch' });
+    expect(await failed).toMatchObject({ phase: 'error', ready: null, errorCode: 'update_download_failed', message: '下載失敗，請重新下載。', detail: 'sha512 checksum mismatch' });
+    expect(events).toContain('device.update_download_failed: sha512 checksum mismatch');
   });
 
   it('downloads only the version the person chose', async () => {
@@ -128,16 +135,23 @@ describe('installing an update', () => {
   });
 
   it.each([
-    ['the installed version is running', '0.1.2', null, { outcome: 'installed', message: '已安裝 0.1.2。' }, 'device.update_installed'],
-    ['the previous version is still running', '0.1.1', null, { outcome: 'incomplete', message: '0.1.2 未完成安裝。' }, 'device.update_incomplete'],
+    ['the installed version is running', '0.1.2', null, { outcome: 'installed', detail: null }, 'device.update_installed'],
+    ['the previous version is still running', '0.1.1', null, { outcome: 'incomplete', detail: null }, 'device.update_incomplete'],
     ['the installer refused the update', '0.1.1', 'code failed to satisfy specified code requirement(s)',
-      { outcome: 'incomplete', message: '0.1.2 未完成安裝：code failed to satisfy specified code requirement(s)' }, 'device.update_incomplete'],
-  ] as const)('on the next start, records an install as %s', async (_case, runningVersion, failureReason, result, event) => {
+      { outcome: 'incomplete', detail: 'code failed to satisfy specified code requirement(s)' }, 'device.update_incomplete'],
+  ] as const)('on the next start, records the install when %s', async (_case, runningVersion, failureReason, result, event) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'xr-update-service-'));
     await writeFile(path.join(directory, 'state.json'), JSON.stringify({ lastCheckAttemptAt: null, checkedAt: null, installing: { version: '0.1.2', failure: failureReason } }));
     const restarted = await open({ directory, currentVersion: runningVersion });
-    expect(restarted.service.status().lastAttempt).toEqual({ version: '0.1.2', ...result });
-    expect(restarted.events).toEqual([`${event}: ${result.message}`]);
+    const attempt = restarted.service.status().lastAttempt;
+    expect(attempt).toMatchObject({ version: '0.1.2', ...result });
+    expect(restarted.service.status().message === attempt?.message).toBe(result.outcome === 'installed');
+    expect(restarted.events).toHaveLength(1);
+    expect(restarted.events[0]?.startsWith(`${event}: `)).toBe(true);
+    if (failureReason) {
+      expect(attempt?.message.includes(failureReason)).toBe(false);
+      expect(restarted.events[0]?.includes(failureReason)).toBe(true);
+    }
     const again = await open({ directory, currentVersion: runningVersion });
     expect(again.service.status().lastAttempt).toBeNull();
     expect(again.events).toEqual([]);
@@ -149,6 +163,6 @@ describe('installing an update', () => {
     await service.close();
     await service.recordInstallFailure(new Error('Squirrel refused the update\n    at ShipIt (native)'));
     const restarted = await open({ directory });
-    expect(restarted.service.status().lastAttempt).toMatchObject({ outcome: 'incomplete', message: '0.1.2 未完成安裝：Squirrel refused the update' });
+    expect(restarted.service.status().lastAttempt).toMatchObject({ outcome: 'incomplete', detail: 'Squirrel refused the update' });
   });
 });

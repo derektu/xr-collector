@@ -53,7 +53,7 @@ export function registerDeviceRoutes(app: FastifyInstance, options: DeviceRouteO
 
   const unavailableUpdate = (): DeviceUpdateStatus => ({ phase: 'idle', currentVersion: buildInfo.version,
     target: buildInfo.target, installerAvailable: false, offer: null, ready: null, progress: null,
-    lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null });
+    lastAttempt: null, lastCheckAttemptAt: null, checkedAt: null, message: '此執行環境無法安裝更新。', errorCode: null, detail: null });
   const updates: UpdateAccess = options.updates ?? {
     status: unavailableUpdate, check: async () => unavailableUpdate(), cancel: async () => unavailableUpdate(),
     download: async () => { throw new CollectorError('update_install_unavailable', '此執行環境無法安裝更新。'); },
