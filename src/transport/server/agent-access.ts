@@ -1,17 +1,18 @@
-import type { AgentConnectionService } from '../../app/runtime/index.js';
+import type { OpenedAgentConnection } from '../../app/runtime/index.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 
 export type AgentServerOptions = Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection'>;
 
-export async function startAgentListener(connection: AgentConnectionService, options: AgentServerOptions): Promise<RunningServer | null> {
-  if (!connection.opened) return null;
+export async function startAgentListener(connection: OpenedAgentConnection, options: AgentServerOptions): Promise<RunningServer | null> {
+  const { access, listener } = connection;
+  if (!listener) return null;
   try {
-    const server = await firstFreePort(connection.candidatePorts(), (port) => startServer({ ...options, port,
-      agentAuthorize: (header) => connection.authorize(header), agentConnection: connection }));
-    connection.attach(server);
+    const server = await firstFreePort(listener.candidatePorts(), (port) => startServer({ ...options, port,
+      agentAuthorize: (header) => access.authorize(header), agentConnection: access }));
+    listener.attach(server);
     return server;
   } catch (error) {
-    connection.listenFailed((error as NodeJS.ErrnoException).code ?? 'agent_connection_failed');
+    listener.listenFailed((error as NodeJS.ErrnoException).code ?? 'agent_connection_failed');
     return null;
   }
 }

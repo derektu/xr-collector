@@ -28,19 +28,20 @@ export function startCollectorServer(options: CollectorServerOptions): Promise<C
 
 async function startHttpListeners(services: RuntimeServices, ui: { port: number; host?: string; webRoot?: string }): Promise<HttpListeners> {
   const { agentConnection, ...shared } = services;
+  const { access } = agentConnection;
   const agent = await startAgentListener(agentConnection, shared);
   let server: RunningServer;
   try {
-    server = await startServer({ ...shared, ...ui, agentConnection });
+    server = await startServer({ ...shared, ...ui, agentConnection: access });
   } catch (error) {
-    await agentConnection.close().catch(() => undefined);
+    await access.close().catch(() => undefined);
     throw error;
   }
   return {
     ui: server,
     agent,
     close: async () => {
-      const closed = await Promise.allSettled([server.close(), agentConnection.close()]);
+      const closed = await Promise.allSettled([server.close(), access.close()]);
       const failed = closed.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed) throw failed.reason;
     },

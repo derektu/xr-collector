@@ -536,7 +536,7 @@ describe('CollectorRuntime start and stop order', () => {
     } };
     let runtime: CollectorRuntime | null = null;
     runtime = await CollectorRuntime.start(runtimeOptions, async (services: RuntimeServices) => {
-      steps.push(`listeners start, Vault open: ${services.transfer?.status().vaultPath === setup.vaultPath}, credential open: ${services.agentConnection.opened}`);
+      steps.push(`listeners start, Vault open: ${services.transfer?.status().vaultPath === setup.vaultPath}, credential open: ${services.agentConnection.listener !== null}`);
       return { close: async () => { steps.push(`listeners close, runtime ${runtime!.status().state}`); } };
     });
     await runtime.close();
