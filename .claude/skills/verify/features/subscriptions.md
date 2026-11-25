@@ -45,6 +45,7 @@ Preconditions:
 
 ## Gotchas
 
+- 詳情頁的收集設定欄位在開啟頁面時讀一次，之後只隨使用者的修改改變；每次儲存只送上次儲存後改過的欄位。別處（授權 Agent、另一個訂閱的「套用到所有」、匯入 Vault）改了這個訂閱的設定時，開著的詳情頁不跟著變，重新開啟才顯示新值。
 - 剛送出的訂閱先以 `pending-row-<jobId>` 出現，解析完頻道才變成 `source-row-<channelId>`；選取時兩者都要涵蓋。
 - 合成頻道每次列出等 200 ms、每支影片收集等 `captureDelayMs`（預設 600 ms）。要讓「下載中」持續到拍完，設 `c.youtube.holdCaptures = true` 停住收集，等 `instance.held()` 出現 `capture:<影片 ID>`，拍完改回 `false`。
 - 冷卻期間互動式請求（訂閱預覽）立即失敗，新增訂閱的對話框會顯示錯誤；這是產品行為。
