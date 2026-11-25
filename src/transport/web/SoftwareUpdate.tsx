@@ -22,7 +22,7 @@ export function SoftwareUpdate({ status, onStatus }: { status: DeviceUpdateStatu
   const attemptProblem = status?.lastAttempt?.outcome === 'incomplete' ? status.lastAttempt : null;
   return <div className="software-update" id="software-update" data-testid="software-update">
     <div className="software-update-line">
-      <span className={`update-state ${status ? updateMessageTone(status) : 'plain'}`} data-testid="update-message">{status?.message ?? '正在讀取更新狀態…'}</span>
+      <span className={`update-state ${status ? updateMessageTone(status) : 'plain'}`} data-testid="update-message" data-phase={status?.phase}>{status?.message ?? '正在讀取更新狀態…'}</span>
       <div className="software-update-actions">
         {canDownload && download ? <button type="button" className="button primary" data-testid="update-download"
           disabled={busy} onClick={() => void action(() => api.downloadUpdate(download.version))}>

@@ -27,7 +27,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；verificat
 
 1. 直接開 `/settings`，確認沒有 Vault 時仍看到目前版本與「檢查更新」；由這個 run 的 Agent connection 以 Bearer token 檢查，再比對 UI／Agent 都為 `available`、版本 `0.1.1`。
 2. 將 payload 停在 62%，點「下載更新」；下載中只顯示「取消下載」，Agent 同時要求 apply 回 409 `update_not_ready`。取消後回到 `available`，沒有 ready。
-3. feed 改送 sha512 不符的 payload；下載後進 `error`（`update_download_failed`）、ready 為 null、沒有 `update-apply`，`update-message` 等於 API 的 `message`（「下載失敗，請重新下載。」），原文只在 `detail`；同一版本可直接重新下載。恢復原 bytes 並重新下載後才顯示「重新啟動以安裝」。
+3. feed 改送 sha512 不符的 payload；下載後進 `error`（`update_download_failed`）、ready 為 null、沒有 `update-apply`，`update-message` 的 `data-phase` 為 `error` 且文字等於 API 的 `message`（「下載失敗，請重新下載。」），原文只在 `detail`；同一版本可直接重新下載。恢復原 bytes 並重新下載後才顯示「重新啟動以安裝」。
 4. feed 改為 `0.1.2` 並檢查，確認 ready `0.1.1` 與「下載 0.1.2」並存。
 5. 以已開啟 Vault 的 instance 從文件頁點側欄版本狀態，再送出原生 `update` 導覽訊號；兩者都等「關於」內的更新面板掛載後才捲入可視範圍，普通「設定」入口仍停在頁首。
 6. 側欄 `data-phase` 依序為 downloading、ready、installing（「下載中 n%／可安裝／安裝中」，available 為「有新版本」）；錯誤狀態只顯示版本。點套用後進 installing，畫面沒有任何更新按鈕；再以 `0.1.2` 重新啟動，`lastAttempt` 記為 `installed`。
