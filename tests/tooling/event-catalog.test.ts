@@ -10,7 +10,7 @@ import { eventSpec } from '../../src/shared/activity/event-catalog.js';
 describe('event catalog', () => {
   it('refuses an event kind the catalog does not list', () => {
     // tests/tooling/fixtures/event-catalog-types marks each refused kind with `@ts-expect-error`.
-    const result = spawnSync(process.execPath, [path.resolve('node_modules/typescript/bin/tsc'), '-p', 'tests/tooling/fixtures/event-catalog-types'], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [path.resolve('node_modules/typescript-7/bin/tsc'), '-p', 'tests/tooling/fixtures/event-catalog-types'], { encoding: 'utf8' });
     expect(`${result.stdout}${result.stderr}`).toBe('');
     expect(result.status).toBe(0);
   });

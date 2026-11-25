@@ -42,7 +42,7 @@ export class LoginStartupControl {
     }
   }
 
-  // The user can change the login item in the OS settings while the window is out of focus.
+  // External: The user can change the login item in the OS settings while the window is out of focus.
   async focus(): Promise<void> {
     if (!this.writing) await this.refresh();
   }

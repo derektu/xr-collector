@@ -20,7 +20,7 @@ export interface MainWindowOptions {
   openExternal(url: string): void;
   runtime(): WindowRuntime | null;
   quitting(): boolean;
-  // On Windows, shutdown, restart or sign-out emits the window's 'session-end' and closes the app without emitting 'before-quit'.
+  // External: On Windows, shutdown, restart or sign-out emits the window's 'session-end' and closes the app without emitting 'before-quit'.
   // https://www.electronjs.org/docs/latest/api/app#event-before-quit
   sessionEnded(): void;
   closedByPerson(): void;
@@ -74,14 +74,14 @@ export class MainWindow {
         contextIsolation: true,
         sandbox: true,
         preload: this.options.preload,
-        // Electron throttles a background page's timers and animations unless backgroundThrottling is false.
+        // External: Electron throttles a background page's timers and animations unless backgroundThrottling is false.
         // https://www.electronjs.org/docs/latest/api/structures/web-preferences
         backgroundThrottling: !this.options.hidden,
       },
     });
     this.rendererReady = false;
     this.window = window;
-    // Electron creates a default application menu with Edit and Quit items when the app sets none, and on macOS Cmd+C/V/X/A and Cmd+Q work only through application menu items.
+    // External: Electron creates a default application menu with Edit and Quit items when the app sets none, and on macOS Cmd+C/V/X/A and Cmd+Q work only through application menu items.
     // https://www.electronjs.org/docs/latest/api/menu#menusetapplicationmenumenu
     if (this.options.platform !== 'darwin') window.removeMenu();
     this.shownValue = showInitially;

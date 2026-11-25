@@ -23,7 +23,7 @@ export interface UpdateServiceOptions {
   restartToInstall: () => void;
 }
 
-// The GitHub and generic providers report a release without this platform's latest*.yml with this code:
+// External: The GitHub and generic providers report a release without this platform's latest*.yml with this code:
 // https://github.com/electron-userland/electron-builder/blob/electron-updater%406.8.12/packages/electron-updater/src/providers/GitHubProvider.ts
 // https://github.com/electron-userland/electron-builder/blob/electron-updater%406.8.12/packages/electron-updater/src/providers/GenericProvider.ts
 const NO_RELEASE_FOR_PLATFORM = 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND';

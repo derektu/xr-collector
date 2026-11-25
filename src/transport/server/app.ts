@@ -63,7 +63,7 @@ export interface HttpAppOptions {
 export async function createHttpApp(options: HttpAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 32 * 1024 });
   const closing = closeInOrder(app);
-  // Fastify hands every payload to onSend after serialization, including a string it sends as
+  // External: Fastify hands every payload to onSend after serialization, including a string it sends as
   // text/plain without calling a serializer and the answers of the not-found and error handlers.
   // https://github.com/fastify/fastify/blob/v5.12.7/lib/reply.js (Reply.prototype.send)
   // https://fastify.dev/docs/v5.12.x/Reference/Hooks/#onsend
@@ -77,9 +77,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   const network = networkGuard(options.connectivity);
 
   if (options.allowedHosts) {
-    // Any page this computer opens can reach a server on the loopback interface. A page on another
-    // site that rebinds its own name to 127.0.0.1 still sends that name in Host, so accepting only
-    // the server's own names keeps such pages out of the UI's unauthenticated routes.
+    // External: Any page this computer opens can reach a server on the loopback interface, and a page
+    // on another site that rebinds its own name to 127.0.0.1 still sends that name in Host.
     // https://en.wikipedia.org/wiki/DNS_rebinding
     const names = options.allowedHosts;
     app.addHook('onRequest', async (request, reply) => {
@@ -208,16 +207,14 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
   return app;
 }
 
-/**
- * Node's server.close, which Fastify's close calls, ends idle connections once. Two kinds of open
- * connection outlive it (checked on Fastify 5.12.7, Node 22): one opened without a request yet, as
- * a browser opens ahead of need, stays until Node's headersTimeout; a keep-alive one whose request is still being answered stays
- * after its response until keepAliveTimeout, which Fastify sets to 72 seconds. Node ends a
- * connection once a response carrying `Connection: close` is sent.
- * https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#forcecloseconnections
- * https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#keepalivetimeout
- * https://nodejs.org/docs/latest-v22.x/api/http.html#serverheaderstimeout
- */
+// External: Node's server.close, which Fastify's close calls, ends idle connections once. Two kinds of
+// open connection outlive it (checked on Fastify 5.12.7, Node 22): one opened without a request yet,
+// as a browser opens ahead of need, stays until Node's headersTimeout; a keep-alive one whose request
+// is still being answered stays after its response until keepAliveTimeout, which Fastify sets to 72
+// seconds. Node ends a connection once a response carrying `Connection: close` is sent.
+// https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#forcecloseconnections
+// https://github.com/fastify/fastify/blob/v5.12.7/docs/Reference/Server.md#keepalivetimeout
+// https://nodejs.org/docs/latest-v22.x/api/http.html#serverheaderstimeout
 function closeInOrder(app: FastifyInstance): AbortSignal {
   const withoutRequest = new Set<Socket>();
   app.server.on('connection', (socket: Socket) => {

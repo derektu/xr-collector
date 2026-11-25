@@ -11,9 +11,11 @@ import { errorCode } from './errno.js';
 
 export const DEFAULT_VAULT_NAME = 'XR Collector';
 
-/** Characters no folder name may hold on macOS or Windows; see https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions. */
+// External: No folder name on macOS or Windows may hold these characters.
+// https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
 const FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f]/u;
-/** Device names Windows reserves, with or without an extension; see https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions. */
+// External: Windows reserves these device names, with or without an extension.
+// https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
 const RESERVED = /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\..*)?$/iu;
 const NAME_BYTES = 255;
 

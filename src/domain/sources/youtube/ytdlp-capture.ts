@@ -155,7 +155,7 @@ export class YtDlpCapture implements YouTubeCapture {
     const workDir = await mkdtemp(path.join(tmpdir(), 'xr-collector-caption-'));
     try {
       const infoFile = path.join(workDir, 'info.json');
-      // yt-dlp retries a failed --load-info-json download by loading webpage_url itself, which would bypass the gate.
+      // External: yt-dlp retries a failed --load-info-json download by loading webpage_url itself.
       // https://github.com/yt-dlp/yt-dlp/blob/28b379d666051e795cbb663adac85179d5ce81f7/yt_dlp/YoutubeDL.py#L3725-L3731
       const { webpage_url: _pageUrl, ...pageless } = JSON.parse(raw) as Record<string, unknown>;
       await writeFile(infoFile, JSON.stringify(pageless), 'utf8');

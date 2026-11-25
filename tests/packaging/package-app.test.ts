@@ -47,11 +47,17 @@ it('requires an explicit complete Developer ID mode only for Mac packaging', () 
     '--mac-signing-env', '/protected/.env', '--mac-signing-root', '/protected'])).toThrow(/requires Mac target plus/u);
 });
 
+type ProcessTracking = { signal: AbortSignal; processTracker: unknown; processTrackers?: unknown[]; keychain?: string; identity?: object };
+type TrackedWork = (tracking: ProcessTracking) => Promise<unknown>;
+type RunOptions = { processTrackers?: unknown[]; environment: Record<string, string> };
+type StapleOptions = { stapleValidated: boolean };
+type Stage = { name: string; status: string };
+
 it('gives the signed verifier a runner that captures output and carries both checkout and signing-session trackers', async () => {
   const outerTracker = { name: 'checkout' };
   const sessionTracker = { name: 'signing-session' };
   const processTrackers = [outerTracker, sessionTracker];
-  const calls: Array<{ command: string; args: string[]; options: any }> = [];
+  const calls: Array<{ command: string; args: string[]; options: RunOptions }> = [];
   let verifierOutput: unknown;
   const previousNpmExecPath = process.env.npm_execpath;
   process.env.npm_execpath = process.execPath;
@@ -61,12 +67,12 @@ it('gives the signed verifier a runner that captures output and carries both che
       target: 'darwin-arm64', macSigningMode: 'developer-id-notarized',
       macSigningEnv: '/protected/.env', macSigningRoot: '/protected',
     }, {
-      withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: outerTracker }),
+      withPackageCheckoutLock: async (_lock: string, work: TrackedWork) => work({ signal: new AbortController().signal, processTracker: outerTracker }),
       readPackagingGitIdentity: async () => ({ commit: 'a'.repeat(40) }),
       loadMacSigningConfiguration: async () => ({
         teamId: 'ABCDE12345', notary: { teamId: 'ABCDE12345' }, certificatePath: '/protected/certificate.p12',
       }),
-      withTemporarySigningKeychain: async (_configuration: any, work: any, dependencies: any) => {
+      withTemporarySigningKeychain: async (_configuration: unknown, work: TrackedWork, dependencies: ProcessTracking) => {
         expect(dependencies.processTracker).toBe(outerTracker);
         return work({ keychain: '/tmp/signing.keychain-db', identity: {
           sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)', teamId: 'ABCDE12345',
@@ -77,18 +83,18 @@ it('gives the signed verifier a runner that captures output and carries both che
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
       // Like the real runner, the build runner streams output and resolves without it.
-      run: async (command: string, args: string[], options: any) => { calls.push({ command, args, options }); },
-      runCaptured: async (command: string, args: string[], options: any) => {
+      run: async (command: string, args: string[], options: RunOptions) => { calls.push({ command, args, options }); },
+      runCaptured: async (command: string, args: string[], options: RunOptions) => {
         calls.push({ command, args, options });
         return { stdout: '', stderr: 'Authority=Developer ID Application' };
       },
-      verifyDeveloperIdApplication: async (_app: string, _team: string, dependencies: any) => {
+      verifyDeveloperIdApplication: async (_app: string, _team: string, dependencies: { run: (command: string, args: string[]) => Promise<unknown> }) => {
         verifierOutput = await dependencies.run('fixture-signed-verifier', []);
         throw stopped;
       },
       timingReportDirectory: await temporaryRoot('xr-package-timings-'),
       timingLog: () => undefined,
-    } as any)).rejects.toBe(stopped);
+    })).rejects.toBe(stopped);
     const builder = calls.find((call) => call.args.some(isBuilderCli) && call.args.includes('--dir'));
     const verifier = calls.find((call) => call.command === 'fixture-signed-verifier');
     expect(builder?.options.processTrackers).toEqual(processTrackers);
@@ -103,10 +109,10 @@ it('gives the signed verifier a runner that captures output and carries both che
 function signedPackageDependencies(outputDir: string, overrides: Record<string, unknown>) {
   return {
     outputDir,
-    withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
+    withPackageCheckoutLock: async (_lock: string, work: TrackedWork) => work({ signal: new AbortController().signal, processTracker: {} }),
     readPackagingGitIdentity: async () => ({ commit: 'a'.repeat(40) }),
     loadMacSigningConfiguration: async () => ({ teamId: 'ABCDE12345', notary: { teamId: 'ABCDE12345' } }),
-    withTemporarySigningKeychain: async (_configuration: any, work: any, dependencies: any) => work({
+    withTemporarySigningKeychain: async (_configuration: unknown, work: TrackedWork, dependencies: ProcessTracking) => work({
       keychain: '/tmp/signing.keychain-db', identity: { sha1: 'A'.repeat(40), name: 'Developer ID Application: Example (ABCDE12345)' },
       signal: dependencies.signal, processTracker: {}, processTrackers: [],
     }),
@@ -150,28 +156,28 @@ it('notarizes the App once, gates the stapled App, builds the DMG and ZIP from i
       if (targets.includes('zip')) await writeFile(path.join(outputDir, 'XR-Collector-0.1.0-mac-arm64.zip'), 'zip');
     },
     verifyDeveloperIdApplication: async (app: string) => { events.push(`verify App Developer ID ${path.relative(outputDir, app)}`); },
-    notarizeAndStaple: async ({ kind, artifactPath }: any) => {
+    notarizeAndStaple: async ({ kind, artifactPath }: { kind: string; artifactPath: string }) => {
       events.push(`notarize ${kind} ${path.relative(outputDir, artifactPath)}`);
       return kind === 'app' ? appReceipt : dmgReceipt;
     },
-    validateNotarizedApplication: async (_app: string, options: any) => { events.push(`Gatekeeper App${options.stapleValidated ? ' (staple already validated)' : ''}`); },
-    verifyDeveloperIdDiskImage: async (_dmg: string, _team: string, options: any) => {
+    validateNotarizedApplication: async (_app: string, options: StapleOptions) => { events.push(`Gatekeeper App${options.stapleValidated ? ' (staple already validated)' : ''}`); },
+    verifyDeveloperIdDiskImage: async (_dmg: string, _team: string, options: StapleOptions) => {
       events.push(`verify DMG Developer ID and Gatekeeper${options.stapleValidated ? ' (staple already validated)' : ''}`);
       return { signature: {}, gatekeeper: { source: 'Notarized Developer ID', output: 'XR.dmg: accepted\nsource=Notarized Developer ID' } };
     },
-    verifySignedMacDmgContents: async (_dmg: string, _product: string, _team: string, options: any) => {
+    verifySignedMacDmgContents: async (_dmg: string, _product: string, _team: string, options: unknown) => {
       expect(options).toMatchObject({ expectedAppIdentity: stapledApp, verifyDeveloperId: false });
       events.push('verify DMG contents');
       return { appIdentity: stapledApp };
     },
-    verifySignedMacZip: async (zip: string, _product: string, _team: string, options: any) => {
+    verifySignedMacZip: async (zip: string, _product: string, _team: string, options: unknown) => {
       expect(options).toMatchObject({ expectedAppIdentity: stapledApp, verifyDeveloperId: false });
       expect((await stat(zip)).isFile()).toBe(true);
       events.push('verify ZIP contents');
       throw finished;
     },
     log: (line: string) => { logged.push(line); },
-  }) as any)).rejects.toBe(finished));
+  }))).rejects.toBe(finished));
   const app = path.join('mac-arm64', 'XR Collector.app');
   expect(events).toEqual([
     'build App',
@@ -201,7 +207,7 @@ it('builds no installer when the stapled App fails its Gatekeeper gate', async (
     verifyDeveloperIdApplication: async () => undefined,
     notarizeAndStaple: async () => ({ stapled: { bytes: 16, sha256: 'b'.repeat(64) }, stapleValidated: true }),
     validateNotarizedApplication: async () => { throw new Error('syspolicy_check distribution failed'); },
-  }) as any)).rejects.toThrow(/syspolicy_check distribution failed/u));
+  }))).rejects.toThrow(/syspolicy_check distribution failed/u));
   expect(built).toEqual(['App']);
 });
 
@@ -215,17 +221,17 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
   const failure = new Error('electron-builder exited with status 1');
   try {
     await expect(packageApplication({ target: 'darwin-arm64' }, {
-      withPackageCheckoutLock: async (_lock: string, work: any) => work({ signal: new AbortController().signal, processTracker: {} }),
+      withPackageCheckoutLock: async (_lock: string, work: TrackedWork) => work({ signal: new AbortController().signal, processTracker: {} }),
       readPackagingGitIdentity: async () => ({ commit: 'c'.repeat(40) }),
       assertBuildEnvironment: async () => [],
       probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
-      run: async (_command: string, args: string[], options: any) => {
+      run: async (_command: string, args: string[], options: RunOptions) => {
         if (args[0]?.endsWith('prepare-runtime.mjs')) runtimeCalls.push(args);
         if (!args.some(isBuilderCli)) return;
         builderCalls.push({ args, environment: options.environment });
-        const events = options.environment.XR_PACKAGE_TIMINGS_FILE;
+        const events = options.environment.XR_PACKAGE_TIMINGS_FILE!;
         const now = Date.now();
         await writeFile(events, [
           { event: 'mark', name: 'beforePack', at: now + 1 },
@@ -238,7 +244,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
       },
       timingReportDirectory: reportDirectory,
       timingLog: (text: string) => output.push(text),
-    } as any)).rejects.toBe(failure);
+    })).rejects.toBe(failure);
   } finally {
     if (previousNpmExecPath === undefined) delete process.env.npm_execpath;
     else process.env.npm_execpath = previousNpmExecPath;
@@ -256,7 +262,7 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
     version: '0.1.0', commit: 'c'.repeat(40), target: 'darwin-arm64', signingPolicy: 'ad-hoc',
   });
   const builderStage = 'electron-builder --mac (pack, ad-hoc codesign, ZIP, DMG)';
-  expect(report.stages.map((stage: any) => [stage.name, stage.status])).toEqual([
+  expect(report.stages.map((stage: Stage) => [stage.name, stage.status])).toEqual([
     ['read commit and require a clean checkout', 'ok'],
     ['check build environment', 'ok'],
     ['runtime: install yt-dlp/Deno and Meilisearch from cache', 'ok'],
@@ -543,20 +549,21 @@ it('reports a dead packaging owner\'s lock without removing it, removes its own 
 it('queries Windows packaging owners through PowerShell and fails closed when the query is unavailable', async () => {
   vi.stubEnv('PSModulePath', 'C:\\Program Files\\PowerShell\\7\\Modules');
   onTestFinished(() => { vi.unstubAllEnvs(); });
-  const calls: any[] = [];
-  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async (...args: any[]) => {
+  const calls: Array<[string, string[], { environment: Record<string, string> }]> = [];
+  await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async (...args: [string, string[], { environment: Record<string, string> }]) => {
     calls.push(args);
     return '4242|638972345678900000|S-1-5-21-1234';
   } })).resolves.toEqual({ pid: 4242, uid: 'S-1-5-21-1234', startedAt: '638972345678900000' });
-  expect(calls[0][0]).toBe('powershell.exe');
-  expect(calls[0][1]).toContain('-NonInteractive');
-  const script = calls[0][1].at(-1);
+  const [command, args, options] = calls[0]!;
+  expect(command).toBe('powershell.exe');
+  expect(args).toContain('-NonInteractive');
+  const script = args.at(-1);
   expect(script).not.toContain('\\"');
   expect(script).toContain("'{0}|{1}|{2}' -f");
   expect(script).toContain('Get-CimInstance');
   expect(script).toContain('GetOwnerSid');
   expect(script).not.toContain('[Environment]::UserName');
-  expect(calls[0][2].environment).not.toHaveProperty('PSModulePath');
+  expect(options.environment).not.toHaveProperty('PSModulePath');
 
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 44'); } })).resolves.toBeNull();
   await expect(readPackagingProcessIdentity(4242, { platform: 'win32', capture: async () => { throw new Error('powershell.exe exited with status 1'); } })).rejects.toThrow(/Unable to inspect packaging process/u);
@@ -676,7 +683,7 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   }, {
     describeArtifact: async () => actual,
     verifyDeveloperIdApplication: async () => { throw new Error('the final ZIP already ran the Developer ID gate on these bytes'); },
-  } as any);
+  });
   await expect(readBack(stapled, { bytes: 16, sha256: 'c'.repeat(64) })).rejects.toThrow(/differs from the verified stapled App/u);
   await expect(readBack(undefined)).rejects.toThrow(/differs from the verified stapled App/u);
   // Identical bytes pass the identity gate and continue to the resource read-back.

@@ -59,27 +59,27 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', disabl
         <span>{item.label}</span>{item.mode ? null : <span className="menu-tag">尚未支援</span>}
       </button>)}
     </div> : null}
-    {unsupported ? <UnsupportedDialog item={unsupported} onClose={() => { setUnsupported(null); button.current?.focus(); }} /> : null}
+    {unsupported ? <UnsupportedDialog item={unsupported} onClosed={() => { setUnsupported(null); button.current?.focus(); }} /> : null}
   </div>;
 }
 
-function UnsupportedDialog({ item, onClose }: { item: AddMenuItem; onClose: () => void }) {
+function UnsupportedDialog({ item, onClosed }: { item: AddMenuItem; onClosed: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const confirm = useRef<HTMLButtonElement>(null);
-  // A modal <dialog> makes the rest of the page inert, so it closes before onClose focuses the menu button.
+  // External: A modal <dialog> makes the rest of the page inert, so nothing outside it takes focus while it is open.
   // https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/dialog
-  const finish = () => { dialog.current?.close(); onClose(); };
+  const close = () => { dialog.current?.close(); onClosed(); };
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open) element.showModal();
     confirm.current?.focus();
   }, []);
   return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="unsupported-title" data-testid="unsupported-dialog"
-    onCancel={(event) => { event.preventDefault(); finish(); }}>
+    onCancel={(event) => { event.preventDefault(); close(); }}>
     <h2 id="unsupported-title">{item.dialogTitle}</h2>
     <p>{unsupportedText(item)}</p>
     <div className="dialog-actions">
-      <button ref={confirm} type="button" className="button primary" onClick={finish}>知道了</button>
+      <button ref={confirm} type="button" className="button primary" onClick={close}>知道了</button>
     </div>
   </dialog>;
 }

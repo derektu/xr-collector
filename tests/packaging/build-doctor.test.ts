@@ -57,8 +57,10 @@ async function check(target: string, options: { host?: object; tools?: Responses
   });
 }
 
-const byLabel = (results: any[], prefix: string) => results.find((result) => result.label.startsWith(prefix));
-const statuses = (results: any[]) => Object.fromEntries(results.map((result) => [result.label, result.status]));
+interface CheckResult { label: string; status: string }
+
+const byLabel = (results: CheckResult[], prefix: string) => results.find((result) => result.label.startsWith(prefix));
+const statuses = (results: CheckResult[]) => Object.fromEntries(results.map((result) => [result.label, result.status]));
 
 it('picks the native package target of the build machine and rejects other platforms', () => {
   expect(hostBuildTarget('darwin')).toBe('darwin-arm64');
@@ -106,7 +108,7 @@ it('reports the runtime cache and Mac signing state without failing on either', 
   const results = await check('darwin-arm64', {
     report: true,
     overrides: {
-      prepareRuntimeDependencies: async ({ outputDir }: any) => { prepared.push(outputDir); },
+      prepareRuntimeDependencies: async ({ outputDir }: { outputDir: string }) => { prepared.push(outputDir); },
       prepareMeilisearch: async () => { throw new Error('Meilisearch 1.53.2 for darwin-arm64 is missing from the runtime cache'); },
     },
   });

@@ -127,7 +127,7 @@ export async function writePackage(
       const source = 'bytes' in entry ? Readable.from([entry.bytes]) : createReadStream(entry.absolute);
       source.on('error', (error: Error) => measure.destroy(
         new CollectorError('invalid_request', `知識庫檔案在匯出途中無法讀取，請稍後再試：${entry.path}`, { cause: error })));
-      // yazl does not listen for errors of the streams it reads: https://github.com/thejoshwolfe/yazl/blob/3.3.1/index.js#L59-L79
+      // External: yazl does not listen for errors of the streams it reads: https://github.com/thejoshwolfe/yazl/blob/3.3.1/index.js#L59-L79
       measure.on('error', (error: Error) => output.destroy(error));
       done(null, source.pipe(measure));
     });

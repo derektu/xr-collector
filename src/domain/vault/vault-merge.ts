@@ -43,7 +43,7 @@ function documentState(bytes: Buffer, file: string): ItemState {
     delete section.updated_at;
     metadata.collector = section;
   }
-  // V8 keeps a whole file's text alive while a substring sliced from it lives: https://crbug.com/v8/2869
+  // External: V8 keeps a whole file's text alive while a substring sliced from it lives: https://crbug.com/v8/2869
   return { state: 'present', digest: digest(`${canonicalJson(metadata)}\n${match[2]!.trim()}`), at: at === null ? null : structuredClone(at) };
 }
 

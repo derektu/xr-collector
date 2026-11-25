@@ -20,7 +20,7 @@ export interface Feed {
 
 type XmlNode = Record<string, unknown>;
 
-// Stop nodes keep their content as raw text, so rawText decodes CDATA and entities itself.
+// External: fast-xml-parser keeps a stop node's content as raw text, with CDATA sections and entities undecoded.
 // https://github.com/NaturalIntelligence/fast-xml-parser/blob/master/docs/v4%2C%20v5/2.XMLparseOptions.md#stopnodes
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -89,7 +89,7 @@ function undatedFirstThenNewest(entries: FeedEntry[]): FeedEntry[] {
 
 function rssEntry(item: XmlNode, feedUrl: string): FeedEntry {
   const guid = text(item.guid);
-  // RSS 2.0: a guid is a permalink unless isPermaLink is "false".
+  // External: RSS 2.0: a guid is a permalink unless isPermaLink is "false".
   // https://www.rssboard.org/rss-specification#ltguidgtSubelementOfLtitemgt
   const permalink = attribute(item.guid, 'isPermaLink') !== 'false' ? resolve(guid, feedUrl) : null;
   const link = resolve(text(first(item.link)), feedUrl) ?? permalink;
@@ -111,7 +111,7 @@ function atomEntry(entry: XmlNode, feedBase: string): FeedEntry {
   const publishedAt = date(text(entry.published) || text(entry.updated));
   const title = plainTitle(entry.title);
   const content = node(entry.content) ?? (typeof entry.content === 'string' ? { '#text': entry.content } : null);
-  // Atom content with src is out-of-line; the element itself is empty.
+  // External: Atom content with src is out-of-line; the element itself is empty.
   // https://www.rfc-editor.org/rfc/rfc4287#section-4.1.3.2
   const full = content && !attribute(content, 'src') ? atomText(content) : '';
   const summaryNode = node(entry.summary) ?? (typeof entry.summary === 'string' ? { '#text': entry.summary } : null);
@@ -123,7 +123,7 @@ function atomEntry(entry: XmlNode, feedBase: string): FeedEntry {
   };
 }
 
-// Atom text constructs have type text, html or xhtml; text is the default.
+// External: Atom text constructs have type text, html or xhtml; text is the default.
 // https://www.rfc-editor.org/rfc/rfc4287#section-3.1
 function atomText(construct: XmlNode): string {
   const type = attribute(construct, 'type') ?? 'text';

@@ -49,12 +49,14 @@ async function workspaceOf(at: Machine): Promise<VaultWorkspace> {
   return open(at, { plugins: plugins() });
 }
 
-async function rssDocuments(vault: string): Promise<Array<{ front: Record<string, any>; body: string }>> {
+type Frontmatter = Record<string, unknown> & { collector: { id: string; content_extent: string } };
+
+async function rssDocuments(vault: string): Promise<Array<{ front: Frontmatter; body: string }>> {
   const folder = path.join(vault, 'documents', 'rss');
   if (!existsSync(folder)) return [];
   return Promise.all((await readdir(folder)).sort().map(async (file) => {
     const [front, body] = (await readFile(path.join(folder, file), 'utf8')).replace(/^---\n/u, '').split('\n---\n');
-    return { front: parse(front!) as Record<string, any>, body: body!.trim() };
+    return { front: parse(front!) as Frontmatter, body: body!.trim() };
   }));
 }
 
@@ -164,7 +166,7 @@ describe('a site that limits requests', () => {
     await subscribe(workspace, feeds.url('/b.xml'));
     const service = workspace.subscriptions.of('rss')!;
     const stored = async (id: string) => (JSON.parse(await readFile(path.join(a.vault, 'settings', 'rss-subscriptions.json'), 'utf8'))
-      .subscriptions as Array<Record<string, any>>).find((entry) => entry.id === id)!;
+      .subscriptions as Array<Record<string, unknown>>).find((entry) => entry.id === id)!;
 
     feeds.set('/a.xml', { status: 429, body: 'slow down' });
     feeds.set('/b.xml', { body: rss2('【合成】B 站', [{ title: '【合成】B 新文章', guid: 'b-new', publishedAt: ago(0.2), summary: '新' }, ...BLOG.slice(1, 2)]) });
@@ -225,7 +227,7 @@ describe('a site that limits requests', () => {
     await subscribe(workspace, feeds.url('/a.xml'));
     const service = workspace.subscriptions.of('rss')!;
     const stored = async () => (JSON.parse(await readFile(path.join(a.vault, 'settings', 'rss-subscriptions.json'), 'utf8'))
-      .subscriptions as Array<Record<string, any>>).find((entry) => entry.id === id)!;
+      .subscriptions as Array<Record<string, unknown>>).find((entry) => entry.id === id)!;
 
     const limitedBody = rss2('【合成】A 站', [{ title: '【合成】被限制的文章', guid: 'limited', publishedAt: ago(0.2), summary: '限' }, ...BLOG.slice(0, 1)]);
     feeds.set('/a.xml', { body: limitedBody });

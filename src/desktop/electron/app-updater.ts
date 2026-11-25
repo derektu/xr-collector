@@ -2,7 +2,6 @@ import { CancellationToken, MacUpdater, NsisUpdater, type AppUpdater as Electron
 import { updateFeedUrl, type AppUpdater } from '../../domain/updates/index.js';
 
 export interface DesktopUpdater extends AppUpdater {
-  /** Hands the downloaded update to the platform installer, which quits the App and starts the new version. */
   quitAndInstall(): void;
 }
 
@@ -13,11 +12,6 @@ const unavailable: DesktopUpdater = {
   quitAndInstall: () => undefined,
 };
 
-/**
- * electron-updater for the packaged Mac and Windows App. It reads the feed electron-builder wrote
- * to app-update.yml, unless `feedUrl` names a generic feed. `installFailed` receives, once, the first
- * error the updater reports after `quitAndInstall`, when the installer could not take over.
- */
 export function desktopUpdater(options: {
   packaged: boolean;
   platform: NodeJS.Platform;
@@ -30,7 +24,7 @@ export function desktopUpdater(options: {
   updater.autoInstallOnAppQuit = false;
   if (options.feedUrl) updater.setFeedURL({ provider: 'generic', url: updateFeedUrl(options.feedUrl) });
   let installing = false;
-  // electron-updater is an EventEmitter that reports failures as `error` events, and an `error` event without a listener throws.
+  // External: electron-updater is an EventEmitter that reports failures as `error` events, and an `error` event without a listener throws.
   // https://nodejs.org/docs/latest-v22.x/api/events.html#error-events
   updater.on('error', (error: Error) => {
     if (!installing) return;

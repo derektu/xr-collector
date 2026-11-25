@@ -116,7 +116,7 @@ it('reports a lock whose holder and recorded child processes have ended, naming 
   for (const [name, owner] of Object.entries(owners)) {
     const lock = await staleLock(root, name, owner);
     const before = await snapshot(lock);
-    const failure = await withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', async () => null)).catch((error: any) => error);
+    const failure = await withOwnedDirectoryLock(lock, async () => 'acquired', lockOptions('b2', async () => null)).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: lock });
     expect(failure.message).toContain(`Owned lock ${lock} was left by process 41 (started dead)`);
     expect(failure.message).toContain('not removed automatically');
@@ -148,7 +148,7 @@ it('leaves the lock in place when its own was deleted and another run took the p
   const failure = await withOwnedDirectoryLock(lock, async () => {
     await rm(lock, { recursive: true });
     await staleLock(root, 'lock');
-  }, lockOptions('b2', async () => null)).catch((error: any) => error);
+  }, lockOptions('b2', async () => null)).catch((error: unknown) => error);
   expect(failure.message).toBe(`Owned lock ${lock} no longer holds this run's owner record; it was removed while held and is left as found.`);
   expect(await readdir(lock)).toEqual(['owner-a1.json']);
 });

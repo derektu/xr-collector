@@ -7,17 +7,15 @@ import { CollectorError } from '../../../shared/lib/collector-error.js';
 import { maskSecretsJson } from '../../../shared/lib/redact.js';
 
 export const MAX_STREAMS = 16;
-/**
- * A comment line keeps an idle connection open through sleep and proxies.
- * https://html.spec.whatwg.org/multipage/server-sent-events.html#authoring-notes
- */
+// External: A comment line keeps an idle server-sent events connection open through sleep and proxies.
+// https://html.spec.whatwg.org/multipage/server-sent-events.html#authoring-notes
 const HEARTBEAT_MS = 30_000;
 const MAX_WAIT_SECONDS = 60;
 
 export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed): void {
   const started = new WeakMap<object, string>();
   app.addHook('onRequest', async (request) => { started.set(request, changes.revision); });
-  // Fastify still runs onSend for a request an earlier hook replied to, without the onRequest hook above.
+  // External: Fastify still runs onSend for a request an earlier hook replied to, without the onRequest hook above.
   // https://fastify.dev/docs/latest/Reference/Hooks/#respond-to-a-request-from-a-hook
   app.addHook('onSend', async (request, reply, payload) => {
     const revision = started.get(request);

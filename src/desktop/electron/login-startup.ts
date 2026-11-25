@@ -54,7 +54,7 @@ export class DesktopLoginStartup implements LoginStartupAccess {
         if (this.adapter.platform === 'darwin') {
           this.adapter.set({ openAtLogin: enabled, type: 'mainAppService' });
         } else {
-          // On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
+          // External: On Windows, Electron's getLoginItemSettings reads openAtLogin from the Run value named by the AppUserModelId, never from `name`.
           // https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
           this.adapter.set({ openAtLogin: enabled, enabled, ...this.currentWindowsOptions(), name: this.appId });
         }
@@ -108,7 +108,7 @@ function windowsStatus(settings: LoginItemSettings, appId: string, executablePat
 }
 
 function ownedWindowsItem(settings: LoginItemSettings, appId: string, executablePath: string): LaunchItem | undefined {
-  // On Windows, Electron fills launchItems[].args from Chromium's CommandLine::GetArgs(), which leaves out switches such as --login-startup.
+  // External: On Windows, Electron fills launchItems[].args from Chromium's CommandLine::GetArgs(), which leaves out switches such as --login-startup.
   // https://github.com/electron/electron/blob/v44.10.0/shell/browser/browser_win.cc
   return settings.launchItems?.find((item) => item.name === appId
     && item.scope === 'user' && samePath(item.path, executablePath));

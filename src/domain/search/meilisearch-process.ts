@@ -91,13 +91,9 @@ export function pidFilePath(databasePath: string): string {
   return `${path.resolve(databasePath)}.pid`;
 }
 
-/**
- * Stops the engine a killed run left on this database: the recorded process, while it still runs the
- * engine's executable. On Windows the record is only cleared, since no engine outlives its app there.
- */
 export async function stopLeftoverMeilisearchProcess(options: StartMeilisearchOptions): Promise<void> {
   const pidFile = pidFilePath(options.databasePath);
-  // libuv places every child it spawns on Windows in a job object that kills them when the parent
+  // External: libuv places every child it spawns on Windows in a job object that kills them when the parent
   // process ends, however it ends: https://github.com/libuv/libuv/blob/v1.51.0/src/win/process.c
   const pid = process.platform === 'win32' ? null : await recordedPid(pidFile);
   if (pid !== null && isAlive(pid) && await executableName(pid) === path.basename(options.binaryPath)) {
@@ -136,7 +132,7 @@ function isAlive(pid: number): boolean {
 
 async function executableName(pid: number): Promise<string | null> {
   try {
-    // On macOS, `ps -o comm=` prints the executable's full path, not only its name.
+    // External: On macOS, `ps -o comm=` prints the executable's full path, not only its name.
     const { stdout } = await run('ps', ['-p', String(pid), '-o', 'comm=']);
     return path.basename(stdout.trim()) || null;
   } catch {

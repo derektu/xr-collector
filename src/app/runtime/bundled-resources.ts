@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 export type ResourceLayout =
   | { packaged: false; checkout: string }
-  // Electron's `process.resourcesPath` is the path to the package's resources folder.
+  // External: Electron's `process.resourcesPath` is the path to the package's resources folder.
   // https://github.com/electron/electron/blob/v44.10.0/docs/api/process.md#processresourcespath-readonly
   | { packaged: true; resourcesPath: string };
 

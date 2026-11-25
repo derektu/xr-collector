@@ -20,7 +20,7 @@ function filesUnder(directory: string): string[] {
 describe('API table', () => {
   it('refuses a handler or a client that reads another response key than its route declares', () => {
     // tests/tooling/fixtures/api-route-types marks each mismatch with `@ts-expect-error`.
-    const result = spawnSync(process.execPath, [path.resolve('node_modules/typescript/bin/tsc'), '-p', 'tests/tooling/fixtures/api-route-types'], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [path.resolve('node_modules/typescript-7/bin/tsc'), '-p', 'tests/tooling/fixtures/api-route-types'], { encoding: 'utf8' });
     expect(`${result.stdout}${result.stderr}`).toBe('');
     expect(result.status).toBe(0);
   });

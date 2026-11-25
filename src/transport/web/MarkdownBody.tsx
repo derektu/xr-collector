@@ -10,7 +10,7 @@ const components: Components = {
     : null,
 };
 
-// With skipHtml false, react-markdown keeps raw HTML in the body as plain text instead of dropping it.
+// External: With skipHtml false, react-markdown keeps raw HTML in the body as plain text instead of dropping it.
 // https://github.com/remarkjs/react-markdown#appendix-a-html-in-markdown
 export function MarkdownBody({ markdown }: { markdown: string }) {
   return <Markdown remarkPlugins={[remarkGfm]} components={components} skipHtml={false}>{markdown}</Markdown>;

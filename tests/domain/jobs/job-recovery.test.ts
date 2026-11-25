@@ -805,4 +805,17 @@ describe('the order interrupted jobs are restored in', () => {
     });
     expect(restored).toEqual(['old-a', 'b', 'new-a']);
   });
+
+  it('restores jobs created in the same millisecond in the reverse of the order the records come in', async () => {
+    const restored: string[] = [];
+    await resumeInterrupted({
+      sources: PRODUCT_SOURCES,
+      stored: () => [interrupted('first', videoId(1), 0), interrupted('second', videoId(2), 0), interrupted('third', videoId(3), 0)],
+      runs: () => true,
+      stopped: async () => null,
+      settle: () => { throw new Error('nothing settles'); },
+      restore: (job) => { restored.push(job.id); },
+    });
+    expect(restored).toEqual(['third', 'second', 'first']);
+  });
 });

@@ -33,7 +33,7 @@ function dialogs(options: { status?: TransferStatus; save?: string | null; open?
     },
   } as unknown as Pick<Dialog, 'showOpenDialog' | 'showSaveDialog'>;
   registerDesktopDialogs({
-    ipc: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: any[]) => unknown) => { handlers.set(channel, handler); } } as never,
+    ipc: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => { handlers.set(channel, handler); } } as never,
     dialog,
     windowOf: () => owner,
     showItemInFolder: (file) => { revealed.push(file); },

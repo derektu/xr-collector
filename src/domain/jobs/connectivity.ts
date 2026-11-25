@@ -12,7 +12,7 @@ export interface ProbeAddress {
   accepts: (response: Response) => Promise<boolean>;
 }
 
-// A captive portal answers a request to a vendor endpoint with its own page instead of the fixed response.
+// External: A captive portal answers a request to a vendor endpoint with its own page instead of the fixed response.
 // https://www.rfc-editor.org/rfc/rfc8952.html#appendix-A
 const PROBE_ADDRESSES: readonly ProbeAddress[] = [
   { url: 'http://connectivitycheck.gstatic.com/generate_204', accepts: async (response) => response.status === 204 },
