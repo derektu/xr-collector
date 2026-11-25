@@ -326,15 +326,13 @@ export class SubscriptionService {
       const current = records.find((candidate) => candidate.id === id);
       if (!current) return new Map();
       const patch: Partial<SubscriptionRecord> = {};
-      if (candidates && current.outOfRange?.some((entry) => !candidates.has(key(entry)))) {
+      if (current.outOfRange?.some((entry) => !candidates.has(key(entry)))) {
         patch.outOfRange = current.outOfRange.filter((entry) => candidates.has(key(entry)));
       }
-      if (candidates && collecting) {
-        const kept = (entry: ItemFailureEntry) => candidates.has(key(entry)) && (entry.skipped || collecting.has(key(entry)));
-        if (current.failures?.some((entry) => !kept(entry))) {
-          const failures = current.failures.filter(kept);
-          patch.failures = failures.length > 0 ? failures : undefined;
-        }
+      const kept = (entry: ItemFailureEntry) => candidates.has(key(entry)) && (entry.skipped || collecting.has(key(entry)));
+      if (current.failures?.some((entry) => !kept(entry))) {
+        const failures = current.failures.filter(kept);
+        patch.failures = failures.length > 0 ? failures : undefined;
       }
       return Object.keys(patch).length > 0 ? new Map([[id, patch]]) : new Map();
     });

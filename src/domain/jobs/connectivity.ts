@@ -54,13 +54,6 @@ export interface ConnectivityOptions {
   now?: () => Date;
 }
 
-/**
- * Whether this device has a network, as collection needs to know it. The device counts as online
- * until a confirmation fails. Nothing is probed while online; a collection request that fails with
- * `network_error` asks for a confirmation, and an online answer stands in for the next ones for a
- * while, so one unreachable source does not probe on every failure. While offline the device is
- * confirmed every `offlineRecheckMs`, except while the system sleeps; waking confirms at once.
- */
 export class Connectivity {
   private state: ConnectivityState = 'online';
   private checkedAt: Date | null = null;
@@ -81,8 +74,8 @@ export class Connectivity {
   }
 
   /**
-   * After a request failed for lack of a network: confirms the device's network, or answers with
-   * the online result of a recent confirmation.
+   * For a request that failed with `network_error`: confirms the device's network, or answers with
+   * an online result less than `onlineReuseMs` old.
    */
   confirm(): Promise<ConnectivityState> {
     const reuseMs = this.options.onlineReuseMs ?? ONLINE_REUSE_MS;

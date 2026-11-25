@@ -92,8 +92,8 @@ export class SubscriptionRecorder implements SubscriptionPort {
     }
     this.reports.push({
       kind: 'checked', type, id,
-      ...(report.candidates ? { candidates: [...report.candidates] } : {}),
-      ...(report.collecting ? { collecting: [...report.collecting] } : {}),
+      candidates: [...report.candidates],
+      collecting: [...report.collecting],
     });
     return this.stopped(type, id);
   }

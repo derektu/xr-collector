@@ -17,11 +17,6 @@ interface JobsFile {
   jobs: CollectionJob[];
 }
 
-/**
- * Device-side record of collection jobs. Jobs live in one JSON snapshot that is replaced atomically,
- * outside every Vault. The store does not keep the jobs' timeline: `event()` hands each event to the
- * recorder it was given, the device activity log, whose retention never removes a job record.
- */
 export class JobStore {
   private readonly jobs = new Map<string, CollectionJob>();
   private flushing: Promise<void> | null = null;
@@ -35,19 +30,10 @@ export class JobStore {
     private readonly noteChange: NoteChange = () => undefined,
   ) {}
 
-  /**
-   * Keeps every job in memory; for tests and runtimes without a device profile. `sources` gives
-   * the roles of the stored jobs' kinds; `noteChange` hears every job change.
-   */
   static memory(sources: SourceDeclarations, events: EventRecorder, now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
     return new JobStore(null, sources, events, now, noteChange);
   }
 
-  /**
-   * Loads the previous snapshot. Jobs still queued or running belong to a process that stopped
-   * without closing, so they become interrupted with their scope and progress kept; a job caught in
-   * the middle of a step counts an unclean stop. `sources` gives the roles of the stored jobs' kinds.
-   */
   static async open(
     directory: string, sources: SourceDeclarations, events: EventRecorder, now: () => Date = () => new Date(), noteChange?: NoteChange,
   ): Promise<JobStore> {
@@ -82,10 +68,7 @@ export class JobStore {
     return job ? structuredClone(job) : undefined;
   }
 
-  /**
-   * Jobs of one Vault, newest first; jobs created in the same millisecond keep their submission order.
-   * A job belongs to the Vault when both its path and its Vault ID match.
-   */
+  /** Newest first; jobs created in the same millisecond keep their submission order. */
   list(vaultPath: string, vaultId: string): CollectionJob[] {
     return [...this.jobs.values()]
       .filter((job) => belongsTo(job, vaultPath, vaultId))
@@ -101,7 +84,6 @@ export class JobStore {
     this.noteChange({ kind: 'job', id: job.id, parentId: job.parentId, state: job.state });
   }
 
-  /** Marks an unfinished job interrupted, as a stopped service leaves it; the job resumes when its Vault opens. */
   interrupt(job: CollectionJob, message: string, options: { stop: JobStopKind; unclean?: boolean }): void {
     const timestamp = this.now().toISOString();
     const interrupted: CollectionJob = {
@@ -139,7 +121,10 @@ export class JobStore {
     return this.jobs.get(id)?.source.title || undefined;
   }
 
-  /** Resolves once every job change so far is on disk. */
+  /**
+   * Resolves once every job change so far is written to disk, or its write failed and was logged; a
+   * memory store resolves at once.
+   */
   async flush(): Promise<void> {
     while (this.dirty || this.flushing) {
       if (this.flushing) await this.flushing;
