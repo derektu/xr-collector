@@ -52,10 +52,6 @@ export async function checkExportFile(value: unknown, overwrite: boolean): Promi
 
 export const EXPORT_FOLDER_NAME = 'XR Collector 匯出';
 
-/**
- * The default export folder: `XR_COLLECTOR_EXPORT_DIR` when set, otherwise `XR Collector 匯出` in
- * `documents`. `paths` joins with the separators of the platform the folder is on.
- */
 export function exportFolder(documents: string, paths: Pick<typeof path, 'join'> = path): string {
   const configured = process.env.XR_COLLECTOR_EXPORT_DIR?.trim();
   return configured ? path.resolve(configured) : paths.join(documents, EXPORT_FOLDER_NAME);
@@ -63,10 +59,6 @@ export function exportFolder(documents: string, paths: Pick<typeof path, 'join'>
 
 export const BACKUP_FOLDER_NAME = 'XR Collector 備份';
 
-/**
- * The backup folder: `XR_COLLECTOR_BACKUP_DIR` when set, otherwise `XR Collector 備份` in `documents`.
- * `paths` joins with the separators of the platform the folder is on.
- */
 export function backupFolder(documents: string, paths: Pick<typeof path, 'join'> = path): string {
   const configured = process.env.XR_COLLECTOR_BACKUP_DIR?.trim();
   return configured ? path.resolve(configured) : paths.join(documents, BACKUP_FOLDER_NAME);
@@ -75,7 +67,6 @@ export function backupFolder(documents: string, paths: Pick<typeof path, 'join'>
 const pad = (value: number) => String(value).padStart(2, '0');
 const localDay = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-/** "XR Collector 匯出 2026-10-19.zip", in local time. */
 export function exportFileName(now: Date): string {
   return `XR Collector 匯出 ${localDay(now)}.zip`;
 }

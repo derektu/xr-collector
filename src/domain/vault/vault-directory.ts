@@ -22,8 +22,7 @@ export interface VaultMarker {
 
 const VAULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-// Finder (.DS_Store, .localized) and Windows Explorer (Thumbs.db, desktop.ini) create these files on their own,
-// so they do not make a folder non-empty.
+// Finder (.DS_Store, .localized) and Windows Explorer (Thumbs.db, desktop.ini) create these files in folders on their own.
 const IGNORED_ENTRIES = new Set(['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini']);
 function settingsFiles(sources: SourceRegistry): Array<{ file: string; check: (value: unknown) => unknown }> {
   const exchange = sources.exchange;

@@ -4,7 +4,6 @@ import path from 'node:path';
 import { replaceFile } from '../../shared/lib/json-file.js';
 import { errorCode } from './errno.js';
 
-/** Device-local record of which Vault this profile uses; never stored inside a Vault. */
 export class VaultSelection {
   readonly file: string;
 
@@ -12,7 +11,7 @@ export class VaultSelection {
     this.file = path.join(profilePath, 'vault-selection.json');
   }
 
-  /** Returns the saved absolute Vault path, or null when this device has not chosen one. */
+  /** Null when this device has not chosen a Vault; throws when the file is damaged. */
   async read(): Promise<string | null> {
     let value: unknown;
     try {

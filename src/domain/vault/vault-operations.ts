@@ -67,18 +67,6 @@ class PartialImport extends Error {
   }
 }
 
-/**
- * Every operation on the Vault in use, under one operation lock: export, import, creating a new
- * Vault and opening another, one at a time, with writes refused while one runs. Each runs the same
- * lifecycle: stop dispatch, wait for collection steps under way, carry out the operation, resume
- * collection, then publish the completed or error state.
- *
- * An export writes the Vault into an export file. An import compares an export file with the Vault
- * and keeps the comparison until it is applied in place, after the Vault is backed up. Applying
- * first extracts every incoming file into a staging folder in the Vault, then puts each in place;
- * an import that fails while it puts files in place ends in `error` with `result.partiallyApplied`
- * and the backup in `result.backupPath`.
- */
 export class VaultOperations {
   private readonly lock: VaultOperationLock;
   private readonly machine: string;
@@ -114,7 +102,7 @@ export class VaultOperations {
     return null;
   }
 
-  /** Takes a write lease for one request, or throws while an operation runs; returns the release. */
+  /** Throws `vault_busy` while an operation runs; otherwise the request holds a write lease until it calls the returned release. */
   enterWrite(): () => void { return this.lock.enterWrite(); }
 
   /** Resolves once the operation under way has published its final state and the job records it changed are written. */
@@ -123,19 +111,11 @@ export class VaultOperations {
     await this.host.flushJobs();
   }
 
-  /** Where an export goes when no other place is chosen: the export folder and a file name of today. */
   exportSuggestion(): ExportSuggestion {
     const folder = this.options.exportFolder;
     return { folder, path: path.join(folder, exportFileName(new Date())) };
   }
 
-  /**
-   * Writes the export of the active Vault to `file`, or to the suggested file in the export folder
-   * when `file` is left out; an existing file is replaced only with `overwrite`. A missing export
-   * folder is created for a file inside it, such as the suggested file the export dialog fills in;
-   * any other folder must exist, so a mistyped path is reported instead of creating a folder. The
-   * export only reads the Vault.
-   */
   async exportTo(file?: unknown, overwrite = false): Promise<TransferStatus> {
     const requested = file ?? this.exportSuggestion().path;
     const intoExportFolder = typeof requested === 'string' && path.isAbsolute(requested)
@@ -167,10 +147,6 @@ export class VaultOperations {
     });
   }
 
-  /**
-   * Compares an export file with the active Vault and keeps the comparison for `applyImport`. The
-   * file stays where it is; the comparison is dropped when another Vault operation starts.
-   */
   async previewImport(file: unknown): Promise<ImportPreview> {
     const source = await checkPackageFile(file);
     return this.run('import', '匯入', async (reporter) => {
@@ -202,7 +178,6 @@ export class VaultOperations {
     return { comparison: compareItems(localStates, await itemStates(sources, reader)), local, localStates };
   }
 
-  /** Forgets the import comparison waiting to be applied. */
   dropPreview(): void {
     this.preview = null;
   }
@@ -214,11 +189,6 @@ export class VaultOperations {
     this.lock.setIdle('已取消匯入，資料未變更。');
   }
 
-  /**
-   * Applies a compared import in place: a merge takes every item whose state in the file is newer,
-   * a replace makes every item what the file holds, both as the Vault and the file are when the
-   * import runs. Progress is in `status`.
-   */
   applyImport(id: string, mode: unknown): TransferStatus {
     if (!this.preview || this.preview.value.id !== id) throw new CollectorError('invalid_request', '比對已失效，請重新選擇匯入檔。');
     if (mode !== 'merge' && mode !== 'replace') throw new CollectorError('invalid_request', 'mode 必須是 merge 或 replace。');
@@ -302,10 +272,6 @@ export class VaultOperations {
     }
   }
 
-  /**
-   * Switches to another existing Vault; progress is in `status`. The active Vault stays where it is,
-   * and its unfinished jobs continue when it is opened again.
-   */
   async openOther(value: unknown): Promise<TransferStatus> {
     const problem = this.relocationProblem();
     if (problem) throw problem;
@@ -321,11 +287,6 @@ export class VaultOperations {
     return this.status();
   }
 
-  /**
-   * Creates the new Vault folder `name` in `location` and switches to it; progress is in `status`.
-   * The folder is checked before anything stops, and a switch that fails removes the new folder, so
-   * the active Vault stays in use and the location stays as it was.
-   */
   async createNew(location: unknown, name: unknown): Promise<TransferStatus> {
     const problem = this.relocationProblem();
     if (problem) throw problem;
