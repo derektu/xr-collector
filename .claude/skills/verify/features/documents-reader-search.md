@@ -38,8 +38,8 @@ Preconditions:
 - **閱讀。** 點 A 第 1 集。`reader-body` 含「【合成字幕】」，`reader-publisher` 顯示頻道，`reader-source-link` 指向影片網址。
 - **刪除。** `reader-delete` → `confirm-delete-document`，先取消確認仍可閱讀，再按「刪除」。畫面返回原入口，文件從列表與搜尋消失，`vault/settings/deleted-documents.json` 多一筆。重新開啟同一 ID 才顯示 `reader-deleted`。列表每列的 `document-more` →「刪除」也有相同確認。
 - **重新收集。** 重新開啟已刪除的 YouTube ID，點 `reader-recollect`，完成後 `reader-body` 再次出現。已刪除 RSS ID 不提供此按鈕。
-- **搜尋索引設定。** 設定頁 `settings-search-index` 的 `search-index-state` 顯示索引狀態；背景收集新增文件後，「已索引 N 份／知識庫 M 份」會隨既有收集狀態訊號重新讀取，不必離開頁面。
-- **重建索引。** 設定頁按「重建索引」，等 `search-index-state` 回到「就緒」；與 `GET /api/search/status` 的 `status` 物件比對，索引筆數應等於 Vault 文件數，Vault 文件內容不變。索引與 Vault 篇數不同時，卡片提示可以重建。
+- **搜尋索引設定。** 設定頁 `settings-search-index` 的 `search-index-state` 顯示索引狀態；背景收集新增文件後，「已索引 N 份／知識庫 M 份」在搜尋狀態改變時（change feed 的 `search`）重新讀取，不必離開頁面。
+- **重建索引。** 設定頁按「重建索引」（`search-rebuild`），等 `search-index-state` 的 `data-state` 回到 `ready`（「就緒」）；與 `GET /api/search/status` 的 `status` 物件比對，索引筆數應等於 Vault 文件數，Vault 文件內容不變。索引與 Vault 篇數不同時，卡片提示可以重建。
 - **搜尋不可用。** 搜尋 API 回 `search_unavailable` 時，`search-unavailable` 提示保留搜尋字串，下方退回相同來源的 Vault 瀏覽列表，仍可閱讀；「前往設定」開啟索引設定。路由 stub 可證明此 UI 分支，回報須明說未造成真實引擎故障。
 
 ## Gotchas

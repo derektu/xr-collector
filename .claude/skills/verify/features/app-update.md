@@ -41,7 +41,7 @@ Preconditions: 共用狀態用 Web 合成 instance、`vault: 'none'`；verificat
 - 版本更新任何 phase 都不送 OS notification；用設定頁、側欄、原生選單或系統匣圖示確認狀態。
 - 只檢查不會改掉已下載的 ready；但一開始下載較新的版本，ready 就清成 null，先前可安裝的版本跟著失效，取消下載後回到 `available`，要重新下載才能安裝。
 - 官方來源是 GitHub Releases：electron-updater 讀最新穩定 Release 中本平台的 `latest-mac.yml`／`latest.yml`，沒有本平台 feed（`ERR_UPDATER_CHANNEL_FILE_NOT_FOUND`）時是「已是最新版」。`XR_COLLECTOR_UPDATE_BASE_URL` 可指向 generic feed，必須是 HTTPS 或 loopback HTTP。App 只取新版的版本號，不顯示版本說明。
-- Mac 由 Squirrel.Mac／ShipIt 安裝，只有 Developer ID 簽章並公證的包能更新；ad-hoc 包被拒絕時 App 重開舊版並在設定頁顯示原因。Windows 走 electron-updater 的 NSIS 路徑。新版啟動失敗不會自動退回，兩者失敗都不能報成功。
+- Mac 由 Squirrel.Mac／ShipIt 安裝，只有 Developer ID 簽章並公證的包能更新；ad-hoc 包被拒絕時 App 重開舊版，設定頁以 `update-attempt-problem` 顯示未完成安裝的短句。Windows 走 electron-updater 的 NSIS 路徑。新版啟動失敗不會自動退回，兩者失敗都不能報成功。
 
 ## Regression flows
 
