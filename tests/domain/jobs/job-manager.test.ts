@@ -2,7 +2,7 @@
 // however often it is submitted, captures rotate between jobs so one large channel does not hold up
 // the rest, and on a stop running work finishes, unfinished work reads interrupted and an unreadable
 // jobs file is set aside.
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +13,7 @@ import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import { JobManager, type JobLimits } from '../../../src/domain/jobs/job-manager.js';
+import { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { memoryJobRecords, openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
 import { readEventFiles } from '../../support/event-files.js';
@@ -101,7 +102,7 @@ class ControlledSource implements YouTubeSource {
   }
 }
 
-function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
+function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; store?: JobStore; failIndex?: boolean; recentTargets?: RecentTargets } = {}) {
   const vault = new MemoryVault();
   const subs = new SubscriptionRecorder();
   const source = new ControlledSource();
@@ -109,7 +110,7 @@ function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; fai
     index: vi.fn(async () => { if (options.failIndex) throw new Error('meilisearch down'); }),
   };
   const records = options.records ?? memoryJobRecords(PRODUCT_SOURCES);
-  const store = records.jobs;
+  const store = options.store ?? records.jobs;
   let sequence = 0;
   const manager = new JobManager({
     sources: PRODUCT_SOURCES,
@@ -471,6 +472,56 @@ describe('JobStore', () => {
     expect(store.get('oldest-interrupted')).toMatchObject({ state: 'interrupted' });
     expect(store.get('oldest-completed')).toBeUndefined();
     expect(store.list(VAULT, VAULT_ID)).toHaveLength(1001);
+  });
+
+  describe('when jobs.json cannot be written', () => {
+    const NO_EVENTS = { event: () => undefined };
+    const blockWrites = async (folder: string) => { await rm(folder, { recursive: true, force: true }); await writeFile(folder, ''); };
+    const allowWrites = async (folder: string) => { await rm(folder, { force: true }); await mkdir(folder); };
+    const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    it('refuses a submit with jobs_write_failed rather than accept a job a stop would lose, still starts the job, and a later submit joins it once writing works', async () => {
+      directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-unwritable-'));
+      const error = quiet();
+      try {
+        const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS);
+        const { manager, source } = setup({ store });
+        await blockWrites(directory);
+        await expect(manager.submitItem('youtube', watchUrl(videoId(1)))).rejects.toMatchObject({ code: 'jobs_write_failed' });
+        await expect(store.flush()).rejects.toMatchObject({ code: 'jobs_write_failed' });
+        await source.holds.started(videoId(1));
+
+        await allowWrites(directory);
+        const again = await manager.submitItem('youtube', watchUrl(videoId(1)));
+        expect(again.deduplicated).toBe(true);
+        expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs.map((job: { id: string }) => job.id)).toEqual([again.job.id]);
+        source.release(videoId(1));
+        await manager.whenSettled(again.job.id);
+        await manager.close();
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('fails a running job whose progress cannot be written, and closing still finishes', async () => {
+      directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-unwritable-'));
+      const error = quiet();
+      try {
+        const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS);
+        const { manager, source } = setup({ store });
+        const id = videoId(2);
+        const submission = await manager.submitItem('youtube', watchUrl(id));
+        await source.holds.started(id);
+        await store.flush();
+        await blockWrites(directory);
+        source.release(id);
+        expect(await manager.whenSettled(submission.job.id)).toMatchObject({ state: 'failed', error: { code: 'jobs_write_failed' } });
+        await manager.close();
+        await store.close();
+      } finally {
+        error.mockRestore();
+      }
+    });
   });
 
   it.each(['', '{"version":1,"jobs":"broken"}', '{"version":99,"jobs":[]}'])(

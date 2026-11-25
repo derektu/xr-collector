@@ -58,7 +58,7 @@ UI 與 Agent 共用 Collector、Vault、收集工作、訂閱、排程和搜尋�
 
 ## 收集工作與訂閱
 
-收集以工作執行，規則細節見 [收集流程](collection-flow.md)。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
+收集以工作執行，規則細節見 [收集流程](collection-flow.md)。HTTP 先把工作寫入 profile 的 `jobs/jobs.json` 再回傳 202，寫不進時回 500 `jobs_write_failed`（工作留在記憶體，再送一次併入同一筆）；執行中的工作寫不進進度時以同一個錯誤失敗，不記入訂閱的項目失敗與連續檢查失敗；關閉時寫不進只記 log。網路解析與擷取都在 `JobManager` 的背景佇列中完成：訂閱解析與檢查、單一項目擷取各有並行上限（擷取一次一則），擷取在提交它的工作之間輪替。每個 Vault bundle 有自己的 `JobManager`，持有該 Vault 的文件、搜尋與訂閱物件，因此工作只寫入提交時的 Vault。
 
 `JobManager` 與訂閱之間只有訂閱 port 這一條 seam；正式環境由 `SubscriptionServices` 實作。只有開始探索的新檢查算一次派工，由 `SubscriptionService` 送出並更新派工時間：定時檢查、立即檢查與新增訂閱後的首次檢查。新增訂閱的工作解析完網址後，把結果與接受時的收集設定交給 `SubscriptionService` 建立訂閱並派工首次檢查。重試檢查工作等於一次立即檢查，算派工；重啟後從頭再跑的中斷檢查不是派工，不更新派工時間。檢查結束時 `JobManager` 回報結束時間與失敗原因，`SubscriptionService` 據此寫入收集進度並決定是否自動暫停。檢查開始探索前向 port 取得計畫，或得知訂閱已暫停／移除；計畫帶著訂閱的候選規則（`src/domain/subscriptions/candidates.ts`：收集範圍、項目上限、要排除的項目），`JobManager` 只列出來源、把清單交給計畫，依它挑出的項目排入工作；項目工作寫入持久紀錄後才回報這次的候選，收集進度因此一定在項目工作之後寫入。工作內暫時性錯誤的自動重試次數屬於 `JobManager`，同一項目跨檢查的失敗次數屬於 `SubscriptionService`，兩者分開計算。
 

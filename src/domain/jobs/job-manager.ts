@@ -265,6 +265,14 @@ export class JobManager {
 
   get vaultPath(): string { return this.options.vaultPath; }
 
+  private async flushThenPump(): Promise<void> {
+    try {
+      await this.options.store.flush();
+    } finally {
+      this.pump();
+    }
+  }
+
   private get vaultId(): string { return this.options.vaultId; }
 
   private owns(job: CollectionJob): boolean {
@@ -278,8 +286,7 @@ export class JobManager {
 
   async submitItem(type: string, url: string): Promise<JobSubmission> {
     const submission = this.enqueueItem(type, this.requirePlugin(type).parseItem(url), null);
-    await this.options.store.flush();
-    this.pump();
+    await this.flushThenPump();
     return submission;
   }
 
@@ -302,16 +309,14 @@ export class JobManager {
       scope: { trigger: 'subscribe' },
       checkpoint: { settings: { ...accepted }, ...(target ? { target: { id: target.id, title: target.title, url: target.url } } : {}) },
     });
-    await this.options.store.flush();
-    this.pump();
+    await this.flushThenPump();
     return submission;
   }
 
   /** Only the subscriptions dispatch checks. */
   async submitCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): Promise<JobSubmission> {
     const submission = this.enqueueCheck(type, subscription, trigger);
-    await this.options.store.flush();
-    this.pump();
+    await this.flushThenPump();
     return submission;
   }
 
@@ -452,8 +457,7 @@ export class JobManager {
       eventType: 'job.retry_requested', retryOf: job.id,
       message: submission.deduplicated ? '已手動重試，併入進行中的工作。' : '已手動重試，重新排入收集。',
     });
-    await this.options.store.flush();
-    this.pump();
+    await this.flushThenPump();
     return submission;
   }
 
@@ -590,7 +594,7 @@ export class JobManager {
         },
         restore: (job) => this.restore(job),
       });
-      await this.options.store.flush();
+      await this.options.store.flush().catch((error: unknown) => console.error('Resumed jobs are not written', error));
     } finally {
       this.resuming = false;
     }
@@ -638,7 +642,7 @@ export class JobManager {
       this.notifySettled(this.requireStored(job.id));
     }
     this.queue.clear();
-    await this.options.store.flush();
+    await this.options.store.flush().catch((error: unknown) => console.error('Interrupted jobs are not written', error));
   }
 
   private enqueueItem(
