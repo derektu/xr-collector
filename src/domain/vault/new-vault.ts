@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { NewVaultCheck, PackageDescription } from '../../shared/vault/vault-types.js';
-import { checkPackageFile } from './transfer-files.js';
+import { checkPackageFile, isWithin } from './transfer-files.js';
 import { writeVaultMarker } from './vault-directory.js';
 import { openPackage } from './vault-package.js';
 import { errorCode } from './errno.js';
@@ -28,7 +28,9 @@ export function nameProblem(name: string): string | null {
   return null;
 }
 
-export async function checkNewVault(location: unknown, name: unknown): Promise<NewVaultCheck> {
+export interface ProtectedFolders { vaultRoot: string | null; profilePath: string }
+
+export async function checkNewVault(location: unknown, name: unknown, folders: ProtectedFolders): Promise<NewVaultCheck> {
   if (typeof location !== 'string' || !location.trim()) return { path: null, problem: '請選擇位置。' };
   if (!path.isAbsolute(location)) return { path: null, problem: '位置必須是完整的絕對路徑。' };
   if (typeof name !== 'string') return { path: null, problem: '請輸入名稱。' };
@@ -41,6 +43,8 @@ export async function checkNewVault(location: unknown, name: unknown): Promise<N
   } catch (error) {
     return { path: target, problem: errorCode(error) === 'ENOENT' ? '找不到這個位置。' : '無法讀取這個位置。' };
   }
+  if (folders.vaultRoot && await isWithin(parent, folders.vaultRoot)) return { path: target, problem: '不能建立在目前的知識庫裡。' };
+  if (await isWithin(parent, folders.profilePath)) return { path: target, problem: '不能建立在程式資料目錄裡。' };
   try {
     await lstat(target);
     return { path: target, problem: `這個位置已經有「${name}」，請換個名稱。` };
@@ -55,14 +59,14 @@ export async function checkNewVault(location: unknown, name: unknown): Promise<N
   return { path: target, problem: null };
 }
 
-export async function newVaultFolder(location: unknown, name: unknown): Promise<string> {
-  const checked = await checkNewVault(location, name);
+export async function newVaultFolder(location: unknown, name: unknown, folders: ProtectedFolders): Promise<string> {
+  const checked = await checkNewVault(location, name, folders);
   if (checked.problem || !checked.path) throw new CollectorError('vault_invalid', checked.problem ?? '請選擇位置並輸入名稱。');
   return checked.path;
 }
 
-export async function createNewVault(location: unknown, name: unknown, createdBy: string): Promise<string> {
-  const target = await newVaultFolder(location, name);
+export async function createNewVault(location: unknown, name: unknown, createdBy: string, folders: ProtectedFolders): Promise<string> {
+  const target = await newVaultFolder(location, name, folders);
   try {
     await mkdir(target);
   } catch (error) {

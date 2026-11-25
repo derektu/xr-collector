@@ -103,7 +103,7 @@ export type OpenOverrides = Omit<Partial<WorkspaceOptions>, 'createSearch'> & Yo
  */
 export async function open(at: Machine, overrides: OpenOverrides = {}, track = true): Promise<VaultWorkspace> {
   const sources = overrides.sources ?? PRODUCT_SOURCES;
-  const selection = new VaultSelection(path.join(at.profile, 'vault-selection.json'));
+  const selection = new VaultSelection(at.profile);
   const selected = await selection.read();
   if (!selected) await ensureMarker(at.vault);
   const { createSearch, ...rest }: OpenOverrides = {

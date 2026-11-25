@@ -65,8 +65,9 @@ export async function startSearchRuntime(
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    console.error(`Search engine failed to start: ${limitText(redact(detail), 500, 'head')}`);
     return {
-      search: new UnavailableTranscriptSearch(`無法啟動搜尋引擎：${limitText(redact(detail), 500, 'head')}`),
+      search: new UnavailableTranscriptSearch('無法啟動搜尋引擎。'),
       close: async () => undefined,
     };
   }

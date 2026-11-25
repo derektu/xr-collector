@@ -31,7 +31,7 @@ export class DeviceVaults {
   readonly defaultName = DEFAULT_VAULT_NAME;
 
   constructor(private readonly options: DeviceVaultsOptions) {
-    this.selection = new VaultSelection(path.join(options.profilePath, 'vault-selection.json'));
+    this.selection = new VaultSelection(options.profilePath);
   }
 
   /**
@@ -66,9 +66,12 @@ export class DeviceVaults {
     return inspectVaultDirectory(vaultPath, this.options.sources);
   }
 
-  /** Checks a new Vault folder before it is created; see `checkNewVault`. */
-  checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
-    return checkNewVault(location, name);
+  /**
+   * Checks a new Vault folder before it is created; see `checkNewVault`. The folder may not be
+   * inside `vaultRoot`, the Vault in use, or inside the program data directory.
+   */
+  checkNew(location: unknown, name: unknown, vaultRoot: string | null): Promise<NewVaultCheck> {
+    return checkNewVault(location, name, { vaultRoot, profilePath: this.options.profilePath });
   }
 
   /** What an export file holds; see `describePackage`. */
@@ -87,15 +90,16 @@ export class DeviceVaults {
     request: VaultSetupRequest,
     start: (root: string) => Promise<W>,
   ): Promise<{ workspace: W; documentCount: number }> {
-    const { sources, createdBy } = this.options;
+    const { sources, createdBy, profilePath } = this.options;
+    const folders = { vaultRoot: null, profilePath };
     const action = request.action;
     let root: string;
     let documentCount = 0;
     if (request.action === 'create') {
-      root = await createNewVault(request.location, request.name, createdBy);
+      root = await createNewVault(request.location, request.name, createdBy, folders);
     } else if (request.action === 'import') {
       root = await importNewVault({
-        packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name), createdBy, sources,
+        packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, folders), createdBy, sources,
       });
       documentCount = (await inspectVaultDirectory(root, sources).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
     } else {

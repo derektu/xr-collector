@@ -268,7 +268,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault, PRODUCT_SOURCES)).list()).map((document) => document.id).sort();
 
     const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, createdBy: 'XR Collector test' });
-    await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
+    await new VaultSelection(b.profile).write(created);
     expect(await ids(created)).toEqual(await ids(a.vault));
 
     const { preview } = await importFile(youtubeOnly, file);

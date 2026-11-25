@@ -29,6 +29,10 @@ export function useNewVaultCheck(location: string, name: string, enabled = true)
   return { check, checking };
 }
 
+export function failureNotInPreview(failure: string | null | undefined, check: NewVaultCheck | null): string | null {
+  return failure && failure !== check?.problem ? failure : null;
+}
+
 export function ListRow({ title, detail, children, testId, field }: { title: string; detail?: ReactNode; children?: ReactNode; testId?: string; field?: boolean }) {
   return <div className={field ? 'ob-row ob-field' : 'ob-row'} data-testid={testId}>
     <div className="ob-row-text"><strong>{title}</strong>{detail ? <p>{detail}</p> : null}</div>

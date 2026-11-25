@@ -1,5 +1,6 @@
 import type { CollectionScheduleView } from '../../shared/subscriptions/subscription-types.js';
 import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
+import { downloadPercent, updateStepText } from '../../shared/api/update-step.js';
 import type { JobOverview, JobOverviewEntry } from '../../shared/jobs/job-types.js';
 import type { Change } from '../../shared/api/changes.js';
 import type { AutoPauseNotification } from '../../shared/api/device-types.js';
@@ -170,8 +171,7 @@ function updateItems(update: DeviceUpdateStatus | undefined): Array<MenuItem<Tra
   if (!update) return [];
   const offered = (update.ready ?? update.offer)?.version;
   const version = (update.phase === 'available' || update.phase === 'ready') && offered ? offered : null;
-  const percent = update.phase === 'downloading' && update.progress && update.progress.total > 0
-    ? Math.round(update.progress.transferred / update.progress.total * 100) : null;
+  const percent = update.phase === 'downloading' ? downloadPercent(update.progress) : null;
   return [
     { kind: 'status', label: { text: 'app_version', version: update.currentVersion } },
     { kind: 'action', action: 'check_app_update', label: { text: 'app_update', phase: update.phase, version, percent } },
@@ -201,16 +201,14 @@ function progressText(progress: { done: number; total: number } | null): string 
   return progress ? `${progress.done}/${progress.total}` : '';
 }
 
-const UPDATE_PHASE_TEXT: Record<DeviceUpdateStatus['phase'], string> = {
-  idle: '檢查 App 更新',
-  checking: 'App 更新：正在檢查',
-  available: 'App 更新：可下載',
-  downloading: 'App 更新：下載中',
-  ready: 'App 更新：已下載待安裝',
-  installing: 'App 更新：安裝中',
-  up_to_date: '檢查 App 更新',
-  error: 'App 更新：錯誤',
-};
+function updatePhaseText(phase: DeviceUpdateStatus['phase'], percent: number | null): string {
+  switch (phase) {
+    case 'idle': case 'up_to_date': return '檢查 App 更新';
+    case 'checking': return 'App 更新：正在檢查';
+    case 'error': return 'App 更新：錯誤';
+    default: return `App 更新：${updateStepText(phase, percent)}`;
+  }
+}
 
 export function trayLabelText(label: TrayLabel): string {
   switch (label.text) {
@@ -236,8 +234,7 @@ export function trayLabelText(label: TrayLabel): string {
     case 'subscription': return label.title;
     case 'app_version': return `版本 ${label.version}`;
     case 'app_update': {
-      const text = UPDATE_PHASE_TEXT[label.phase];
-      if (label.percent !== null) return `${text} ${label.percent}%`;
+      const text = updatePhaseText(label.phase, label.percent);
       return label.version ? `${text} ${label.version}` : text;
     }
   }

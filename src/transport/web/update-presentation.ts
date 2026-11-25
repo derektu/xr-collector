@@ -1,8 +1,7 @@
 import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
+import { downloadPercent, updateStepText, type UpdateStep } from '../../shared/api/update-step.js';
 
-export type SidebarUpdate = 'available' | 'downloading' | 'ready' | 'installing';
-
-export function sidebarUpdate(status: DeviceUpdateStatus): SidebarUpdate | null {
+export function sidebarUpdate(status: DeviceUpdateStatus): UpdateStep | null {
   if (!status.installerAvailable) return null;
   switch (status.phase) {
     case 'available': return status.offer ? 'available' : null;
@@ -12,11 +11,14 @@ export function sidebarUpdate(status: DeviceUpdateStatus): SidebarUpdate | null 
   }
 }
 
-const LABELS: Record<SidebarUpdate, string> = {
-  available: '有新版本', downloading: '下載中', ready: '可安裝', installing: '安裝中',
-};
-
 export function sidebarUpdateLabel(status: DeviceUpdateStatus): string | null {
   const step = sidebarUpdate(status);
-  return step ? LABELS[step] : null;
+  return step ? updateStepText(step, downloadPercent(status.progress)) : null;
+}
+
+export type UpdateMessageTone = 'problem' | 'offer' | 'plain';
+
+export function updateMessageTone(status: DeviceUpdateStatus): UpdateMessageTone {
+  if (status.errorCode) return 'problem';
+  return status.phase === 'available' || status.ready ? 'offer' : 'plain';
 }

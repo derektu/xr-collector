@@ -181,7 +181,7 @@ export class UnavailableTranscriptSearch implements TranscriptSearch {
 
   constructor(message: string) {
     this.currentStatus = {
-      state: 'error',
+      state: 'unavailable',
       indexedDocuments: 0,
       lastRebuiltAt: null,
       message,

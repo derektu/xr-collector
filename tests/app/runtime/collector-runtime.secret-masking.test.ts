@@ -4,12 +4,13 @@
 // all show it masked, and no file the app writes outside the Agent settings holds it. Work that a
 // restart resumes and that fails at once is masked too: the token is protected before the Vault opens.
 // The known secrets (the Agent token, the search engine key) in status messages that carry text of
-// other programs (the update, Vault operation and search status) reach the UI and the Agent masked,
-// also when read after the change stream announces them.
+// other programs (the update and Vault operation status) reach the UI and the Agent masked, also when
+// read after the change stream announces them. The search status carries no text of the search
+// engine's start failure; the program log holds it masked.
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import { protectSecret } from '../../../src/shared/lib/redact.js';
 import type { DeviceUpdateStatus } from '../../../src/shared/api/update-types.js';
@@ -222,7 +223,7 @@ describe('secrets in source errors', () => {
     }
   });
 
-  it('are masked in the update, Vault operation and search status the UI and the Agent read', async () => {
+  it('are masked in the update and Vault operation status the UI and the Agent read, and in the program log that keeps a search engine start failure out of the search status', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-secret-masking-status-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const profilePath = path.join(root, 'profile');
@@ -234,6 +235,8 @@ describe('secrets in source errors', () => {
     const searchKey = 'search-engine-key-296';
     protectSecret(searchKey);
     const leak = `agent ${token} search ${searchKey}`;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    cleanups.push(async () => log.mockRestore());
     const listeners = new Set<() => void>();
     let update = { phase: 'idle', message: '' } as unknown as DeviceUpdateStatus;
     const updates: UpdateAccess = {
@@ -253,8 +256,7 @@ describe('secrets in source errors', () => {
       workspace: withYouTube({
         capture: { capture: async () => { throw new CollectorError('video_unavailable', 'unused'); } },
         channelSource: { resolve: async () => channel, listVideos: async () => [] },
-        searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
-        createSearch: async () => ({ search: new UnavailableTranscriptSearch(`無法啟動搜尋引擎：${leak}`), close: async () => undefined }),
+        searchBinary: 'unused', searchLexicon: path.join(root, `lexicon ${leak}.txt`), searchData: path.join(root, 'search'), exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),
       }),
       updates,
       agentSettingsFile,
@@ -295,7 +297,10 @@ describe('secrets in source errors', () => {
     revision = await announced('vault', revision);
     for (const base of [ui, agentUrl]) expectMasked(`Vault operation status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/vault/status'));
 
-    // The search status, with the search engine's start failure.
-    for (const base of [ui, agentUrl]) expectMasked(`search status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/search/status'));
+    for (const base of [ui, agentUrl]) {
+      const status = await read(base, '/api/search/status');
+      for (const secret of [token, searchKey, '[已遮蔽]']) expect.soft(status, `search status (${base === ui ? 'UI' : 'Agent'})`).not.toContain(secret);
+    }
+    expectMasked('program log', log.mock.calls.flat().join(' '));
   });
 });

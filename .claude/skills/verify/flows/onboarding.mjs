@@ -35,6 +35,14 @@ export async function run({ instance, page, record, waitFor }) {
   const at = (folder) => ({ path: folder, problem: false });
   const refused = { path: null, problem: true };
   const vaultPath = async () => (await instance.api('/api/vault/status')).vaultPath;
+  /** Presses `confirm` and reads the server's answer, the preview and the separate error line once the page has the answer. */
+  const submitRefused = async (confirm, error, route) => {
+    const answer = page.waitForResponse((response) => new URL(response.url()).pathname === route && response.request().method() === 'POST');
+    await button(confirm).click();
+    const status = (await answer).status();
+    await waitFor(async () => await button(confirm).isEnabled(), 'form usable again').catch(() => undefined);
+    return { status, problem: (await previewState()).problem, error: await button(error).count() };
+  };
   const documentCount = async () => (await instance.api('/api/documents')).documents.length;
   const subscriptionCount = async () => (await instance.api('/api/subscriptions')).subscriptions.length;
 
@@ -72,12 +80,12 @@ export async function run({ instance, page, record, waitFor }) {
       expect(state.problem, `「${value}」：預覽說明原因`, { id: `ob.create.${id}`, expected: refused, actual: state });
       if (id === 'conflict') {
         await shot('create-conflict');
-        await button('onboarding-create-confirm').click();
-        await button('onboarding-error').waitFor({ timeout: 15_000 }).catch(() => undefined);
-        const refusedCreate = { error: await button('onboarding-error').count(), vaultState: (await instance.api('/api/vault/setup')).vault.state };
-        expect(refusedCreate.error === 1 && refusedCreate.vaultState !== 'ready', '按下建立時伺服器拒絕同名的資料夾並顯示原因', {
-          id: 'ob.create.server-refuses', expected: { error: 1, vaultState: '不是 ready' }, actual: refusedCreate,
-        });
+        const answer = await submitRefused('onboarding-create-confirm', 'onboarding-error', '/api/vault/setup');
+        const refusedCreate = { ...answer, vaultState: (await instance.api('/api/vault/setup')).vault.state };
+        expect(refusedCreate.status >= 400 && refusedCreate.problem && refusedCreate.error === 0 && refusedCreate.vaultState !== 'ready',
+          '按下建立時伺服器拒絕同名的資料夾，原因只在預覽顯示一次', {
+            id: 'ob.create.server-refuses', expected: { status: '4xx', problem: true, error: 0, vaultState: '不是 ready' }, actual: refusedCreate,
+          });
       }
     }
     await name.fill('XR Collector');
@@ -116,12 +124,11 @@ export async function run({ instance, page, record, waitFor }) {
     await waitFor(async () => await location.inputValue() === documents, 'location defaults to the parent of the active Vault');
     expect(await name.inputValue() === 'XR Collector', '名稱預設 XR Collector，位置預設目前知識庫的上一層', { id: 'settings.create.defaults' });
     await preview(refused);
-    await button('create-vault-confirm').click();
-    await button('create-vault-failure').waitFor({ timeout: 15_000 }).catch(() => undefined);
-    const conflict = { ...(await previewState()), failure: await button('create-vault-failure').count(), vaultPath: await vaultPath() };
-    expect(conflict.problem && conflict.failure === 1 && conflict.vaultPath === first, '預設值與目前的知識庫同名時，預覽說明原因，按下建立被伺服器拒絕', {
-      id: 'settings.create.conflict', expected: { problem: true, failure: 1, vaultPath: first }, actual: conflict,
-    });
+    const conflict = { ...(await submitRefused('create-vault-confirm', 'create-vault-failure', '/api/vault/create')), vaultPath: await vaultPath() };
+    expect(conflict.status >= 400 && conflict.problem && conflict.error === 0 && conflict.vaultPath === first,
+      '預設值與目前的知識庫同名時，預覽說明原因，按下建立被伺服器拒絕，原因只顯示一次', {
+        id: 'settings.create.conflict', expected: { status: '4xx', problem: true, error: 0, vaultPath: first }, actual: conflict,
+      });
     await name.fill('My Vault');
     await location.fill(path.dirname(other));
     await preview(at(other));

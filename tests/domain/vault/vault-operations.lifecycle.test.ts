@@ -22,7 +22,7 @@ async function lifecycle(): Promise<Lifecycle> {
   const vault = path.join(root, 'Vault');
   await createVaultDirectory(vault, 'XR Collector test', PRODUCT_SOURCES);
   await seed(vault);
-  const selection = new VaultSelection(path.join(root, 'profile', 'vault-selection.json'));
+  const selection = new VaultSelection(path.join(root, 'profile'));
   const selected = () => existsSync(selection.file) ? (JSON.parse(readFileSync(selection.file, 'utf8')) as { path: string }).path : null;
   const steps: string[] = [];
   let current: { vault: OpenedVault; search: TranscriptSearch } = { vault: await openVault(vault, PRODUCT_SOURCES), search: fakeSearch(vault) };

@@ -1,6 +1,7 @@
 // App updates through the shared update service: checking without a Vault from the UI and an
 // authorized Agent, downloading with only cancel offered and install refused until the download
-// finishes, a failed download never offering an install, a ready update kept beside a newer offer,
+// finishes, a failed download never offering an install and showing a short reason while the API keeps
+// the updater's words, a ready update kept beside a newer offer,
 // the sidebar and the native menu reaching the update panel once a Vault exists, and an install that
 // the next start records as installed. A broken update path leaves users on an old build or
 // installs a version they did not choose.
@@ -83,6 +84,11 @@ export async function run({ instance, page, record, waitFor }) {
     'sha512 不符時不提供安裝，同一版本可直接重新下載', {
       id: 'u36.download-failed', actual: { phase: failed.phase, code: failed.errorCode, ready: failed.ready },
     });
+    const statusLine = await page.getByTestId('update-message').textContent();
+    expect(statusLine === failed.message && typeof failed.detail === 'string' && failed.detail.length > 0 && !statusLine.includes(failed.detail),
+      '設定頁顯示 API 的 message，更新程式的原文只在 API 的 detail', {
+        id: 'u36.download-failed-detail', actual: { statusLine, message: failed.message, detail: failed.detail },
+      });
     await shot('download-failed');
     await instance.updateCatalog((value) => { value.updates.payloadMode = 'valid'; });
     await page.getByTestId('update-download').click();
@@ -92,13 +98,7 @@ export async function run({ instance, page, record, waitFor }) {
       '下載完成後才可重新啟動以安裝', { id: 'u36.ready', actual: { phase: ready.phase, version: ready.ready?.version, progress: ready.progress } });
   });
 
-  await record.scenario('U36-W3', '稍後保留可安裝的版本；檢查到更新的版本時兩者並列', async ({ expect, shot }) => {
-    await page.getByTestId('update-later').click();
-    await page.getByTestId('update-deferred').waitFor();
-    const deferred = { phase: (await update()).phase, apply: await page.getByTestId('update-apply').isVisible() };
-    expect(deferred.phase === 'ready' && deferred.apply, '稍後保留可安裝的版本，同一頁仍可重新啟動以安裝',
-      { id: 'u36.defer-ready', expected: { phase: 'ready', apply: true }, actual: deferred });
-
+  await record.scenario('U36-W3', '檢查到更新的版本時，已下載的版本與新版下載並列', async ({ expect, shot }) => {
     await instance.updateCatalog((value) => { value.updates.version = '0.1.2'; });
     await page.getByTestId('update-check').click();
     await waitFor(async () => (await update()).offer?.version === '0.1.2', 'newer offer found');

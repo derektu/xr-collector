@@ -578,7 +578,7 @@ describe('CollectorRuntime Vault setup', () => {
       subtitleKind: 'manual', bodyMarkdown: 'Body.',
     }));
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
-    await new VaultSelection(path.join(setup.value.profilePath, 'vault-selection.json')).write(setup.vaultPath);
+    await new VaultSelection(setup.value.profilePath).write(setup.vaultPath);
     const runtime = await startCollectorServer(setup.value);
     cleanups.push(() => runtime.close());
     const originalAgent = await connectionOf(runtime);

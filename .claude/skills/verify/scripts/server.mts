@@ -346,7 +346,7 @@ const selectionFile = path.join(profilePath, 'vault-selection.json');
 mkdirSync(path.join(run, 'documents'), { recursive: true });
 if (vaultMode === 'selected' && !existsSync(selectionFile)) {
   await createVaultDirectory(vaultPath, createdBy, sources.registry);
-  await new VaultSelection(selectionFile).write(vaultPath);
+  await new VaultSelection(profilePath).write(vaultPath);
 }
 // Synthetic data confirms the network against the feeds port, so `network: 'offline'` in the catalog
 // reads as a lost network; an offline device is confirmed again every 2 s instead of 30 s.

@@ -192,8 +192,8 @@ dialog::backdrop { background:var(--overlay); }
 .software-update-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .settings-section .software-update-actions .button { margin-top:0; }
 .update-state { color:var(--text-muted); font-size:13px; overflow-wrap:anywhere; }
-.update-state.available { color:var(--accent); }
-.update-deferred { color:var(--text-muted); font-size:12px; }
+.update-state.offer { color:var(--accent); }
+.update-state.problem { color:var(--error-fg); }
 .software-update progress { width:100%; margin-top:10px; accent-color:var(--accent); }
 .login-startup-control { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; font-size:14px; }
 .setting-message.error { color:var(--error-fg); }
@@ -253,7 +253,6 @@ dialog::backdrop { background:var(--overlay); }
 .import-option.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
 .import-option input { margin-top:3px; }
 .import-option strong { display:block; color:var(--primary); font-size:14px; }
-.import-option span { display:block; margin-top:2px; color:var(--secondary); font-size:13px; }
 .setting-card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .save-state { font-size:12px; font-weight:650; color:var(--secondary); }
 .save-state.saved { color:var(--ok); }
@@ -273,7 +272,7 @@ dialog::backdrop { background:var(--overlay); }
 .index-state { display:flex; align-items:center; gap:8px; color:var(--primary)!important; font-weight:600; }
 .status-light { width:9px; height:9px; border-radius:50%; background:var(--warning); box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent); }
 .status-light.ready { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
-.status-light.error { background:var(--error); box-shadow:0 0 0 3px color-mix(in srgb, var(--error) 22%, transparent); }
+.status-light.error, .status-light.unavailable { background:var(--error); box-shadow:0 0 0 3px color-mix(in srgb, var(--error) 22%, transparent); }
 .index-problem { color:var(--warning)!important; }
 .segmented { display:inline-flex; margin-top:12px; padding:3px; border:1px solid var(--control-border); border-radius:9px; background:var(--base); }
 .segmented button { min-width:72px; height:30px; padding:0 14px; white-space:nowrap; border:0; border-radius:7px; color:var(--secondary); background:transparent; font-size:13px; }

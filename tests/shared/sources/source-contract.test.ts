@@ -434,7 +434,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add(feed('fake', 'news'));
     const first = await exportFrom(a, 'a-1');
     const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
-    await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
+    await new VaultSelection(b.profile).write(created);
     expect(await items(b.vault)).toEqual(await items(a.vault));
 
     // B adds a document of one type, deletes one of the other and subscribes to a feed of the other.
@@ -473,7 +473,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
     const first = await exportFrom(a, 'a-1');
     const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
-    await new VaultSelection(path.join(b.profile, 'vault-selection.json')).write(created);
+    await new VaultSelection(b.profile).write(created);
     const failuresIn = async (vault: string, type: string, id: string) =>
       (await new JsonSubscriptionStore(new VaultFileWriter(vault, SOURCES), type).list()).find((row) => row.id === id)?.failures;
     expect(await failuresIn(b.vault, 'fake', 'news')).toEqual([failed('news-a', 1)]);

@@ -4,6 +4,7 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { DeviceUpdateStatus, UpdateInstallResult, UpdateOffer, UpdateSelection } from '../../shared/api/update-types.js';
 import { readJsonFile, writeJsonFile } from '../../shared/lib/json-file.js';
 import type { AppUpdater, UpdateAccess } from './types.js';
+import { updateStepText } from '../../shared/api/update-step.js';
 
 interface SavedUpdateState {
   lastCheckAttemptAt: string | null;
@@ -54,7 +55,7 @@ export class UpdateService implements UpdateAccess {
     this.state = {
       phase: 'idle', currentVersion: options.currentVersion, target: options.target, installerAvailable: available,
       offer: null, ready: null, lastAttempt: null, progress: null, lastCheckAttemptAt: null, checkedAt: null,
-      message: available ? '尚未檢查更新。' : '此執行環境無法安裝更新。', errorCode: null,
+      message: available ? '尚未檢查更新。' : '此執行環境無法安裝更新。', errorCode: null, detail: null,
     };
   }
 
@@ -94,7 +95,7 @@ export class UpdateService implements UpdateAccess {
     if (ready.version !== selection.version) throw new CollectorError('update_offer_changed', '可下載的更新已改變，請重新確認版本後再操作。');
     this.saved = { ...this.saved, installing: { version: ready.version, failure: null } };
     await this.save();
-    this.set({ phase: 'installing', message: `正在安裝 ${ready.version}…`, errorCode: null });
+    this.set({ phase: 'installing', message: stepMessage('installing', ready.version), errorCode: null, detail: null });
     this.options.restartToInstall();
     return this.status();
   }
@@ -123,16 +124,16 @@ export class UpdateService implements UpdateAccess {
     this.saved = { ...this.saved, lastCheckAttemptAt: attemptedAt };
     await this.save();
     const ready = this.state.ready;
-    this.set({ lastCheckAttemptAt: attemptedAt, phase: ready ? 'ready' : 'checking', message: '正在檢查更新…', errorCode: null });
+    this.set({ lastCheckAttemptAt: attemptedAt, phase: ready ? 'ready' : 'checking', message: '正在檢查更新…', errorCode: null, detail: null });
     let offer: UpdateOffer | null;
     try {
       offer = await this.options.updater.check();
     } catch (error) {
       if (codeOf(error) !== NO_RELEASE_FOR_PLATFORM) {
         if (this.closed) return this.status();
-        const message = messageOf(error, '無法檢查更新。');
-        this.set({ phase: ready ? 'ready' : 'error', message, errorCode: 'update_source_failed' });
-        this.emitCheckTransition(`failed:${message}`, 'warning', 'device.update_check_failed', message, 'update_source_failed');
+        const detail = messageOf(error, '無法檢查更新。');
+        this.set({ phase: ready ? 'ready' : 'error', message: '無法檢查更新，請稍後再試。', errorCode: 'update_source_failed', detail });
+        this.emitCheckTransition(`failed:${detail}`, 'warning', 'device.update_check_failed', detail, 'update_source_failed');
         return this.status();
       }
       offer = null;
@@ -144,12 +145,13 @@ export class UpdateService implements UpdateAccess {
     if (!offer) {
       this.lastCheckEvent = 'up_to_date';
       this.set({ checkedAt, offer: null, phase: ready ? 'ready' : 'up_to_date',
-        message: ready ? `${ready.version} 已可安裝。` : '已是最新版。', errorCode: null });
+        message: ready ? stepMessage('ready', ready.version) : '已是最新版。', errorCode: null, detail: null });
       return this.status();
     }
-    const message = !ready ? `有新版本 ${offer.version}。`
-      : ready.version === offer.version ? `${ready.version} 已可安裝。` : `${ready.version} 已可安裝；另有 ${offer.version} 可下載。`;
-    this.set({ checkedAt, offer, phase: ready ? 'ready' : 'available', message, errorCode: null });
+    const message = !ready ? stepMessage('available', offer.version)
+      : ready.version === offer.version ? stepMessage('ready', ready.version)
+        : `${stepMessage('ready', ready.version)}；${stepMessage('available', offer.version)}`;
+    this.set({ checkedAt, offer, phase: ready ? 'ready' : 'available', message, errorCode: null, detail: null });
     this.emitCheckTransition(`available:${offer.version}`, 'info', 'device.update_available', `有新版本 ${offer.version}。`);
     return this.status();
   }
@@ -157,23 +159,25 @@ export class UpdateService implements UpdateAccess {
   private async performDownload(offer: UpdateOffer): Promise<DeviceUpdateStatus> {
     const abort = new AbortController();
     this.downloadAbort = abort;
-    this.set({ phase: 'downloading', ready: null, progress: { transferred: 0, total: 0, percent: 0 }, message: '正在下載更新…', errorCode: null });
+    this.set({ phase: 'downloading', ready: null, progress: { transferred: 0, total: 0, percent: 0 }, message: updateStepText('downloading'), errorCode: null, detail: null });
     try {
       await this.options.updater.download((transferred, total) => {
         const percent = total > 0 ? Math.floor(transferred / total * 100) : 0;
-        if (percent !== this.state.progress?.percent || total !== this.state.progress.total) this.set({ progress: { transferred, total, percent } });
+        if (percent !== this.state.progress?.percent || total !== this.state.progress.total) {
+          this.set({ progress: { transferred, total, percent }, message: updateStepText('downloading', total > 0 ? percent : null) });
+        }
       }, abort.signal);
       if (abort.signal.aborted) throw abort.signal.reason;
-      this.set({ phase: 'ready', ready: offer, progress: null, message: `${offer.version} 已可安裝。`, errorCode: null });
+      this.set({ phase: 'ready', ready: offer, progress: null, message: stepMessage('ready', offer.version), errorCode: null, detail: null });
       this.options.event?.('info', 'device.update_ready', `版本 ${offer.version} 已下載。`);
     } catch (error) {
       if (abort.signal.aborted) {
-        this.set({ phase: 'available', progress: null, message: `有新版本 ${offer.version}。`, errorCode: null });
+        this.set({ phase: 'available', progress: null, message: stepMessage('available', offer.version), errorCode: null, detail: null });
         return this.status();
       }
-      const message = messageOf(error, '下載更新失敗。');
-      this.set({ phase: 'error', progress: null, message, errorCode: 'update_download_failed' });
-      this.options.event?.('error', 'device.update_download_failed', message, 'update_download_failed');
+      const detail = messageOf(error, '下載更新失敗。');
+      this.set({ phase: 'error', progress: null, message: '下載失敗，請重新下載。', errorCode: 'update_download_failed', detail });
+      this.options.event?.('error', 'device.update_download_failed', detail, 'update_download_failed');
     }
     return this.status();
   }
@@ -186,9 +190,14 @@ export class UpdateService implements UpdateAccess {
     const result = installResult(installing, this.options.currentVersion);
     this.saved = { ...this.saved, installing: null };
     await this.save();
-    this.set({ lastAttempt: result, message: result.message });
-    if (result.outcome === 'installed') this.options.event?.('info', 'device.update_installed', result.message);
-    else this.options.event?.('warning', 'device.update_incomplete', result.message, 'update_incomplete');
+    if (result.outcome === 'installed') {
+      this.set({ lastAttempt: result, message: result.message });
+      this.options.event?.('info', 'device.update_installed', result.message);
+    } else {
+      this.set({ lastAttempt: result });
+      this.options.event?.('warning', 'device.update_incomplete',
+        result.detail ? `${result.version} 未完成安裝：${result.detail}` : result.message, 'update_incomplete');
+    }
   }
 
   private emitCheckTransition(key: string, severity: 'info' | 'warning', type: EventType, message: string, code?: string): void {
@@ -210,10 +219,14 @@ export class UpdateService implements UpdateAccess {
   }
 }
 
+function stepMessage(step: 'available' | 'ready' | 'installing', version: string): string {
+  return `${updateStepText(step)} ${version}`;
+}
+
 function installResult(installing: NonNullable<SavedUpdateState['installing']>, currentVersion: string): UpdateInstallResult {
-  if (currentVersion === installing.version) return { version: installing.version, outcome: 'installed', message: `已安裝 ${installing.version}。` };
-  const reason = installing.failure ? `：${installing.failure}` : '。';
-  return { version: installing.version, outcome: 'incomplete', message: `${installing.version} 未完成安裝${reason}` };
+  const { version } = installing;
+  if (currentVersion === version) return { version, outcome: 'installed', message: `已安裝 ${version}。`, detail: null };
+  return { version, outcome: 'incomplete', message: `${version} 未完成安裝，請手動下載安裝。`, detail: installing.failure };
 }
 
 function parseState(value: unknown): SavedUpdateState {

@@ -19,6 +19,7 @@ export interface UpdateInstallResult {
   version: string;
   outcome: 'installed' | 'incomplete';
   message: string;
+  detail: string | null;
 }
 
 export interface DeviceUpdateStatus {
@@ -34,4 +35,5 @@ export interface DeviceUpdateStatus {
   checkedAt: string | null;
   message: string;
   errorCode: string | null;
+  detail: string | null;
 }

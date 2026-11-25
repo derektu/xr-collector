@@ -5,7 +5,7 @@ import { ApiError } from './api-error.js';
 import { readUntil } from './read-until.js';
 import { changeHub, useLiveRead } from './use-changes.js';
 import {
-  changeText, hasChanges, importApplyOutcome, localNewerText, progressText, removalText, revealLabel, sourceText, transferRunning,
+  changeText, hasChanges, importApplyOutcome, localNewerText, progressText, revealLabel, sourceText, transferRunning,
   type ImportApplyOutcome,
 } from './transfer-presentation.js';
 
@@ -178,7 +178,7 @@ async function applyAndFollow(id: string, how: ImportMode): Promise<{ kind: 'imp
   return outcome.kind === 'imported' ? { kind: 'imported', status } : outcome;
 }
 
-type ImportPhase = 'input' | 'comparing' | 'preview' | 'replace' | 'applying' | 'done' | 'partial';
+type ImportPhase = 'input' | 'comparing' | 'preview' | 'applying' | 'done' | 'partial';
 
 function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (imported: boolean) => void }) {
   const [source, setSource] = useSuggestedPath(file, (suggestion) => `${suggestion.folder}/`);
@@ -188,7 +188,6 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const [result, setResult] = useState<TransferStatus | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [backupPath, setBackupPath] = useState<string | null>(null);
-  const [recording, setRecording] = useState(false);
   const progress = useTransferProgress(phase === 'comparing' || phase === 'applying');
   const started = useRef(false);
   const desktop = window.xrCollectorDesktop;
@@ -232,16 +231,6 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
     setPhase('done');
   }
 
-  async function finish(): Promise<void> {
-    if (!preview?.mergeRecords) { await cancel(); return; }
-    setRecording(true);
-    setFailure(null);
-    const applied = await applyAndFollow(preview.id, 'merge');
-    setRecording(false);
-    if (applied.kind !== 'imported') { showFailedApply(applied); return; }
-    onClose(true);
-  }
-
   async function cancel(): Promise<void> {
     if (preview) await api.cancelImport(preview.id).catch(() => undefined);
     onClose(false);
@@ -253,18 +242,20 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   </p> : null;
   const mergeable = !!preview && hasChanges(preview.merge);
   const replaceable = !!preview && preview.localNewer > 0;
-  const removal = preview ? removalText(preview.replace) : null;
+  const choosing = mergeable || mode === 'replace';
+  const chosen = preview ? preview[mode] : null;
   const done = result?.result;
 
-  return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying' || recording}
+  return <Modal title="匯入" width="wide" busy={phase === 'comparing' || phase === 'applying'}
     onDismiss={() => { if (phase === 'done') onClose(true); else if (phase === 'partial') onClose(false); else void cancel(); }} testId="import-dialog">
     {phase === 'input' && source.loaded ? <>
       <PathField label="匯出檔" value={source.path} onChange={setSource} testId="import-path" hint="完整路徑，例如另一台電腦匯出的 .zip 檔。" />
     </> : null}
     {phase === 'comparing' ? <Progress progress={progress} fallback="正在比對…" /> : null}
-    {phase === 'preview' && preview && mergeable ? <div data-testid="import-preview">
+    {phase === 'preview' && preview && chosen && choosing ? <div data-testid="import-preview">
       {header}
-      <p className="merge-counts" data-testid="import-counts">{changeText(preview.merge)}</p>
+      <p className="merge-counts" data-testid="import-counts"
+        data-documents-removed={chosen.documents.removed} data-subscriptions-removed={chosen.subscriptions.removed}>{changeText(chosen)}</p>
       <div className="import-options" role="radiogroup" aria-label="匯入方式">
         <label className={mode === 'merge' ? 'import-option active' : 'import-option'} data-testid="import-mode-merge">
           <input type="radio" name="import-mode" checked={mode === 'merge'} onChange={() => setMode('merge')} />
@@ -272,19 +263,14 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
         </label>
         <label className={mode === 'replace' ? 'import-option active' : 'import-option'} data-testid="import-mode-replace">
           <input type="radio" name="import-mode" checked={mode === 'replace'} onChange={() => setMode('replace')} />
-          <div><strong>完全取代</strong>{mode === 'replace' && removal ? <span data-testid="import-replace-removal">{removal}</span> : null}</div>
+          <div><strong>完全取代</strong></div>
         </label>
       </div>
     </div> : null}
-    {phase === 'preview' && preview && !mergeable ? <div data-testid="import-nothing">
+    {phase === 'preview' && preview && !choosing ? <div data-testid="import-nothing">
       {header}
       <p>沒有需要匯入的內容</p>
       {preview.localNewer ? <p className="hint" data-testid="import-local-newer">{localNewerText(preview.localNewer)}</p> : null}
-    </div> : null}
-    {phase === 'replace' && preview ? <div data-testid="import-replace-confirm">
-      {header}
-      <p className="merge-counts" data-testid="import-replace-counts"
-        data-documents-removed={preview.replace.documents.removed} data-subscriptions-removed={preview.replace.subscriptions.removed}>{changeText(preview.replace)}</p>
     </div> : null}
     {phase === 'applying' ? <Progress progress={progress} fallback="正在匯入…" /> : null}
     {phase === 'done' && result && done ? <div data-testid="import-done">
@@ -302,20 +288,16 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
         <button type="button" className="button primary" disabled={!source.loaded || !source.path.trim()}
           onClick={() => { if (source.loaded) void compare(source.path.trim()); }} data-testid="import-compare">比對</button>
       </> : null}
-      {phase === 'preview' && !mergeable ? <>
-        {replaceable ? <button type="button" className="button" disabled={recording} onClick={() => setPhase('replace')}
+      {phase === 'preview' && !choosing ? <>
+        {replaceable ? <button type="button" className="button" onClick={() => setMode('replace')}
           data-testid="import-replace-instead">完全取代…</button> : null}
-        <button type="button" className="button primary" disabled={recording} onClick={() => void finish()} data-testid="import-close">完成</button>
+        <button type="button" className="button primary" onClick={() => void cancel()} data-testid="import-close">完成</button>
       </> : null}
-      {phase === 'preview' && mergeable ? <>
+      {phase === 'preview' && choosing ? <>
         <button type="button" className="button" onClick={() => void cancel()} data-testid="import-cancel">取消</button>
         {mode === 'merge'
           ? <button type="button" className="button primary" onClick={() => void apply('merge')} data-testid="import-confirm">匯入</button>
-          : <button type="button" className="button primary" onClick={() => setPhase('replace')} data-testid="import-next">下一步</button>}
-      </> : null}
-      {phase === 'replace' ? <>
-        <button type="button" className="button" onClick={() => setPhase('preview')} data-testid="import-back">返回</button>
-        <button type="button" className="button danger" onClick={() => void apply('replace')} data-testid="import-replace-confirm-button">取代</button>
+          : <button type="button" className="button danger" onClick={() => void apply('replace')} data-testid="import-replace">取代</button>}
       </> : null}
       {phase === 'done' ? <button type="button" className="button primary" onClick={() => onClose(true)} data-testid="transfer-close">完成</button> : null}
       {phase === 'partial' ? <>

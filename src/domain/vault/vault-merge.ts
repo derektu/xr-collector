@@ -138,11 +138,7 @@ function count(counts: ChangeCounts, key: string, local: ItemState | undefined, 
   const after = incoming?.state === 'present';
   if (before && after) kind.updated += 1;
   else if (after) kind.added += 1;
-  else if (before) kind.removed += 1;
-}
-
-export function changeTotal(counts: ChangeCounts): number {
-  return [counts.documents, counts.subscriptions].reduce((sum, kind) => sum + kind.added + kind.updated + kind.removed, 0);
+  else if (before || incoming?.state === 'deleted') kind.removed += 1;
 }
 
 export interface Comparison {

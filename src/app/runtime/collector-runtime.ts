@@ -301,7 +301,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   }
 
   checkNew(location: unknown, name: unknown): Promise<NewVaultCheck> {
-    return this.vaults.checkNew(location, name);
+    return this.vaults.checkNew(location, name, this.workspaceValue?.operations.status().vaultPath ?? null);
   }
 
   vaultStatus(): VaultSetupStatus {

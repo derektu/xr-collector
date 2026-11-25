@@ -20,7 +20,7 @@ export interface SearchResponse {
   limit: number;
 }
 
-export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error';
+export type SearchState = 'starting' | 'updating' | 'rebuilding' | 'ready' | 'error' | 'unavailable';
 
 export interface SearchStatus {
   state: SearchState;

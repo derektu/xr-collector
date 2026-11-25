@@ -4,7 +4,7 @@ import { BuildInfoCard } from './BuildInfoCard.js';
 import { api } from './api-client.js';
 import { ApiError } from './api-error.js';
 import { useLiveRead } from './use-changes.js';
-import { NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
+import { failureNotInPreview, NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 import { OnboardingHome, OnboardingStep, PackageRow } from './Onboarding.js';
 
 function errorMessage(error: unknown): string {
@@ -110,7 +110,8 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
 
   const fields = (before?: ReactElement) => <NewVaultFields name={name} location={location} check={check} checking={checking} busy={busy}
     onName={setName} onLocation={setLocation} {...(desktop ? { onChooseLocation: () => void chooseLocation() } : {})} {...(before ? { before } : {})} />;
-  const failure = error ? <p className="ob-error" role="alert" data-testid="onboarding-error">{error}</p> : null;
+  const shownError = screen === 'home' ? error : failureNotInPreview(error, check);
+  const failure = shownError ? <p className="ob-error" role="alert" data-testid="onboarding-error">{shownError}</p> : null;
 
   let content;
   if (screen === 'create') {

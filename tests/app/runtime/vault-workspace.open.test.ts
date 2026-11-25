@@ -99,7 +99,7 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
   await mkdir(path.dirname(source), { recursive: true });
   await seed(source);
   const profile = path.join(root, 'profile');
-  return { root, source, profile, selection: new VaultSelection(path.join(profile, 'vault-selection.json')), jobsDir: path.join(profile, 'jobs') };
+  return { root, source, profile, selection: new VaultSelection(profile), jobsDir: path.join(profile, 'jobs') };
 }
 
 /** Opens the Vault the device selection names (the source when none), as the runtime does at startup. */
@@ -130,7 +130,7 @@ describe('opening another Vault (A-13)', () => {
     const jobStore = records.jobs;
     stores.push(records);
     const bGate = gatedCapture(new Set([IDS[2]!]));
-    const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-selection.json')) }, { jobStore, capture: bGate.capture }, false);
+    const bFirst = await open({ ...context, source: b, selection: new VaultSelection(path.join(root, 'b-profile')) }, { jobStore, capture: bGate.capture }, false);
     await bFirst.jobs.submitItem('youtube', urlOf(IDS[2]!));
     const bLeft = await bFirst.jobs.submitItem('youtube', urlOf(IDS[3]!));
     await eventually(() => expect(bGate.started.length).toBe(1));
