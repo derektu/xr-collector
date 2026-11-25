@@ -16,7 +16,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | profile、Agent 連線檔與 token | 裝置資料；不納入匯出檔 |
 | active Vault 選址 | profile 的 `vault-selection.json`；裝置資料 |
 | 通知開關 | profile 的 `notifications.json`，只存開關；裝置資料，不納入匯出檔。通知送出就算數，不記錄發送結果；目前需處理的自動暫停由使用中 Vault 裡自動暫停的訂閱算出 |
-| 收集工作與記錄 | profile 的 `jobs/jobs.json` 與 `jobs/events/<UTC 日期>.jsonl`；記錄保留 30 天；裝置資料，不納入匯出檔 |
+| 收集工作與記錄 | profile 的 `jobs/jobs.json` 與 `jobs/events/<UTC 日期>.jsonl`；`jobs.json` 每次整份寫到暫存檔再改名取代；已完成與失敗的工作超過 `FINISHED_JOB_LIMIT` 筆時刪除最舊的，其他狀態的工作不刪；記錄保留 30 天；裝置資料，不納入匯出檔 |
 | 匯入的暫存資料夾 | Vault 內的 `.xr-collector-import-<UUID>/`，套用匯入期間存在；開啟 Vault 時刪除留下的暫存資料夾 |
 | 匯出檔 | 預設匯出目錄（`<文件>/XR Collector 匯出`，可由 `XR_COLLECTOR_EXPORT_DIR` 指定）或使用者選的位置；不屬於任何 Vault |
 | 匯入前備份 | 備份目錄（`<文件>/XR Collector 備份`，可由 `XR_COLLECTOR_BACKUP_DIR` 指定）；不屬於任何 Vault |

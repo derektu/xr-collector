@@ -38,10 +38,6 @@ import { ACTIVE, progressOf, settledItem } from './check-items.js';
 
 export interface JobLimits {
   discovery: number;
-  /**
-   * Single-item captures running at once. Every request of a source also passes its pacing group's
-   * one request channel, so a higher number only lets a capture wait there for its turn.
-   */
   capture: number;
   /** Jobs waiting in both queues together; further submissions are refused. */
   maxQueued: number;
@@ -49,10 +45,6 @@ export interface JobLimits {
 
 export const DEFAULT_JOB_LIMITS: JobLimits = { discovery: 1, capture: 1, maxQueued: 500 };
 
-/**
- * Automatic retries after a failure its source classifies as `retry_now`. A source's limit
- * (`rate_limited`) is not a failed attempt: the job waits for the cooldown and continues.
- */
 export interface RetryPolicy {
   /** Attempts in total, the first one included. */
   maxAttempts: number;
@@ -83,7 +75,6 @@ export interface JobManagerOptions {
   connectivity?: Pick<Connectivity, 'confirm'>;
 }
 
-/** A check in progress: what it is doing and its item progress. */
 export interface CheckActivity {
   jobId: string;
   status: WorkStatus;
@@ -118,14 +109,6 @@ export function checkActivity(sources: SourceDeclarations, job: CollectionJob): 
   };
 }
 
-/**
- * Accepts collection work for one Vault, runs it in bounded queues and records every state change.
- * A job's kind names its source type and role: `item` collects one item, `check` lists a
- * subscription and queues one item job per item found, `add` resolves an address and subscribes.
- * Discovery (resolution and listing) and single-item capture use separate queues; captures rotate
- * between the jobs that queued them so one large subscription cannot hold every slot. A source's
- * cooldown holds back only the jobs of its pacing group.
- */
 export class JobManager {
   private readonly limits: JobLimits;
   private readonly retryPolicy: RetryPolicy;
@@ -288,7 +271,6 @@ export class JobManager {
     return job.vaultPath === this.options.vaultPath && job.vaultId === this.vaultId;
   }
 
-  /** Accepts a pasted address of a source type according to its syntax: one item, or a subscription. */
   async submit(type: string, url: string): Promise<JobSubmission> {
     const input = this.requirePlugin(type).classify(url);
     return input.kind === 'item' ? this.submitItem(type, input.ref.url) : this.submitSubscriptionAdd(type, input.url);
@@ -302,10 +284,8 @@ export class JobManager {
   }
 
   /**
-   * Resolves a subscription address and subscribes to it. A new subscription starts with
-   * `settings` (the source type's defaults when omitted) and its first check follows them; an
-   * existing subscription keeps its own state and settings. An address a preview resolved recently
-   * keeps that target from acceptance on, so the job is named while it waits and resolves no more.
+   * A new subscription starts with `settings`, the source type's defaults when omitted; an existing
+   * subscription keeps its own state and settings.
    */
   async submitSubscriptionAdd(type: string, url: string, settings?: SubscriptionSettings): Promise<JobSubmission> {
     const plugin = this.requirePlugin(type);
@@ -327,10 +307,7 @@ export class JobManager {
     return submission;
   }
 
-  /**
-   * Starts one check of a subscription; an active job of the same subscription is returned
-   * instead, so the check joins it. Only the subscriptions dispatch checks.
-   */
+  /** Only the subscriptions dispatch checks. */
   async submitCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): Promise<JobSubmission> {
     const submission = this.enqueueCheck(type, subscription, trigger);
     await this.options.store.flush();
@@ -346,10 +323,6 @@ export class JobManager {
     return jobView(job);
   }
 
-  /**
-   * Top-level jobs, newest first. Items a check job started appear as that job's items, shown
-   * `running` while their item job runs.
-   */
   list(query: JobListQuery = {}): JobPage {
     const limit = query.limit ?? 20;
     let jobs = this.options.store.list(this.options.vaultPath, this.vaultId).filter((job) => job.parentId === null);
@@ -363,10 +336,7 @@ export class JobManager {
     return { jobs: page, nextCursor: jobs.length > limit ? page[page.length - 1]!.id : null };
   }
 
-  /**
-   * Check jobs of one source type in the active Vault, grouped by subscription, newest first.
-   * Finished jobs are kept up to the job store's limit, so older records drop out.
-   */
+  /** Grouped by subscription ID, each group newest first. */
   checkJobs(type: string): Map<string, JobView[]> {
     const bySubscription = new Map<string, JobView[]>();
     for (const job of this.options.store.list(this.options.vaultPath, this.vaultId)) {
@@ -378,11 +348,7 @@ export class JobManager {
     return bySubscription;
   }
 
-  /**
-   * What the jobs of one source type are doing for its subscriptions: per subscription, the check in
-   * progress and whether any of its items is capturing; and the subscription requests still
-   * resolving or subscribing, oldest first.
-   */
+  /** `adds` are the subscription requests still resolving or subscribing, oldest first. */
   subscriptionWork(type: string): SubscriptionWorkReport {
     const subscriptions = new Map<string, SubscriptionWork>();
     const entry = (id: string): SubscriptionWork => {
@@ -425,12 +391,6 @@ export class JobManager {
     };
   }
 
-  /**
-   * Converges a paused or removed subscription: its queued check job and its items that have not
-   * started end as skipped. A discovery in progress sees the change before accepting any item. An
-   * item already capturing finishes and is saved when the subscription is paused; when it is
-   * removed, the item ends as skipped once its capture returns and saves nothing.
-   */
   stopSubscription(type: string, id: string, reason: SkipReason): void {
     for (const job of [...this.jobs.values()]) {
       if (!isRole(this.options.sources, job, type, 'check') || job.source.id !== id) continue;
@@ -456,13 +416,6 @@ export class JobManager {
     void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
   }
 
-  /**
-   * Retries a failed top-level job at the user's request with a new job and a fresh attempt budget.
-   * An item is collected again and a subscription request subscribes with the settings it was
-   * accepted with. A check job checks its subscription now, as a manual check does. The new job
-   * records `retryOf`, the earlier one `retriedBy`; an active job of the same target is returned as
-   * a duplicate instead.
-   */
   async retry(id: string): Promise<JobSubmission> {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
@@ -504,7 +457,6 @@ export class JobManager {
     return submission;
   }
 
-  /** The jobs page: what runs now, what waits in the order it starts, and the failed section. */
   async overview(): Promise<JobOverview> {
     const jobs = this.options.store.list(this.options.vaultPath, this.vaultId)
       .map((job) => this.withLiveItems(jobView(this.jobs.get(job.id) ?? job)));
@@ -516,10 +468,6 @@ export class JobManager {
     });
   }
 
-  /**
-   * Removes a failed single item or subscription request from the failed section; its record and
-   * activity stay. Any other job is not in that section and cannot be removed.
-   */
   async dismiss(id: string): Promise<JobView> {
     const job = this.options.store.get(id);
     if (!job || !this.owns(job)) throw new CollectorError('job_not_found', '找不到這個收集工作。');
@@ -540,7 +488,6 @@ export class JobManager {
     return (await this.options.documents.findExisting({ sourceType: type, sourceId: key })) !== null;
   }
 
-  /** Top-level job counts: queued or running now, and completed or failed since `since`; a failed job counts until it is retried or dismissed. */
   summary(since: string): JobSummary {
     const bound = new Date(since).toISOString();
     const summary: JobSummary = { active: 0, completed: 0, failed: 0, since: bound };
@@ -554,7 +501,6 @@ export class JobManager {
     return summary;
   }
 
-  /** Records a Vault-level event, such as a subscription change, that belongs to no job. */
   recordEvent(entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>): void {
     this.options.store.event({ ...entry, vaultPath: this.options.vaultPath, vaultId: this.vaultId, jobId: null });
   }
@@ -628,10 +574,7 @@ export class JobManager {
     });
   }
 
-  /**
-   * Continues the Vault's interrupted jobs; called once when the Vault opens, before the scheduler
-   * starts.
-   */
+  /** Called once when the Vault opens, before the scheduler starts. */
   async resume(): Promise<void> {
     if (this.closed) return;
     this.resuming = true;
@@ -681,11 +624,8 @@ export class JobManager {
     this.options.store.put(job);
   }
 
-  /**
-   * Stops starting work, waits for running steps, and records what is left as interrupted with
-   * `reason`, which says why the jobs stopped, and `stop`, the kind of stop.
-   */
-  async close(reason = '服務停止時工作尚未完成；已保存的內容保留。', stop: JobStopKind = 'shutdown'): Promise<void> {
+  /** Waits for running steps, then records what is left as interrupted with `message`. */
+  async close(message = '服務停止時工作尚未完成；已保存的內容保留。', stop: JobStopKind = 'shutdown'): Promise<void> {
     this.closed = true;
     this.waitingStepsAbort.abort(new CollectorError('vault_busy', '服務正在停止。'));
     for (const unsubscribe of this.unsubscribePacing) unsubscribe();
@@ -693,7 +633,7 @@ export class JobManager {
     this.waits.close();
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
     for (const job of [...this.jobs.values()]) {
-      this.options.store.interrupt(job, reason, { stop });
+      this.options.store.interrupt(job, message, { stop });
       this.release(job);
       this.notifySettled(this.requireStored(job.id));
     }
