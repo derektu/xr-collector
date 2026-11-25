@@ -36,39 +36,23 @@ export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 
 export interface CollectorRuntimeOptions {
   buildInfo?: BuildInfo;
   profilePath: string;
-  /**
-   * The source types of this process, which the Vault, the jobs and both listeners read; with a
-   * workspace, its plugins are these types in this order.
-   */
   sources: SourceRegistry;
-  /** Null runs only health and Agent identity, without any Vault services. */
+  /** Null starts no Vault services, job records or activity log, and Vault setup is refused. */
   workspace: VaultServiceOptions | null;
-  /** How the device's network is confirmed; the internet probe and its intervals by default. */
   connectivity?: Omit<ConnectivityOptions, 'pause'>;
-  /** The device's collection pause, when the caller sets reasons on it before the runtime starts; a new one otherwise. */
   pause?: CollectionPause;
-  /** Uses this Vault instead of the device selection; an empty directory becomes a new Vault. */
   explicitVaultPath?: string;
-  /** Folder a new Vault goes in while none is active; the Documents folder by default. */
   newVaultLocation?: string;
-  /** Application name and version recorded in Vaults this runtime creates. */
   createdBy?: string;
   agentSettingsFile: string;
   skillPath: string;
   agentPort?: number;
-  /** Packaged desktop login-startup service; absent servers report the setting unavailable. */
   loginStartup?: LoginStartupAccess;
-  /** Records a packaged OS login launch in the device activity log. */
   startedAtLogin?: boolean;
-  /** Device-level software update state shared by UI and authorized Agent APIs. */
   updates?: UpdateAccess;
   systemNotifications?: SystemNotificationAdapter;
 }
 
-/**
- * What the runtime serves through its listeners. The Vault services forward to whichever Vault is
- * open and are absent when the runtime runs without Vault services.
- */
 export interface RuntimeServices {
   sources: SourceRegistry;
   buildInfo: BuildInfo;
@@ -89,11 +73,9 @@ export interface RuntimeServices {
   /** Why business routes are unavailable, or null once a Vault is open. */
   notReady: () => string | null;
   vaultSetup: VaultSetup;
-  /** The Agent credential, opened before any Vault; a listener that serves Agents attaches to it. */
   agentConnection: AgentConnectionService;
 }
 
-/** The listeners a runtime serves through; the runtime closes them before its Vault. */
 export interface RuntimeListeners {
   close(): Promise<void>;
 }
@@ -102,17 +84,11 @@ export type StartListeners<L extends RuntimeListeners> = (services: RuntimeServi
 
 const NOT_SET_MESSAGE = '尚未設定 Vault。請在 UI Onboarding 選擇或建立 Vault，或呼叫 POST /api/vault/setup。';
 
-/**
- * Owns the one workspace, scheduler and Agent credential of a process, and the listeners it serves
- * them through. Starting opens the Agent credential, then the Vault, then the listeners; closing
- * stops the listeners, then the Vault, then the job records.
- */
 export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   readonly instanceId: string;
   readonly profilePath: string;
   readonly listeners: L;
   readonly agentConnection: AgentConnectionService;
-  /** The device's collection pause, followed by the scheduler and jobs of whichever Vault is open. */
   readonly pause: CollectionPause;
   readonly connectivity: Connectivity;
   readonly notifications: NotificationCenter;
@@ -155,18 +131,13 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
 
   activeVaultId(): string | null { return this.workspaceValue?.activeVaultId() ?? null; }
 
-  /** The export or import of the Vault in use, as `GET /api/vault/status` answers it; null while no Vault is in use. */
+  /** Null while no Vault is in use. */
   transferStatus(): TransferStatus | null { return this.workspaceValue?.operations.status() ?? null; }
 
-  /** Records a device-wide desktop event; global events stay visible with any Vault selected. */
   recordDeviceEvent(severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string): void {
     recordDeviceEvent(this.records, severity, eventType, message, errorCode);
   }
 
-  /**
-   * Opens the Agent credential and the Vault, then starts the listeners with `listen`. Throws before
-   * opening anything when `workspace.plugins` are not the types of `sources`.
-   */
   static async start<L extends RuntimeListeners>(options: CollectorRuntimeOptions, listen: StartListeners<L>): Promise<CollectorRuntime<L>> {
     if (options.workspace) options.sources.checkPlugins(options.workspace.plugins);
     const sources = options.sources;
@@ -317,12 +288,6 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     };
   }
 
-  /**
-   * Creates, opens or imports a Vault while Not Ready, then starts its services and remembers the
-   * location. A new Vault, empty or imported, is the new folder `name` in `location`; an import
-   * fills it from the export file `packagePath` and keeps the automatic collection switch the
-   * export file holds.
-   */
   async setup(request: VaultSetupRequest): Promise<VaultSetupResult> {
     if (!this.services) throw new CollectorError('vault_not_ready', '此執行環境沒有提供 Vault 服務。');
     if (this.closing) throw new CollectorError('vault_busy', '服務正在停止。');

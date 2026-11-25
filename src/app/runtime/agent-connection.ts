@@ -28,10 +28,6 @@ export interface AgentListener {
 type AgentEvent = (severity: 'info' | 'warning' | 'error', type: EventType, message: string, code?: string) => void;
 interface SavedAgentSettings { schemaVersion: 1; token: string; port: AgentPortSetting }
 
-/**
- * Owns the private Agent credential, the configured port and the snapshot of the active listener for
- * one profile. The transport layer starts the listener on one of `candidatePorts` and attaches it.
- */
 export class AgentConnectionService implements AgentConnectionAccess {
   private configured: AgentPortSetting = { mode: 'auto' };
   private activeConfigured: AgentPortSetting = { mode: 'auto' };
@@ -64,7 +60,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
     this.openedValue = true;
   }
 
-  /** The ports the listener tries in order: the fixed port, or the preferred range and then any free port. */
   candidatePorts(): number[] {
     return this.activeConfigured.mode === 'fixed' ? [this.activeConfigured.port]
       : [...Array.from({ length: AGENT_PORT_RANGE }, (_, offset) => this.autoStartPort + offset), 0];
@@ -76,7 +71,6 @@ export class AgentConnectionService implements AgentConnectionAccess {
     this.unavailableMessage = '';
   }
 
-  /** Reports that no listener could start, for the system reason `code`. */
   listenFailed(code: string): void {
     this.unavailableMessage = this.activeConfigured.mode === 'fixed'
       ? `指定的連線埠 ${this.activeConfigured.port} 無法使用。XR Collector 其他功能仍可使用，請修改連線設定後重新啟動。`
