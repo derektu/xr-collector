@@ -11,8 +11,12 @@ const MIN_SECRET_LENGTH = 8;
 
 const secrets = new Set<string>();
 
-/** Masks `secret` wherever it appears in text passed to `redact`, `maskSecrets` or `maskSecretsJson` from now on. */
+/**
+ * Masks `secret` wherever it appears in text passed to `redact`, `maskSecrets` or `maskSecretsJson` from now on.
+ * Throws when `secret` contains a character JSON escapes.
+ */
 export function protectSecret(secret: string): void {
+  if (JSON.stringify(secret) !== `"${secret}"`) throw new Error('A protected secret cannot contain characters JSON escapes');
   if (secret.length >= MIN_SECRET_LENGTH) secrets.add(secret);
 }
 

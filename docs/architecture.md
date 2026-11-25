@@ -32,7 +32,7 @@ Electron 啟動本機 Fastify Web Server，載入 React 畫面；Web 開發模�
 
 ## 機密遮蔽
 
-兩個 listener 送出的每個 JSON 回應與變動事件，字串值中 process 持有的已知機密（Agent 金鑰、Meilisearch 金鑰）都經 `src/shared/lib/redact.ts` 遮蔽，不論來自哪個 route、hook 或沒有對應 route 的回應；Agent 連線資料的成功回應依設計交出金鑰，檔案下載與 UI 頁面原樣送出。出口只比對已知機密的字面值，文件內容與網址裡像憑證的字（`bearer`、`?key=`）照原樣送出；憑證樣式（Authorization、cookie、帶密鑰的網址參數）在可能帶外部程式輸出的訊息產生處遮蔽：錯誤回應、工作錯誤、活動記錄、通知與搜尋引擎的啟動失敗。
+兩個 listener 送出的每個文字回應（JSON 或字串，不論是否宣告 content-type）與變動事件中，process 持有的已知機密（Agent 金鑰、Meilisearch 金鑰）都經 `src/shared/lib/redact.ts` 遮蔽，不論來自哪個 route、hook 或沒有對應 route 的回應；Agent 連線資料的成功回應依設計交出金鑰（API 表標 `revealsSecret` 的 route，錯誤回應照常遮蔽），檔案下載與 UI 頁面原樣送出。出口只比對已知機密的字面值，文件內容與網址裡像憑證的字（`bearer`、`?key=`）照原樣送出；憑證樣式（Authorization、cookie、帶密鑰的網址參數）在可能帶外部程式輸出的訊息產生處遮蔽：錯誤回應、工作錯誤、活動記錄、通知與搜尋引擎的啟動失敗。
 
 Agent 金鑰在讀出與重設時登記為已知機密；搜尋引擎每次啟動都產生新金鑰，並在啟動時登記。這些訊息遮蔽後再截到長度上限：訊息保留開頭；診斷輸出保留結尾，因為工具把讓它停下的錯誤印在最後。
 
