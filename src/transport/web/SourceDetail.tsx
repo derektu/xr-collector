@@ -24,6 +24,7 @@ import {
 } from './source-presentation.js';
 import { subscriptionStatusData, subscriptionStatusText, subscriptionStatusTone } from './subscription-presentation.js';
 import { useSourceDeclarations } from './source-declarations.js';
+import { editSettingsForm, openSettingsForm, takeUnsent, type SettingsForm } from './settings-form.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
@@ -45,8 +46,7 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
   const [removing, setRemoving] = useState(false);
   const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState<Saving>({ kind: 'idle' });
-  const [savingSettings, setSavingSettings] = useState<SubscriptionSettings | null>(null);
-  const [draft, setDraft] = useState<SubscriptionSettings | null>(null);
+  const [form, setForm] = useState<SettingsForm | null>(null);
   const [reload, setReload] = useState(0);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
@@ -59,8 +59,9 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
       return;
     }
     if (!read.value) return;
-    setState({ kind: 'ready', detail: read.value });
-    setSavingSettings(null);
+    const detail = read.value;
+    setState({ kind: 'ready', detail });
+    setForm((current) => current?.subscriptionId === detail.subscription.id ? current : openSettingsForm(detail.subscription.id, detail.subscription.settings));
   }, [read.value, read.error]);
 
   const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />訂閱</button>;
@@ -89,30 +90,22 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
     }
   }
 
+  const settingsForm = form ?? openSettingsForm(source.id, source.settings);
   const typedKeys = fields.filter((field) => field.input === 'number').map((field) => field.key);
-  const typedPart = (settings: SubscriptionSettings): Partial<SubscriptionSettings> =>
-    Object.fromEntries(typedKeys.map((key) => [key, settings[key]])) as Partial<SubscriptionSettings>;
 
   function editSettings(patch: Partial<SubscriptionSettings>): void {
-    const next = { ...(draft ?? savingSettings ?? source.settings), ...patch } as SubscriptionSettings;
+    const next = editSettingsForm(settingsForm, patch);
+    setForm(next);
     const typed = Object.keys(patch).some((key) => typedKeys.includes(key));
-    if (typed || settingsErrors(fields, next).length > 0) {
-      setDraft(next);
-      setSaving({ kind: 'idle' });
-      return;
-    }
-    setDraft(null);
-    saveSettings(next, draft ? { ...typedPart(draft), ...patch } : patch);
+    if (typed) setSaving({ kind: 'idle' });
+    else commitSettings(next);
   }
 
-  function commitTyped(): void {
-    if (!draft || settingsErrors(fields, draft).length > 0) return;
-    setDraft(null);
-    saveSettings(draft, typedPart(draft));
-  }
-
-  function saveSettings(shown: SubscriptionSettings, patch: Partial<SubscriptionSettings>): void {
-    setSavingSettings(shown);
+  function commitSettings(current: SettingsForm = settingsForm): void {
+    if (settingsErrors(fields, current.shown).length > 0) return;
+    const { form: sent, patch } = takeUnsent(current);
+    if (Object.keys(patch).length === 0) return;
+    setForm(sent);
     setSaving({ kind: 'saving' });
     const send = async () => {
       try {
@@ -174,12 +167,12 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
         {saving.kind === 'saving' ? <span className="save-state" role="status">儲存中…</span> : null}
         {saving.kind === 'saved' ? <span className="save-state saved" role="status" data-testid="settings-saved">已儲存</span> : null}
         <span className="panel-spacer" />
-        <button type="button" className="button small" disabled={draft !== null && settingsErrors(fields, draft).length > 0} onClick={() => setApplying(true)}
+        <button type="button" className="button small" disabled={settingsErrors(fields, settingsForm.shown).length > 0} onClick={() => setApplying(true)}
           data-testid="apply-settings">套用到所有 {source.kindLabel}</button>
       </div>
       <div className="panel-body">
-        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={draft ?? savingSettings ?? source.settings}
-          onChange={editSettings} onCommitNumber={commitTyped} />
+        <CollectionSettingsFields idPrefix="detail-settings" type={source.type} fields={fields} value={settingsForm.shown}
+          onChange={editSettings} onCommitNumber={() => commitSettings()} />
         {saving.kind === 'error' ? <p className="add-problem" role="alert">{saving.message}</p> : null}
         <p className="next-check" data-testid="detail-next-check">下次檢查 {nextCheckLabel(source, schedule?.enabled ?? null, today)}</p>
       </div>
