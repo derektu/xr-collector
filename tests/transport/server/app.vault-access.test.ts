@@ -1,3 +1,4 @@
+// Broken, a write lands in the Vault while an import applies, or a route answers before a Vault is ready instead of saying it is not ready.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { createHttpApp } from '../../../src/transport/server/app.js';

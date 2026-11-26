@@ -1,3 +1,4 @@
+// Broken, a failed subscription request from this window goes unannounced or is announced twice, or the window announces an Agent's failure.
 import { describe, expect, it } from 'vitest';
 import type { JobView } from '../../../../src/shared/jobs/job-types.js';
 import { trackSubscriptionRequests } from '../../../../src/transport/web/shell/subscription-requests.js';

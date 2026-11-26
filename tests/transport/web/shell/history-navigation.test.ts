@@ -1,3 +1,4 @@
+// Broken, Back leaves the App or lands on the wrong page, or a document opened from a subscription loses its way back.
 import { describe, expect, it } from 'vitest';
 import { backTarget, openedFromSource, readAppHistoryState } from '../../../../src/transport/web/shell/history-navigation.js';
 

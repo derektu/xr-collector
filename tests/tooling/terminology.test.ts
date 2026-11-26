@@ -1,3 +1,4 @@
+// Broken, a retired word comes back in the UI, a server message or the Agent Skill.
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';

@@ -1,3 +1,4 @@
+// Broken, a restart right after opening another Vault opens the previous one.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';

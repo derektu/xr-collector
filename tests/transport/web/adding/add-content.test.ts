@@ -1,3 +1,4 @@
+// Broken, settings chosen for an earlier recognition of an address carry over, or the add dialog subscribes with a setting its field rejects.
 import { describe, expect, it } from 'vitest';
 import type { SourceSettingField, UrlRecognition } from '../../../../src/shared/sources/source-info-types.js';
 import { settingsFor, subscribeWaitsForSettings } from '../../../../src/transport/web/adding/add-content.js';

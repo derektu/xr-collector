@@ -1,3 +1,6 @@
+// Broken, a job that keeps crashing the App is resumed forever, a check waiting on its videos is blamed for their crashes,
+// one channel address in another letter case starts a second request, or two videos whose IDs differ only in case are
+// collected as one.
 import { describe, expect, it } from 'vitest';
 import { inOwnStep, workKey, type RoleJob } from '../../../src/shared/jobs/job-role.js';
 import type { CollectionJob, JobPhase } from '../../../src/shared/jobs/job-types.js';

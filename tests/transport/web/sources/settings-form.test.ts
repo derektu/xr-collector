@@ -1,3 +1,4 @@
+// Broken, saving subscription settings sends fields the user did not change, or drops an edit made after the last save.
 import { describe, expect, it } from 'vitest';
 import { editSettingsForm, openSettingsForm, takeUnsent } from '../../../../src/transport/web/sources/settings-form.js';
 

@@ -1,3 +1,4 @@
+// Broken, focus outlines show after a mouse click or Escape, or stay hidden while the user moves by keyboard.
 import { describe, expect, it } from 'vitest';
 import { nextModality, type InputModality, type ModalityEvent } from '../../../../src/transport/web/infra/input-modality.js';
 

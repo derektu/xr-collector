@@ -1,3 +1,4 @@
+// Broken, an import preview counts removals wrong, or a merge leaves a deleted document's file in place.
 import { describe, expect, it } from 'vitest';
 import type { DeletionRecord } from '../../../src/shared/documents/document-types.js';
 import type { ChangeCounts } from '../../../src/shared/vault/vault-types.js';

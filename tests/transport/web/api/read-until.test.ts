@@ -1,3 +1,4 @@
+// Broken, the Reader or a Vault import waits forever on a change it missed, or retries while offline more than one read at a time.
 import { describe, expect, it } from 'vitest';
 import { eventually } from '../../../support/wait.js';
 import type { Change } from '../../../../src/transport/web/api/change-feed.js';

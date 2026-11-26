@@ -1,3 +1,4 @@
+// Broken, a typed address, search or name check runs on every keystroke or with stale input, or fires after its screen closed.
 import { describe, expect, it } from 'vitest';
 import { Countdown } from '../../../../src/transport/web/infra/timing.js';
 import { timersAfter } from '../../../support/timers.js';

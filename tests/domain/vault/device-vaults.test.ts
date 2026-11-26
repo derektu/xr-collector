@@ -1,3 +1,5 @@
+// Broken, a failed Vault setup leaves a half-made Vault or deletes an existing one the user chose to open, or a restart
+// opens a Vault the App never finished setting up.
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

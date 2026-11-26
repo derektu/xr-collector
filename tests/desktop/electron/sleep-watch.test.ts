@@ -1,3 +1,4 @@
+// Broken, collection stays paused after the computer wakes, or a quitting App still pauses or resumes collection.
 import { EventEmitter } from 'node:events';
 import { expect, it, vi } from 'vitest';
 import { watchSleep } from '../../../src/desktop/electron/sleep-watch.js';

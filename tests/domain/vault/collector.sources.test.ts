@@ -1,3 +1,4 @@
+// Broken, the Documents source filter names a channel without a subscription by an older name.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

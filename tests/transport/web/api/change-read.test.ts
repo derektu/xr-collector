@@ -1,3 +1,4 @@
+// Broken, a screen following changes shows a stale answer, or misses changes that came during a slow read.
 import { describe, expect, it } from 'vitest';
 import { createChangeRead, type ReadOutcome } from '../../../../src/transport/web/api/change-read.js';
 

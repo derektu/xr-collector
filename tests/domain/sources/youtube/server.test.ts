@@ -1,3 +1,4 @@
+// Broken, a check of a channel with more than one page of videos misses videos within its range.
 import { describe, expect, it, vi } from 'vitest';
 import { LISTING_PAGE, youtubePlugin } from '../../../../src/domain/sources/youtube/server.js';
 import type { DiscoveredYouTubeVideo, ListingPage } from '../../../../src/domain/sources/youtube/adapter.js';

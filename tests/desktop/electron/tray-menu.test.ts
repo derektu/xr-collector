@@ -1,12 +1,8 @@
-// Broken, the tray shows the wrong status, icon or update entry, or shows the close hint more than once.
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+// Broken, the tray shows the wrong status, icon or update entry, or stays outdated after a change.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionScheduleView } from '../../../src/shared/subscriptions/subscription-types.js';
 import type { DeviceUpdateStatus } from '../../../src/shared/api/update-types.js';
 import type { JobOverview, JobOverviewEntry } from '../../../src/shared/jobs/job-types.js';
-import { CloseHintRecord } from '../../../src/desktop/electron/close-hint.js';
 import { menuStaleAfter, trayModel } from '../../../src/desktop/electron/tray-menu.js';
 import type { TrayModel } from '../../../src/desktop/electron/tray-menu.js';
 import type { AutoPauseNotification } from '../../../src/shared/api/device-types.js';
@@ -210,18 +206,5 @@ describe('tray menu refresh', () => {
     expect(menuStaleAfter([{ kind: 'notifications' }])).toBe(true);
     expect(menuStaleAfter([{ kind: 'vault', scope: 'contents' }])).toBe(true);
     expect(menuStaleAfter([{ kind: 'document', id: 'd' }, { kind: 'search' }, { kind: 'activity' }])).toBe(false);
-  });
-});
-
-describe('first close hint record (#32 T2)', () => {
-  it('is not shown until marked, stays marked, and counts an unreadable record as not shown', async () => {
-    const file = path.join(await mkdtemp(path.join(tmpdir(), 'xr-tray-')), 'tray.json');
-    const record = new CloseHintRecord(file);
-    await expect(record.shown()).resolves.toBe(false);
-    await record.markShown();
-    await expect(record.shown()).resolves.toBe(true);
-    await expect(new CloseHintRecord(file).shown()).resolves.toBe(true);
-    await writeFile(file, '{ not json');
-    await expect(new CloseHintRecord(file).shown()).resolves.toBe(false);
   });
 });

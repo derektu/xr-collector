@@ -1,3 +1,4 @@
+// Broken, an Agent connection whose key cannot be saved still accepts requests, or a saved key that masking cannot find keeps the Agent from connecting.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

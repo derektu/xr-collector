@@ -1,3 +1,4 @@
+// Broken, the sidebar and the tray name an update step differently, or show a download percent before the size is known.
 import { describe, expect, it } from 'vitest';
 import { trayLabelText, trayModel } from '../../../src/desktop/electron/tray-menu.js';
 import type { DeviceUpdateStatus, UpdatePhase } from '../../../src/shared/api/update-types.js';
