@@ -1,6 +1,5 @@
-// Guards the developer and the user's data: what CI uploads never includes a Vault or a profile, the
-// nightly packaging builds exactly the targets that `package:*` delivers, and no `run:` script expands
-// text a pull request or a dispatch can set.
+// Guards the developer and the user's data: CI could upload a Vault or a profile, ship other nightly targets
+// than `package:*` delivers, or run text a pull request sets.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
