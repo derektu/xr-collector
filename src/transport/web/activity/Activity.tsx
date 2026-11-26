@@ -170,36 +170,24 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
         </div>
         <span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">紀錄類型</span>
-          <select value={state.recordType} onChange={(event) => { const value = event.target.value; if (isOneOf(RECORD_TYPES, value)) change({ recordType: value }); }}
-            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-type">
+          <select value={state.recordType} onChange={(event) => { const value = event.target.value; if (isOneOf(RECORD_TYPES, value)) change({ recordType: value }); }} data-testid="log-type">
             {RECORD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">最低等級</span>
-          <select value={state.minLevel} onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) change({ minLevel: value }); }}
-            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-level">
+          <select value={state.minLevel} onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) change({ minLevel: value }); }} data-testid="log-level">
             {MIN_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">訂閱</span>
-          <select value={state.subscriptionId ?? ''} onChange={(event) => change({ subscriptionId: event.target.value || null })}
-            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-source">
+          <select value={state.subscriptionId ?? ''} onChange={(event) => change({ subscriptionId: event.target.value || null })} data-testid="log-source">
             <option value="">所有訂閱</option>
             {subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.title}</option>)}
             {unlistedSubscriptionId === null ? null : <option value={unlistedSubscriptionId}>{unlistedSubscriptionId}</option>}
           </select>
         </label>
         <label className="source-select"><span className="visually-hidden">時間</span>
-          <select value={state.range} onChange={(event) => { const value = event.target.value; if (isOneOf(RANGES, value)) change({ range: value }); }}
-            onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-            onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-            onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="log-range">
+          <select value={state.range} onChange={(event) => { const value = event.target.value; if (isOneOf(RANGES, value)) change({ range: value }); }} data-testid="log-range">
             {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
@@ -302,10 +290,7 @@ function ActivityGroup({ groupId, returnTo, state, onState }: { groupId: string;
         <span>{page.group.sourceTitle ? `${page.group.sourceTitle} · ` : ''}{summaryRange(page.group.firstFinishedAt, page.group.lastFinishedAt)} · 完整事件</span></section>
       <section className="activity-card"><div className="log-toolbar"><h2>每次收集</h2><span className="panel-spacer" />
         <label className="source-select"><span className="visually-hidden">最低等級</span><select value={state.minLevel}
-          onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) onState({ ...state, minLevel: value }); }}
-          onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-          onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-          onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="group-level">
+          onChange={(event) => { const value = event.target.value; if (isOneOf(MIN_LEVELS, value)) onState({ ...state, minLevel: value }); }} data-testid="group-level">
           {MIN_LEVEL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <span className="activity-group-count">{page.checks.length === page.group.count
           ? `共 ${page.group.count} 次收集` : `已顯示 ${page.checks.length} 次，共 ${page.group.count} 次收集`}</span></div>

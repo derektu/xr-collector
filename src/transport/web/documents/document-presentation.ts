@@ -67,8 +67,8 @@ export function sourceFilter(source: DocumentSourceChoice | null): DocumentFilte
 
 export const STATUS_FILTERS: ReadonlyArray<{ status: DocumentStatus | null; label: string }> = [
   { status: null, label: '全部' },
-  { status: 'draft', label: '草稿' },
   { status: 'published', label: '正式' },
+  { status: 'draft', label: '草稿' },
 ];
 
 export function statusFilterCount(counts: DocumentStatusCounts, status: DocumentStatus | null): number {

@@ -29,6 +29,8 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 側欄的工作數量與排程狀態讀取失敗時保留上次讀到的值；讀取錯誤由各頁自己顯示。
 
+焦點外框跟著最近一次的互動方式（`src/transport/web/infra/input-modality.ts`）。按下指標後，可聚焦的控制項不顯示焦點外框；按 Tab、Enter、Space 後恢復顯示。方向鍵與 Escape 不改變互動方式：單選群組選中的選項與選單裡聚焦的項目各有底色標出位置，點選後以方向鍵移動時不另加外框；瀏覽器把 Escape 當成鍵盤操作，所以以滑鼠打開的選單或對話框用 Escape 關閉、焦點回到按鈕時，按鈕仍不顯示外框。文字輸入框不論互動方式，聚焦時都顯示外框，讓打字位置看得到。焦點外框是 2px 的強調色，間距 2px。
+
 ## 主題
 
 主題設定在設定頁的「外觀」：單選群組「主題」，選項為跟隨系統、深色、淺色，儲存值為 `system`、`dark` 或 `light`。`system` 經 `prefers-color-scheme` 跟隨作業系統，系統外觀一變就切換；Electron 的 `prefers-color-scheme` 透過 `nativeTheme` 跟隨系統，所以 Browser 與 Electron 共用同一條 renderer 路徑，Electron main 不設定 `nativeTheme.themeSource`。畫面經 `src/transport/web/shell/app-shell.ts` 的 `ThemeStore` 介面讀寫偏好，不依賴儲存位置：

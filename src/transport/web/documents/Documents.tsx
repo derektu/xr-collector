@@ -192,10 +192,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
       <label className="source-select">
         <span className="visually-hidden">篩選文件</span>
         <Icon name="sources" size={15} />
-        <select value={sourceKey} onChange={(event) => onState({ ...state, source: parseSourceParam(event.target.value), page: 1 })}
-          onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = 'true'; }}
-          onKeyDown={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
-          onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }} data-testid="documents-source">
+        <select value={sourceKey} onChange={(event) => onState({ ...state, source: parseSourceParam(event.target.value), page: 1 })} data-testid="documents-source">
           <option value={options.all.value}>{options.all.label}</option>
           {options.groups.map((group) => <optgroup key={group.label} label={group.label}>
             {group.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
