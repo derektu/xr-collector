@@ -1,6 +1,4 @@
-// The build host's real CPU architecture behind an emulated Node process on Windows and macOS, and a
-// stop when it cannot be told, so the packaging checks that rely on it never take an emulated host
-// for a native one and ship a runtime for the wrong architecture.
+// Broken, packaging on an emulated host ships a runtime for the wrong architecture.
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { parseWindowsProcessorArchitectures, probePhysicalHost } from '../../../scripts/lib/physical-host.mjs';
 

@@ -1,7 +1,5 @@
-// The installers a package run produces: only the Mac and Windows delivery targets, a Mac App
-// notarized and Gatekeeper-checked before its DMG and ZIP are built from it, verified BuildInfo and
-// runtimes inside, an isolated identity for validation packages, the update feed the App's updater
-// reads and an inventory, and one package run per checkout.
+// Broken, users get an installer that fails Gatekeeper or carries the wrong build, or the App
+// cannot read its update feed.
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -19,7 +17,6 @@ const exec = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function temporaryRoot(prefix: string) { const root = await mkdtemp(path.join(tmpdir(), prefix)); roots.push(root); return root; }
-/** packageApplication passes electron-builder's CLI as a path joined with the host's separator. */
 const isBuilderCli = (argument: string) => argument.endsWith(path.join('electron-builder', 'cli.js'));
 
 it('passes electron-builder the verified certificate hash instead of a prefixed Developer ID name', () => {
@@ -81,7 +78,6 @@ it('gives the signed verifier a runner that captures output and carries both che
       probePhysicalHost: async () => ({ platform: 'darwin', processArch: 'arm64', hostArch: 'arm64', emulated: false }),
       stageBuildInfoSidecar: async () => undefined,
       clearPreviousArtifactSet: async () => undefined,
-      // Like the real runner, the build runner streams output and resolves without it.
       run: async (command: string, args: string[], options: RunOptions) => { calls.push({ command, args, options }); },
       runCaptured: async (command: string, args: string[], options: RunOptions) => {
         calls.push({ command, args, options });
@@ -282,7 +278,6 @@ it('writes the package timing table and JSON up to a failing electron-builder ru
 it('requires an explicit isolated identity for validation version overrides', () => {
   const args = ['--target', 'darwin-arm64', '--validation-version', '0.1.1',
     '--validation-app-id', 'com.xrcollector.verify36', '--validation-product-name', 'XR Update Verify 36'];
-  // The shell running the tests may itself export the flag for a validation package.
   vi.stubEnv('XR_COLLECTOR_VALIDATION_BUILD', undefined);
   expect(() => parsePackageArguments(args)).toThrow(/XR_COLLECTOR_VALIDATION_BUILD/u);
   vi.stubEnv('XR_COLLECTOR_VALIDATION_BUILD', '1');
@@ -334,7 +329,8 @@ it('removes Git routing and signing credentials from every packaging child envir
 
 it('keeps stdout written after the direct child exits but before its pipe closes', async () => {
   const descendant = `setTimeout(() => process.stdout.write('complete output'), 50)`;
-  // Detached, because Node on Windows ends a non-detached child together with its exiting parent.
+  // External: on Windows a child keeps running after its parent exits only when spawned with `detached: true`.
+  // https://nodejs.org/docs/latest-v22.x/api/child_process.html#optionsdetached
   const directChild = `
     const { spawn } = require('node:child_process');
     const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true });
@@ -370,13 +366,11 @@ it('opens both final Mac containers and checks that their only App is the staple
     },
   });
 
-  // The publisher passes no expected identity and runs the full Developer ID gate.
   const zipCalls: string[] = [];
   await expect(verifySignedMacZip('/candidate/update.zip', 'XR Collector', 'ABCDE12345', { run: zipRun, ...gates(zipCalls) }))
     .resolves.toEqual({ appIdentity: stapledApp });
   expect(zipCalls).toEqual(['hash', 'identity:ABCDE12345', 'stapler+syspolicy+spctl']);
 
-  // The packager compares with the stapled App, whose Developer ID gate already passed.
   const dmgCalls: string[] = [];
   await verifySignedMacDmgContents('/candidate/installer.dmg', 'XR Collector', 'ABCDE12345', {
     run: dmgRun(dmgCalls), ...gates(dmgCalls), expectedAppIdentity: stapledApp, verifyDeveloperId: false,
@@ -398,7 +392,6 @@ it('opens both final Mac containers and checks that their only App is the staple
   })).rejects.toThrow(/does not have a ticket stapled/u);
 });
 
-/** An electron-builder option that takes one value or a list of them, as a list. */
 function listOf<T>(value: T | T[] | null | undefined): T[] {
   if (value === null || value === undefined) return [];
   return Array.isArray(value) ? value : [value];
@@ -410,7 +403,6 @@ it('resolves each Windows package resource once with an exact app-local CRT filt
     expect(config.mac, configFile).toMatchObject({ identity: '-', hardenedRuntime: false });
     expect(config.mac?.signIgnore, configFile).toEqual(['/Contents/Resources/bin(?:/|$)']);
     const signIgnore = listOf(config.mac?.signIgnore).map((pattern) => new RegExp(pattern));
-    // signIgnore is matched against the Mac App's POSIX paths on the Mac build host.
     const macApp = '/private/tmp/XR Collector.app';
     for (const resource of listOf(config.mac?.extraResources)) {
       if (typeof resource === 'string' || !resource.to?.startsWith('bin/')) continue;
@@ -572,8 +564,7 @@ it('queries Windows packaging owners through PowerShell and fails closed when th
   await expect(readPackagingProcessIdentity(4242, { platform: 'darwin', capture: async () => { throw new Error('ps exited with status 1'); } })).resolves.toBeNull();
 });
 
-// The query itself, against this platform's real process table: ps on Mac and Linux, PowerShell on Windows.
-it('reads the identity of this process from the process table', async () => {
+it("reads the identity of this process from this platform's real process table", async () => {
   await expect(readPackagingProcessIdentity(process.pid)).resolves.toMatchObject({ pid: process.pid, startedAt: expect.any(String) });
 });
 
@@ -685,7 +676,6 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   });
   await expect(readBack(stapled, { bytes: 16, sha256: 'c'.repeat(64) })).rejects.toThrow(/differs from the verified stapled App/u);
   await expect(readBack(undefined)).rejects.toThrow(/differs from the verified stapled App/u);
-  // Identical bytes pass the identity gate and continue to the resource read-back.
   await expect(readBack(stapled)).rejects.toThrow(/app\.asar|ENOENT|no such file/iu);
 });
 

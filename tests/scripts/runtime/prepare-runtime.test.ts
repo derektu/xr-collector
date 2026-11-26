@@ -1,6 +1,4 @@
-// The `prepare:runtime` command: it accepts only the two delivery targets, fills the runtime cache
-// for yt-dlp and Deno before Meilisearch, and the npm scripts that set up a checkout call it, so a
-// fresh clone gets both runtimes from one command.
+// Broken, a fresh clone does not get its runtimes from one command.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, it } from 'vitest';

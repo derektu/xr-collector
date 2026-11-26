@@ -112,7 +112,6 @@ export async function ensureMarker(root: string): Promise<void> {
   if (!existsSync(path.join(root, VAULT_MARKER))) await writeVaultMarker(root, 'XR Collector test');
 }
 
-/** Runs `use` on package bytes opened as a package file of the types of `sources`. */
 async function withPackage<T>(
   bytes: Buffer, use: (reader: PackageReader) => Promise<T>, sources: SourceRegistry = PRODUCT_SOURCES,
 ): Promise<T> {

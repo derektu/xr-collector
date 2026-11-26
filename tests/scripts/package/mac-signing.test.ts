@@ -1,7 +1,5 @@
-// What a Mac user receives from a signed build: the App and the DMG each notarized once and stapled,
-// passing Gatekeeper with the expected Team, hardened runtime and Developer ID signed runtime files. The
-// signing credentials and temporary keychain never disturb other sessions and are cleaned up after a
-// kill or signal; those cases skip Windows.
+// Broken, Mac users get an App or DMG that Gatekeeper rejects, or signing disturbs other keychain
+// sessions or leaves credentials behind.
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -47,8 +45,8 @@ it.skipIf(process.platform === 'win32')('loads only the exact protected credenti
   await expect(loadMacSigningConfiguration({ environmentFile, pathRoot: root })).rejects.toThrow(/only by its owner/u);
 });
 
-// This and the following temporary signing keychain cases skip Windows: they depend on POSIX
-// behavior it lacks, owner-only directory permissions, process identity through /bin/ps and POSIX signals.
+// External: Windows has no owner-only directory permissions, /bin/ps or POSIX signals, which the
+// temporary signing keychain cases depend on.
 it.skipIf(process.platform === 'win32')('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
   const tempRoot = await privateSigningRoot();
   const calls: string[][] = [];
@@ -86,13 +84,12 @@ const SHA_A = 'A'.repeat(40);
 const SHA_B = 'B'.repeat(40);
 const identityLine = (index: number, sha1: string, team: string, problem?: string) =>
   `  ${index}) ${sha1} "Developer ID Application: Example (${team})"${problem ? ` (${problem})` : ''}`;
-// `find-identity` without -v lists every matching identity, then repeats the valid ones.
+// External: `security find-identity` without -v lists every matching identity, then repeats the valid ones.
 const matchingListing = (matching: string[], valid: string[]) => [
   'Policy: Code Signing', '  Matching identities', ...matching, `     ${matching.length} identities found`, '',
   '  Valid identities only', ...valid, `     ${valid.length} valid identities found`, '',
 ].join('\n');
 
-/** What `withTemporarySigningKeychain` passes its work. */
 type SigningKeychain = { keychain: string; identity: unknown; signal: AbortSignal };
 type Identities = { valid: string[]; matching?: string[]; importError?: string };
 type SigningError = Error & { detail: string; fix: string };
@@ -134,7 +131,7 @@ async function identityCheck(identities: Identities) {
 it.skipIf(process.platform === 'win32')('checks the Developer ID identity in a temporary keychain outside the user search list', async () => {
   const cases = [
     { name: 'valid', identities: { valid: [identityLine(1, SHA_A, 'ABCDE12345')] } },
-    // macOS 26 lists an identity with a missing intermediate under Matching identities with no reason.
+    // External: macOS 26 lists an identity with a missing intermediate under Matching identities with no reason.
     { name: 'untrusted', identities: { valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345')] },
       detail: /is not trusted; this Mac lacks the Apple Developer ID G2 intermediate/u, fix: DEVELOPER_ID_INTERMEDIATE_FIX },
     { name: 'untrusted with reason', identities: { valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345', 'CSSMERR_TP_NOT_TRUSTED')] },
@@ -433,7 +430,6 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
   const ended = path.join(root, 'ended.lock');
   await mkdir(ended, { mode: 0o700 });
   await writeFile(path.join(ended, 'owner-a1.json'), JSON.stringify({ pid: 424242, uid, startedAt: 'stale', token: 'a1' }), { mode: 0o600 });
-  // `package:mac` prints the message of the error signing rejects with.
   const endedFailure = await sign(ended).catch((error: unknown) => error);
   expect(endedFailure).toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND', lockPath: ended });
   expect(endedFailure.message).toBe(`Owned lock ${ended} was left by process 424242 (started stale), which has ended, as have the child processes it recorded. `
@@ -456,7 +452,6 @@ it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock lef
   expect(await readdir(malformed)).toEqual(['owner-a1.json']);
   expect(keychains).toEqual([]);
 
-  // A lock another signing run leaves behind while this one works stops this run's cleanup too.
   const later = path.join(root, 'later.lock');
   const laterFailure = await withTemporarySigningKeychain({ certificatePath: '/protected/certificate.p12', certificatePassword: 'secret', teamId: 'ABCDE12345' }, async () => {
     await mkdir(later, { mode: 0o700 });
@@ -484,7 +479,6 @@ async function signedAppFixture(prefix: string) {
   return { root, app, evidenceDirectory: path.join(root, 'evidence') };
 }
 
-/** Fake notary tools: `ditto -c` writes the upload ZIP and `stapler staple` adds a ticket to the App. */
 function notaryRun(app: string, handlers: Record<string, (args: string[]) => unknown>, calls: string[] = []) {
   return vi.fn(async (_command: string, args: string[]) => {
     const name = args[0] === '-c' ? 'ditto' : `${args[0]} ${args[1]}`;
@@ -550,7 +544,6 @@ async function signedDmgFixture(prefix: string) {
   return { dmg, evidenceDirectory: path.join(root, 'evidence') };
 }
 
-/** `stapler staple` on a DMG appends the ticket to the image file. */
 const dmgStaple = (dmg: string) => ({ 'stapler staple': async () => { await writeFile(dmg, 'stable-upload+ticket'); return { stdout: '', stderr: '' }; } });
 
 it('notarizes the DMG as itself without a ZIP upload, staples it and records the stapled DMG identity', async () => {
@@ -700,7 +693,6 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
   releaseSigns();
   const signed = await signing;
   expect(signCalls.at(-1)).toBe(path.join(appBin, 'yt-dlp/_internal/Python.framework'));
-  // Leaf files are signed concurrently; the framework starts only after every leaf has finished.
   expect(maxSignsInFlight).toBe(3);
   expect(leavesFinishedBeforeFramework).toBe(3);
   expect(signCalls.slice(0, -1).sort()).toEqual(['meilisearch', 'yt-dlp/_internal/Python.framework/Versions/3.14/Python', 'yt-dlp/yt-dlp']

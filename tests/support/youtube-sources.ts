@@ -40,6 +40,6 @@ export type WithYouTube<O extends { plugins: readonly SourcePlugin[] }> = Omit<O
  */
 export function withYouTube<O extends { plugins: readonly SourcePlugin[] } = VaultServiceOptions>(options: WithYouTube<O>): O {
   const { capture, channelSource, plugins, ...rest } = options;
-  // `rest` is `O` without `plugins`; TypeScript cannot prove that adding them back makes `O`.
+  // External: TypeScript cannot prove that `O` without `plugins`, with `plugins` added back, is `O`.
   return { ...rest, plugins: plugins ?? productPlugins(capture, channelSource) } as unknown as O;
 }

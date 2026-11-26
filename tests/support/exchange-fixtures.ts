@@ -1,3 +1,4 @@
+// Vaults, machines and workspaces for export and import tests, each in its own temporary folder.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -17,8 +18,6 @@ import { transcriptDocument } from '../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../src/domain/vault/vault-files.js';
 import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
-
-/** Vaults, machines and workspaces for export and import tests, each in its own temporary folder. */
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];

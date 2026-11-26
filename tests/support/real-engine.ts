@@ -1,9 +1,8 @@
+// Real-engine tests carry the `real-engine` tag and run the pinned Meilisearch, which exists only for
+// Mac arm64 and Windows x64; elsewhere the tag skips.
 import path from 'node:path';
 import { bundledResources, checkoutRoot } from '../../src/app/runtime/bundled-resources.js';
 
-// Real-engine tests carry the `real-engine` tag (vitest.config.ts) and run the Meilisearch that
-// `npm run download:runtime` (Mac arm64) or `npm run download:runtime:win` (Windows x64) installs.
-// Those are the delivery targets, the only platforms with a pinned binary; elsewhere the tag skips.
 const RUNTIMES: Record<string, { binary: string; install: string }> = {
   'darwin-arm64': { binary: 'resources/bin/mac/meilisearch', install: 'npm run download:runtime' },
   'win32-x64': { binary: 'resources/bin/win/meilisearch.exe', install: 'npm run download:runtime:win' },

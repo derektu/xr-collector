@@ -1,6 +1,5 @@
-// The environment the build scripts hand to Windows PowerShell (powershell.exe) carries no
-// PSModulePath in any letter case, so a PowerShell 7 module path inherited from a pwsh terminal or a
-// CI step never reaches it; every other variable passes through.
+// Broken, a PowerShell 7 module path inherited from pwsh or CI reaches Windows PowerShell and the
+// build scripts fail.
 import { expect, it } from 'vitest';
 import { windowsPowerShellEnvironment } from '../../../scripts/lib/windows-powershell.mjs';
 

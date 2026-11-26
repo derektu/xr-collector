@@ -1,6 +1,5 @@
-// The yt-dlp and Deno an installer ships: full SHA-256 pins, a verified archive cache outside the
-// checkout that repairs a changed runtime file and serves cache-only installs, and a failed
-// checksum that keeps the installed runtimes.
+// Broken, an installer ships a yt-dlp or Deno that does not match its pin, or a failed checksum
+// loses the installed runtimes.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -123,7 +122,6 @@ it('installs from the cache without downloading in cache-only mode and names the
   await prepareRuntimeDependencies({ target: 'darwin-arm64', outputDir: path.join(root, 'checkout-a'), cacheRoot }, {
     pins, fetch: async (url: string) => new Response(archives[url]), extractZip, reportsVersion: async () => true,
   });
-  // A second checkout installs the same pins from the shared cache.
   await expect(cacheOnly(path.join(root, 'checkout-b'))).resolves.toMatchObject({ cacheHit: false });
   expect(await readFile(path.join(root, 'checkout-b', 'yt-dlp', 'yt-dlp'), 'utf8')).toBe('yt-archive');
   await expect(cacheOnly(path.join(root, 'checkout-b'))).resolves.toMatchObject({ cacheHit: true });

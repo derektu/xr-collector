@@ -1,6 +1,5 @@
-// Guards the developer, not the user: a package run reports the wall time of each stage, nested,
-// counted and failed, as a table and a JSON report that include electron-builder's hook stages,
-// and a failure keeps its original error even when the report cannot be written.
+// Guards the developer, not the user: broken, a package run reports wrong stage timings, or a
+// failure loses its original error.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

@@ -1,7 +1,5 @@
-// The packaging scripts' directory lock: one run at a time owns a checkout or keychain, so two runs
-// never mix into one installer. Creating the lock directory is the only step that takes the lock;
-// a lock whose holder has ended is reported with its path and never removed, and a lock whose
-// holder or recorded child processes may still run reports busy. POSIX-only cases skip Windows.
+// Broken, two packaging runs can mix into one installer, or a lock is removed while its run's
+// processes still write.
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,7 +29,6 @@ function lockOptions(token: string, inspectOwner: (pid: number) => Promise<unkno
     randomToken: () => token,
   };
 }
-/** A lock in `root` whose recorded owner, pid 41, is dead, as a killed run leaves it. */
 async function staleLock(root: string, name: string, owner: Record<string, unknown> = {}) {
   const lock = path.join(root, name);
   await mkdir(lock, { mode: 0o700 });
@@ -43,11 +40,6 @@ async function snapshot(lock: string) {
   return Promise.all(entries.map(async (entry) => [entry, await readFile(path.join(lock, entry), 'utf8')]));
 }
 
-/**
- * Each child process loads the lock, prints `ready` and waits for a line on stdin; then it tries the
- * lock once without waiting. The one that takes it prints `acquired` and holds it until its stdin
- * closes; the other prints its error message.
- */
 const contenderScript = `
   import { createInterface } from 'node:readline';
   const [moduleUrl, lock] = process.argv.slice(1);
@@ -128,9 +120,8 @@ it('reports a lock directory that never received an owner record once its creati
   const ownerGraceMs = 60_000;
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
     .rejects.toThrow(/^busy$/u);
-  // The directory's time moves back past the grace rather than the grace shrinking to 0 ms: a
-  // directory's time can read up to a clock tick ahead of Date.now(), most visibly on Windows,
-  // and a just-created lock then still counts as within a 0 ms grace.
+  // External: a directory's time can read up to a clock tick ahead of Date.now(), most visibly on
+  // Windows, so a lock created just now can still count as within a 0 ms grace.
   const created = new Date(Date.now() - 2 * ownerGraceMs);
   await utimes(lock, created, created);
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
@@ -157,17 +148,13 @@ it('quotes the PowerShell delete command, including the typographic quotes Power
     .rejects.toThrow(`Remove-Item -LiteralPath '${lock.replace(quotes, "it''s-\u2018\u2018\u2019\u2019\u201A\u201A\u201B\u201B")}' -Recurse`);
 });
 
-// The POSIX lock checks owner-only permission bits, which a Windows directory does not carry.
+// External: a Windows directory carries no owner-only permission bits, which the POSIX lock checks.
 it.skipIf(process.platform === 'win32')('quotes the POSIX delete command', async () => {
   const lock = await staleLock(await lockRoot(`xr-owned-lock-${quotes}-`), 'lock');
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), platform: 'darwin' }))
     .rejects.toThrow(`rm -r '${lock.replace(quotes, "it'\\''s-\u2018\u2019\u201A\u201B")}'`);
 });
 
-/**
- * Lock options whose first `failures` owner inspections fail with EPERM, as while a holder's release
- * is deleting the lock on Windows; `delays` records every wait between attempts.
- */
 function pendingDeleteOptions(platform: string, failures: number, delays: number[]) {
   let inspected = 0;
   return {
@@ -194,7 +181,7 @@ it('waits out a bounded number of Windows pending-delete EPERM failures', async 
   expect(persistent).toHaveLength(50);
 });
 
-// A POSIX lock checks owner-only permission bits, which a Windows directory does not carry.
+// External: a Windows directory carries no owner-only permission bits, which the POSIX lock checks.
 it.skipIf(process.platform === 'win32')('fails on EPERM at once outside Windows', async () => {
   const root = await lockRoot('xr-owned-lock-pending-delete-');
   const delays: number[] = [];

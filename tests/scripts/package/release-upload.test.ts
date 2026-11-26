@@ -1,7 +1,5 @@
-// What users download from a GitHub Release, and what the App's updater reads there: each platform's
-// installers and update feed go into one draft for the tag at the built commit, match the package's
-// artifact manifest and are downloaded back to compare, and the upload stops before changing GitHub
-// on a dirty checkout, a mismatched commit, tag or file, or no sign-in.
+// Broken, users download installers that do not match the build, or the App's updater finds no
+// update.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,7 +18,6 @@ const httpError = (status: number) => Object.assign(new Error(`gh: HTTP ${status
 interface Asset { id: number; name: string; state: string; body: Buffer }
 interface Release { id: number; tag_name: string; draft: boolean; assets: Asset[] }
 
-/** One platform's package output and an in-memory GitHub reached only through `gh` arguments. */
 async function setup(target: 'darwin-arm64' | 'win32-x64', options: { version?: string; commit?: string } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-release-upload-'));
   roots.push(root);
