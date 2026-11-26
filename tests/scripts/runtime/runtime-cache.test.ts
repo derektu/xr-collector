@@ -2,7 +2,6 @@
 // checkout installs the same pins without downloading, and an override that is not an absolute path
 // is refused rather than resolved against whatever directory a command runs in.
 import { expect, it } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { runtimeCacheRoot } from '../../../scripts/runtime/runtime-cache.mjs';
 
 it('places the shared runtime cache outside the checkout, per user, with an absolute override', () => {

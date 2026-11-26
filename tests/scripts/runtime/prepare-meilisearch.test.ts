@@ -6,7 +6,6 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// @ts-expect-error The production preparation entry point is intentionally executable JavaScript.
 import { inspectExecutable, parsePrepareArguments, prepareMeilisearch, selectTarget, transactionalReplacePair, withRuntimeInstallLock } from '../../../scripts/runtime/prepare-meilisearch.mjs';
 
 const roots: string[] = [];

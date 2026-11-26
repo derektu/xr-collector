@@ -12,7 +12,6 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { createPackage } from '@electron/asar';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { assertPackagedProductMetadata, capture as captureCommandOutput, packageApplication, packageChildEnvironment, parsePackageArguments, readPackagingGitIdentity, readPackagingProcessIdentity, signedBuilderIdentityOverride, stageBuildInfoSidecar, validationBuilderArguments, verifyMacBundleSignature, verifyPackagedApplication, verifySignedMacDmgContents, verifySignedMacZip, withPackageCheckoutLock, writeArtifactHandoff } from '../../../scripts/package/package-app.mjs';
 
 const exec = promisify(execFile);
@@ -679,7 +678,7 @@ it('accepts a Developer ID App only when it is byte-identical to the verified st
   const stapled = { bytes: 16, sha256: 'b'.repeat(64) };
   const readBack = (verifiedAppIdentity: unknown, actual = stapled) => verifyPackagedApplication({
     outputDir, commit: 'a'.repeat(40), version: '0.1.0', target: 'darwin-arm64',
-    signingPolicy: 'developer-id-notarized', expectedTeamId: 'ABCDE12345', verifiedAppIdentity,
+    signingPolicy: 'developer-id-notarized', verifiedAppIdentity,
   }, {
     describeArtifact: async () => actual,
     verifyDeveloperIdApplication: async () => { throw new Error('the final ZIP already ran the Developer ID gate on these bytes'); },

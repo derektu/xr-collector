@@ -8,9 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { withOwnedDirectoryLock } from '../../../scripts/lib/owned-directory-lock.mjs';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { runOwnedProcess, UnsafeProcessTreeError } from '../../../scripts/lib/owned-process.mjs';
 import { eventually } from '../../support/wait.js';
 

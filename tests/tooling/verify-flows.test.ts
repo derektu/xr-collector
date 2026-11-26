@@ -4,9 +4,7 @@
 // flows covering it, so picking flows by feature never leaves one out.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { FEATURES_DIR, findFeature, readFeatures, readMarkdown } from '../../.claude/skills/verify/scripts/lib/features.mjs';
-// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { listFlows, selectFlows } from '../../.claude/skills/verify/scripts/lib/flows.mjs';
 
 /** The fields of a recorded flow and a parsed feature file these checks read. */

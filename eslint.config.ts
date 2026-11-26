@@ -33,7 +33,7 @@ export default [
     rules: { 'xr-collector/no-timers': 'error' },
   },
   {
-    files: ['src/**'],
+    files: ['src/**', 'tests/**'],
     rules: { 'xr-collector/comment-policy': 'error' },
   },
   {

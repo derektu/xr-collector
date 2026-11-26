@@ -194,7 +194,7 @@ async function installedPairMatches(binaryPath, manifestPath, manifest, target, 
 
 export async function transactionalReplacePair({
   binarySource, manifest, binaryDestination, manifestDestination,
-  fault = async () => undefined,
+  fault = async (_phase) => {},
   remove = (target, options) => rm(target, options),
   move = (source, destination) => rename(source, destination),
 }) {

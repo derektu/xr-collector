@@ -40,6 +40,11 @@ export async function listFlows(dir = FLOWS_DIR) {
  * (every flow that is not Desktop: the set the nightly runs on a Mac), `desktop` or `all`; `feature` (a
  * parsed feature file) keeps the flows covering any of its sub-features; `visible` keeps the Desktop
  * flows with scenarios that need a window on screen.
+ *
+ * @template {{ name: string, desktop: boolean, covers: string[], visibleScenarios: string[] }} Flow
+ * @param {Flow[]} flows
+ * @param {{ names?: string[], layer?: string, feature?: { subFeatures: string[] }, visible?: boolean }} [options]
+ * @returns {Flow[]}
  */
 export function selectFlows(flows, { names = [], layer = 'all', feature, visible = false } = {}) {
   if (!['all', 'web', 'desktop'].includes(layer)) throw new Error(`Unknown flow layer ${layer}`);

@@ -71,7 +71,16 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 公開檔案是 `src/shared` 的檔案、模組入口（`src/<層>/<模組>/` 下的入口檔，定義在 `tooling/source-structure.ts`，見 [架構](architecture.md#執行與業務邊界)），以及入口以 `export … from` 轉出的檔案（轉出的檔案再轉出的也算） | lint |
 | 程式碼之前的 `SPDX-License-Identifier:` 授權聲明、`/// <reference`、`prettier-ignore` 不受限制 | lint |
 
-範圍是 `src/`；`tests/` 在 #338 完成後納入。`IMPORTANT`、`do not remove`、很長的辯解，都表示那段程式碼該改。
+測試檔（`tests/`）同樣適用，另有兩處不同：
+
+| 規則 | 強制 |
+|---|---|
+| 程式碼之前可以有一則 `//` 檔頭，寫出測試壞掉時使用者（或開發者）會遇到什麼，見 [開發驗證流程](development-validation.md#3-回歸流程)。案例的理由寫進 `it` 名稱，setup 以 helper 名稱說明 | lint |
+| `tests/support/` 是測試共用的檔案，視同公開檔案：export 宣告可以有 `/** */` | lint |
+
+`tests/` 的既有違規記在基準線（見〈既有違規的基準線〉）。
+
+`IMPORTANT`、`do not remove`、很長的辯解，都表示那段程式碼該改。
 
 強制：lint（`xr-collector/comment-policy`，在 `tooling/eslint/comment-policy.ts`）。
 
@@ -81,11 +90,11 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 |---|---|
 | `strict` 開啟 | tsconfig |
 | 不用 `any`；用 `unknown` 加型別判斷，或寫出實際型別。範圍是所有 lint 的檔案 | lint |
-| 不用 `@ts-ignore`、`@ts-expect-error`、`@ts-nocheck` | `src/` 由 lint；`tests/` 尚未強制（測試 import 沒有型別宣告的 `.mjs` 時標 `@ts-expect-error`，見 [測試入口](../tests/README.md)） |
+| 不用 `@ts-ignore`、`@ts-expect-error`、`@ts-nocheck` | lint |
 
 ## 既有違規的基準線
 
-目前所有 lint 規則都不帶基準線，lint 報出的每一處都要改。只有導入新規則、既有違規一時改不完時，才以 ESLint bulk suppressions 把它們記成基準線（`eslint-suppressions.json`）：
+除了 `tests/` 的 comment 規則，lint 規則都不帶基準線，lint 報出的每一處都要改。只有導入新規則、既有違規一時改不完時，才以 ESLint bulk suppressions 把它們記成基準線（`eslint-suppressions.json`）：
 
 - 按檔案與規則記數量，只能減少。每條規則有自己的名稱，所以一個檔案不能拿掉一種違規換成另一種。
 - 檔案的違規多於記錄的數量時，lint 列出該檔案這條規則的全部違規並失敗。

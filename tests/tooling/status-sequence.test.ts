@@ -3,9 +3,7 @@
 // order the status model allows, the Jobs page sections a job passes through, and which collection
 // check belongs to a failed job. A wrong judgment here passes or fails the flow for the wrong reason.
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { checkRecordForJob } from '../../.claude/skills/verify/flows/subscription-failures.mjs';
-// @ts-expect-error The verify skill flows are executable JavaScript without type declarations.
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../.claude/skills/verify/flows/lib/status-sequence.mjs';
 
 type Check = { id: string; ok: boolean; actual: unknown };

@@ -307,6 +307,8 @@ export async function readPackagingGitIdentity(root, sourceEnvironment = process
  * bundle signature checked here. A Developer ID App must be byte-identical to `verifiedAppIdentity`,
  * the stapled App that already passed the Developer ID, runtime signature and notarization gates,
  * so those gates are not repeated.
+ *
+ * @param {{ outputDir: string, commit: string, version: string, target: string, productName?: string, appId?: string, updateRepository?: string, signingPolicy?: string, verifiedAppIdentity?: unknown }} expected
  */
 export async function verifyPackagedApplication({ outputDir, commit, version, target, productName = 'XR Collector', appId = 'com.moneydj.xrcollector', updateRepository = productionUpdateRepository, signingPolicy, verifiedAppIdentity }, dependencies = {}) {
   const appPath = target === 'darwin-arm64' ? path.join(outputDir, 'mac-arm64', `${productName}.app`) : null;

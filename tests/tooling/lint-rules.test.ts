@@ -159,8 +159,14 @@ describe('comment rule', () => {
     expect(result?.messages).toHaveLength(5);
   });
 
-  it('applies to src only until tests follow it', async () => {
-    expect(await lintFixture('comments.ts', 'tests/domain/jobs/orders.test.ts')).toEqual([]);
+  it('accepts in a test file only the header before the code and External: comments', async () => {
+    const findings = await lintFixture('test-comments.ts', 'tests/domain/jobs/queue.test.ts');
+    expect(located(findings)).toEqual([`${COMMENT_RULE}:5`, `${COMMENT_RULE}:9`, `${COMMENT_RULE}:11`]);
+    expect(findings[1]?.message).toContain('in its `it` name');
+  });
+
+  it('accepts doc comments on the exports of tests/support, the files tests share', async () => {
+    expect(located(await lintFixture('test-comments.ts', 'tests/support/queue.ts'))).toEqual([`${COMMENT_RULE}:9`, `${COMMENT_RULE}:11`]);
   });
 });
 

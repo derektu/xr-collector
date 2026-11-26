@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// @ts-expect-error Node build producer is an executable JavaScript seam.
 import { createBuildInfo, writeBuildInfo } from '../../../scripts/package/write-build-info.mjs';
 
 const exec = promisify(execFile);

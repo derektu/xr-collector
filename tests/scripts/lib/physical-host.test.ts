@@ -2,7 +2,6 @@
 // stop when it cannot be told, so the packaging checks that rely on it never take an emulated host
 // for a native one and ship a runtime for the wrong architecture.
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-// @ts-expect-error The production host probe is intentionally executable JavaScript.
 import { parseWindowsProcessorArchitectures, probePhysicalHost } from '../../../scripts/lib/physical-host.mjs';
 
 describe('physical build host detection', () => {

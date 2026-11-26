@@ -7,7 +7,6 @@ import { mkdir, mkdtemp, readdir, rm, rmdir, stat, utimes, writeFile } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { withOwnedDirectoryLock } from '../../../scripts/lib/owned-directory-lock.mjs';
 
 /**
