@@ -1,5 +1,4 @@
-// Where a dropdown menu opens next to its button: below and aligned to the requested edge, above
-// when only that fits, and always inside the window.
+// Broken, a dropdown menu opens away from its button or outside the window.
 import { describe, expect, it } from 'vitest';
 import { menuPosition } from '../../../../src/transport/web/infra/floating-position.js';
 

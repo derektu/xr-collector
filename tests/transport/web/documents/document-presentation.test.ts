@@ -1,7 +1,4 @@
-// What the Documents page shows: the list's query, source and page kept in the URL, the typed
-// query keeping a trailing space, the source menu with removed subscriptions marked, date and
-// source tags, highlighted snippets, page numbers, Reader paths, and the page the list lands on
-// after a deletion.
+// Broken, the Documents page loses its query, source or page, or shows wrong tags, snippets or page numbers.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DocumentMetadata } from '../../../../src/shared/documents/document-types.js';
 import {
@@ -37,7 +34,6 @@ describe('document presentation', () => {
   });
 
   it('keeps a trailing space typed before the debounced query lands', () => {
-    // Typing "machine " and pausing writes "machine" to the URL; the box must keep the space.
     expect(draftForQuery('machine ', 'machine')).toBe('machine ');
     expect(draftForQuery('\u0085\u00a0　', '')).toBe('\u0085\u00a0　');
     expect(draftForQuery('machine ', 'learning')).toBe('learning');

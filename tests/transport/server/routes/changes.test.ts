@@ -1,7 +1,4 @@
-// The change push the window and Agents follow instead of polling: /api/events publishes a scoped
-// change for each kind of data change under revisions that increase one by one, every response
-// names its XR-Revision, and /api/changes answers a waiting read from a revision or resets it. A
-// missed change leaves the window showing outdated jobs, documents or settings.
+// Broken, the window shows outdated jobs, documents or settings.
 import { request as httpRequest } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,7 +25,6 @@ const video = (id: string): DiscoveredYouTubeVideo => ({ id, title: `Video ${id}
 
 interface StreamEvent { event: string; data: { revision: string; changes?: Change[] } }
 
-/** Reads the event stream at `base` until closed. */
 async function openEvents(base: string, headers: Record<string, string> = {}) {
   const controller = new AbortController();
   const response = await fetch(`${base}/api/events`, { headers, signal: controller.signal });
@@ -51,20 +47,18 @@ async function openEvents(base: string, headers: Record<string, string> = {}) {
             if (event) events.push({ event, data: JSON.parse(field('data')!) });
           }
         }
-      } catch { /* closed by the test */ }
+      } catch { return; }
     })();
   }
   const changes = () => events.filter((event) => event.event === 'change').flatMap((event) => event.data.changes!);
   return {
     response, events, changes,
     batches: () => events.filter((event) => event.event === 'change').map((event) => event.data as ChangeBatch),
-    /** Resolves with the first event that matches. */
     next: (match: (event: StreamEvent) => boolean, label: string) => eventually(() => {
       const found = events.find(match);
       if (!found) throw new Error(`no event: ${label}`);
       return found;
     }),
-    /** Resolves once a published change matches. */
     change: (match: (change: Change) => boolean, label: string) => eventually(() => {
       const found = changes().find(match);
       if (!found) throw new Error(`no change: ${label}`);
@@ -144,7 +138,6 @@ describe('change events', () => {
   it('publishes a scoped change for each kind of data change, under revisions that increase one by one', async () => {
     const { runtime, ui, send, pacing, updates } = await start();
     const events = await openEvents(ui);
-    /** Runs `action` and waits for one more change that `match` accepts than there were before it. */
     const another = async (action: () => unknown, match: (change: Change) => boolean, label: string) => {
       const before = events.changes().filter(match).length;
       await action();

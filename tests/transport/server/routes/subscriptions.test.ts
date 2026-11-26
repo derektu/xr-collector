@@ -1,3 +1,4 @@
+// Broken, a source type's subscription routes fail for Agents, or answer fields the Agent Skill does not name.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,10 +25,6 @@ import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
 import { stoppedTimers } from '../../../support/timers.js';
 
-// The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
-// YouTube (synthetic channels) and the fake test type, and each route runs once per type through
-// an Agent listener with a token. Every field these routes return is named in the Agent Skill.
-
 const SOURCES = productSourcesWith(FAKE);
 
 const TOKEN = 'routes-token';
@@ -42,17 +39,14 @@ class MemoryScheduleStore implements ScheduleStore {
   async save(value: StoredSchedule): Promise<void> { this.value = { ...value }; }
 }
 
-/** How a test reaches one source type: its addresses, its targets and the values its routes answer with. */
 interface TypeCase {
   type: 'youtube' | 'fake';
   kindLabel: string;
   itemKind: string;
   addKind: string;
   defaults: Record<string, string | number>;
-  /** A settings patch the type accepts and one it refuses. */
   patch: Record<string, string | number>;
   badPatch: Record<string, unknown>;
-  /** Adds a target with one recent item; returns the subscription ID, the address to subscribe with and the item's address. */
   addTarget(name: string): { id: string; url: string; itemUrl: string };
 }
 
@@ -100,7 +94,6 @@ async function world(connectivity?: ConnectivityAccess) {
     await eventually(async () => expect((await send('GET', `/api/jobs/${id}`)).body.job.state).toMatch(/^(completed|failed)$/u));
     return (await send('GET', `/api/jobs/${id}`)).body.job;
   };
-  /** Subscribes over HTTP and waits for the first check. */
   const subscribe = async (url: string) => {
     const added = await settled((await send('POST', '/api/subscriptions', { url })).body.job.id);
     await settled(added.result.followUpJobId);
@@ -272,7 +265,6 @@ describe.each(['youtube', 'fake'] as const)('subscription and collection routes 
     expect(unsubscribed.actions).toEqual([expect.objectContaining({ id: 'subscribe', request: { method: 'POST', path: '/api/subscriptions', body: { url: expect.any(String) } } })]);
     const item = (await w.send('POST', '/api/url-recognitions', { url: target.itemUrl })).body.recognition;
     expect(item.actions).toEqual([expect.objectContaining({ id: 'collect', request: { method: 'POST', path: '/api/items', body: { url: expect.any(String) } } })]);
-    // The offered requests work as given.
     const performed = await w.send(unsubscribed.actions[0].request.method, unsubscribed.actions[0].request.path, unsubscribed.actions[0].request.body);
     expect(performed.status).toBe(202);
     await w.settled((await w.settled(performed.body.job.id)).result.followUpJobId);
@@ -369,8 +361,8 @@ describe('the Skill and the subscription routes (B-T3)', () => {
       ...Object.keys(pacing), ...Object.keys(pacing.groups[0]), ...Object.keys(patched), ...Object.keys(checks),
     ]);
     const unnamed = [...fields].filter((field) => !skill.includes(`\`${field}\``));
-    // Subscription rows also carry the stored record's own fields, which the Skill explains by meaning.
-    expect(unnamed.filter((field) => !['title', 'url', 'id', 'addedAt', 'updatedAt'].includes(field))).toEqual([]);
+    const storedRecordFields = ['title', 'url', 'id', 'addedAt', 'updatedAt'];
+    expect(unnamed.filter((field) => !storedRecordFields.includes(field))).toEqual([]);
     await eventually(async () => expect((await w.send('GET', '/api/jobs?state=active')).body.jobs).toEqual([]));
     await w.close();
   });
@@ -396,7 +388,6 @@ describe('requests the server cannot read', () => {
   });
 });
 
-/** A device network the test switches; checking it answers the switch and is counted. */
 function switchableNetwork() {
   const network = {
     state: 'online' as 'online' | 'offline',
@@ -473,7 +464,6 @@ describe('without a network (#128)', () => {
     expect(network.checks).toBe(0);
     expect(await jobCount()).toBe(before);
 
-    // Checking subscriptions confirms the network first and is refused only while it is still gone.
     expect(await w.send('POST', '/api/subscription-checks')).toMatchObject({ status: 503, body: { error: { code: 'offline' } } });
     expect(await w.send('POST', '/api/subscription-checks', { subscriptions: [{ type: 'youtube', id: kept.id }] }))
       .toMatchObject({ status: 503, body: { error: { code: 'offline' } } });
@@ -499,7 +489,6 @@ describe('without a network (#128)', () => {
       .toMatchObject({ status: 503, body: { error: { code: 'offline', message: '目前沒有網路，恢復後再試。' } } });
     expect(network.status().state).toBe('offline');
 
-    // With the network there, the failure is the source's own.
     network.state = 'online';
     network.reachable = true;
     resolve.mockRejectedValueOnce(new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。'));

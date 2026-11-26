@@ -103,7 +103,6 @@ describe('Vault access declared by routes', () => {
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     const base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
-    /** The status and error code `route` answers; an event stream is read only up to its headers. */
     const send = async (route: ApiRoute): Promise<{ status: number; code: string | null }> => {
       const controller = new AbortController();
       const response = await fetch(`${base}${route.url.replace(/:(\w+)/gu, 'x')}`, {
@@ -120,7 +119,6 @@ describe('Vault access declared by routes', () => {
     };
     const routes = apiRoutes(app);
     const device = routes.filter((route) => DEVICE_ROUTES.includes(`${route.method} ${route.url}`));
-    // Every listed route is registered, so the list cannot hide a route that lost its path.
     expect(device.map((route) => `${route.method} ${route.url}`).sort()).toEqual([...DEVICE_ROUTES].sort());
 
     for (const route of routes) {
@@ -151,7 +149,6 @@ describe('Vault access declared by routes', () => {
   });
 });
 
-/** The routes that read or change state outside the Vault. */
 const DEVICE_ROUTES: readonly string[] = [
   'GET /api/events', 'GET /api/changes', 'GET /api/health', 'GET /api/pacing',
   'GET /api/vault/setup', 'POST /api/vault/setup', 'POST /api/vault/inspect', 'POST /api/vault/new/check',

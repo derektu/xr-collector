@@ -1,8 +1,4 @@
-// Every answer and change event the HTTP listeners send has the process's known secrets masked,
-// whichever route, hook or not-found answer produced it, so a key that reaches any message on its way
-// to the UI or an Agent leaves masked. Document text and addresses that only look like credentials
-// ("ring bearer", a feed's `?key=`) pass unchanged. The Agent connection data hands out the key by
-// design, and files pass unchanged.
+// Broken, a secret key leaks to the UI or an Agent.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';

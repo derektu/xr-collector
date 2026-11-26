@@ -1,7 +1,4 @@
-// The window's add menus and add dialogs: the items each menu lists, which say they are not
-// supported yet, arrow-key and Home/End movement, and the offer to switch between adding once and
-// subscribing when the address is of the other kind. An address no source type owns reads as
-// unsupported.
+// Broken, the add menus list the wrong items, keyboard movement fails, or the add dialog misses the offer to switch.
 import { describe, expect, it } from 'vitest';
 import type { UrlRecognition } from '../../../../src/shared/sources/source-info-types.js';
 import { SourceDeclarations } from '../../../../src/shared/sources/source-registry.js';
@@ -90,13 +87,12 @@ describe('add dialog mismatch (N75-T3)', () => {
     expect(addMismatch(PRODUCT_DECLARATIONS, 'youtube-channel', channel)).toBeNull();
   });
 
-  it('reports an address no source type owns as unsupported', () => {
+  it('reports an address no source type owns as unsupported, but not one its source type recognizes and refuses', () => {
     const page = recognition({ status: 'unsupported', sourceType: null, url: 'https://example.com/post', message: '目前還不支援這個網站的網址。' });
     expect(addMismatch(PRODUCT_DECLARATIONS, 'url', page)).toBeNull();
     expect(isUnsupportedUrl(page)).toBe(true);
     expect(UNSUPPORTED_URL).toBe('目前還不支援這個網址。');
     expect(isUnsupportedUrl(video)).toBe(false);
-    // A YouTube address the type recognizes but cannot use explains itself instead.
     expect(isUnsupportedUrl(recognition({ status: 'unsupported', sourceType: 'youtube', message: '不是有效的 YouTube 網址。' }))).toBe(false);
   });
 });

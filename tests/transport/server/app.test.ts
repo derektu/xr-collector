@@ -1,7 +1,5 @@
-// The core routes the UI and authorized Agents share: the schedule switch, subscription preview,
-// add, pause, check and removal, search filters and page bounds, and pasted addresses becoming
-// video or channel jobs, with malformed requests refused by stable error codes before any job
-// starts. The server answers only requests addressed to its own loopback name and port.
+// Broken, the UI and Agents cannot subscribe, collect or search, a malformed request starts a job,
+// or the server answers requests addressed to another host.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -41,7 +39,6 @@ function makeCollector(): Collector {
   return makeServices().collector;
 }
 
-/** Real job manager over an in-memory Vault; capture fails with the given error when supplied. */
 function makeServices(
   captureFailure?: CollectorError, captureGate?: Promise<void>, store: JobStore = memoryJobRecords(PRODUCT_SOURCES).jobs,
 ): { collector: Collector; jobs: JobManager } {
@@ -122,10 +119,9 @@ describe('HTTP app', () => {
       { enabled: false, intervalMinutes: 60 }, { backfillDays: 7 }, { backfillMaxItems: 5 }, { enabled: 'no' }, {}, { interval: 30 },
     ].map((payload) => app.inject({ method: 'PUT', url: '/api/schedule', payload })));
 
-    // Without a connectivity service the device counts as online and never confirmed.
-    const connectivity = { state: 'online', checkedAt: null };
-    expect(read.json()).toEqual({ schedule: { ...scheduleValue, connectivity } });
-    expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null, connectivity } });
+    const connectivityWithoutService = { state: 'online', checkedAt: null };
+    expect(read.json()).toEqual({ schedule: { ...scheduleValue, connectivity: connectivityWithoutService } });
+    expect(updated.json()).toEqual({ schedule: { ...scheduleValue, enabled: false, status: 'paused', nextCheck: null, connectivity: connectivityWithoutService } });
     for (const response of rejected) {
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe('invalid_request');
@@ -505,7 +501,6 @@ describe('Host header', () => {
         expect(response.statusCode, host).toBe(403);
         expect(response.json()).toMatchObject({ error: { code: 'forbidden_host' } });
       }
-      // A real request from this computer carries the address it connected to.
       expect((await fetch(`${server.url}/api/health`)).status).toBe(200);
     } finally {
       await server.close();

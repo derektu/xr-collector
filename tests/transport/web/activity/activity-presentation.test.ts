@@ -1,3 +1,5 @@
+// Broken, the Activity page mislabels log lines, loses its filters or loaded pages, or a bug report
+// lacks the job's diagnostics.
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../../src/shared/jobs/job-types.js';
 import type { ActivitySummaryEntry, JobEvent } from '../../../../src/shared/activity/activity-types.js';
@@ -14,10 +16,6 @@ import {
   parseActivityState,
   summaryRange,
 } from '../../../../src/transport/web/activity/activity-presentation.js';
-
-// The Activity page: level labels, what each log line says and whose it is, filters kept in the
-// address and turned into a query, check summary ranges, refreshed pages merged with the ones already
-// loaded, and diagnostics of a job for a bug report (A-T11).
 
 const base = { eventId: 'e1', timestamp: '2026-10-15T06:00:00.000Z', vaultPath: '/v', jobId: 'j1', message: 'message' } as const;
 
@@ -51,8 +49,6 @@ describe('activity presentation', () => {
     expect(eventLine({ ...base, eventType: 'schedule.updated' })).toEqual({ line: 'message', source: null, message: base.message });
   });
 
-  // The message only ever shows: rewording what the server says changes neither which completions
-  // read as collected nor whose title leads a line. Every message here is arbitrary text.
   it('tells a collected completion and its result from the event fields, whatever the message says', () => {
     const source = '3Blue1Brown';
     const completed = { ...base, eventType: 'job.completed', sourceTitle: source, message: 'any wording' } as const;
@@ -65,7 +61,6 @@ describe('activity presentation', () => {
       .toEqual({ line: 'collected', source, collected: { result: 'counts', created: 2, existing: 1, skipped: 3, failed: 1 } });
     expect(eventLine({ ...completed, jobRole: 'check', outcome: 'empty', check: { ...counts, result: 'empty', created: 0, existing: 0, failed: 0, skipped: 0 } }))
       .toEqual({ line: 'collected', source, collected: { result: 'nothing_new' } });
-    // An item already stored, a skipped job, and a check recorded without its counts keep their message.
     for (const event of [
       { ...completed, jobRole: 'item', outcome: 'existing' },
       { ...completed, jobRole: 'item', outcome: 'skipped' },

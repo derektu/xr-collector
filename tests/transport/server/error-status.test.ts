@@ -1,6 +1,4 @@
-// The HTTP status each error code answers with, which the UI and Agents act on: a source type's
-// codes come from the plugin that declares them, a plugin cannot change the status of a code the
-// core owns, and an unknown code is 500.
+// Broken, the UI and Agents act on the wrong HTTP status for an error.
 import { describe, expect, it } from 'vitest';
 import { errorStatus } from '../../../src/transport/server/error-status.js';
 import { fakeDefinition } from '../../support/fake-source-plugin.js';

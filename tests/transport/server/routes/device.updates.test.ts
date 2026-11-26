@@ -1,5 +1,4 @@
-// The device update API (/api/device/updates) works without a Vault, hands each request to the update
-// service, and names the chosen version and nothing else, so the UI or an Agent acts on the update it chose.
+// Broken, the UI or an Agent acts on a different update than the one it chose.
 import { describe, expect, it, vi } from 'vitest';
 import { createHttpApp } from '../../../../src/transport/server/app.js';
 import type { DeviceUpdateStatus } from '../../../../src/shared/api/update-types.js';

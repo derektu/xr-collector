@@ -1,7 +1,4 @@
-// The source types and URL recognition the UI and Agents read: YouTube's kinds and setting options,
-// and the answer for a pasted address (collect a video, subscribe to or resume a channel, subscribe
-// to a site's feed, or why it is unsupported, unavailable or needs a login), so the add box offers
-// the one action that fits.
+// Broken, the add box offers the wrong action for a pasted address.
 import { describe, expect, it, vi } from 'vitest';
 import { INTERVAL_OPTIONS } from '../../../../src/shared/sources/collection-settings.js';
 import { DEFAULT_POLICY } from '../../../../src/domain/sources/youtube/settings.js';
@@ -14,7 +11,6 @@ import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 const own = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
 const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
 
-/** Channel previews keyed by the resolved address; anything else fails to resolve. */
 function channelsWith(previews: Record<string, { enabled: boolean } | null>, failure?: CollectorError) {
   const preview = vi.fn(async (url: string): Promise<SubscriptionPreview> => {
     if (failure) throw failure;
@@ -66,8 +62,6 @@ describe('source type declarations (T-01)', () => {
 });
 
 describe('URL recognition (T-02 to T-05)', () => {
-  // Which address forms name a video or a channel is the plugin's rule, tested in tests/domain/sources/youtube;
-  // an address typed without its scheme is the shared recognition's.
   it.each([
     'https://youtu.be/dQw4w9WgXcQ?t=12',
     'youtube.com/watch?v=dQw4w9WgXcQ',

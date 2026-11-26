@@ -1,6 +1,4 @@
-// How subscriptions read in the window: whether subscribing checks again on its own, the choices
-// and result of removal with or without documents, and every subscription status with its
-// progress, retry time, failures in a row, next check, and color.
+// Broken, a subscription shows the wrong status, or removal offers the wrong choices or result.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Subscription } from '../../../../src/shared/subscriptions/subscription-types.js';
 import {
@@ -48,7 +46,7 @@ describe('subscription status (N75-T4)', () => {
   afterEach(() => { process.env.TZ = originalZone; });
 
   it('carries every status with its progress, retry time, failures in a row and next check', () => {
-    const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
+    const now = new Date('2026-10-15T06:00:00.000Z');
     for (const state of ['queued', 'adding', 'checking', 'paused', 'auto_check_off', 'login_required'] as const) {
       expect(subscriptionStatus({ state }, now)).toEqual({ state });
     }
