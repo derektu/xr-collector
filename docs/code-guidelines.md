@@ -78,8 +78,6 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 程式碼之前可以有一則 `//` 檔頭，寫出測試壞掉時使用者（或開發者）會遇到什麼，見 [開發驗證流程](development-validation.md#3-回歸流程)。案例的理由寫進 `it` 名稱，setup 以 helper 名稱說明 | lint |
 | `tests/support/` 是測試共用的檔案，視同公開檔案：export 宣告可以有 `/** */` | lint |
 
-`tests/` 的既有違規記在基準線（見〈既有違規的基準線〉）。
-
 `IMPORTANT`、`do not remove`、很長的辯解，都表示那段程式碼該改。
 
 強制：lint（`xr-collector/comment-policy`，在 `tooling/eslint/comment-policy.ts`）。
@@ -94,7 +92,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 
 ## 既有違規的基準線
 
-除了 `tests/` 的 comment 規則，lint 規則都不帶基準線，lint 報出的每一處都要改。只有導入新規則、既有違規一時改不完時，才以 ESLint bulk suppressions 把它們記成基準線（`eslint-suppressions.json`）：
+目前所有 lint 規則都不帶基準線，lint 報出的每一處都要改。只有導入新規則、既有違規一時改不完時，才以 ESLint bulk suppressions 把它們記成基準線（`eslint-suppressions.json`）：
 
 - 按檔案與規則記數量，只能減少。每條規則有自己的名稱，所以一個檔案不能拿掉一種違規換成另一種。
 - 檔案的違規多於記錄的數量時，lint 列出該檔案這條規則的全部違規並失敗。
