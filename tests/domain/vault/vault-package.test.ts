@@ -51,7 +51,6 @@ const REGISTERED = [
   'documents/youtube/abcdefghijk.md', 'documents/youtube/dQw4w9WgXcQ.md',
   'settings/deleted-documents.json', 'settings/youtube-channels.json', 'settings/youtube-schedule.json',
 ];
-/** Files a person keeps in the Vault folder, none of which the Vault records. */
 async function addPersonalFiles(root: string): Promise<void> {
   const files: [string, string | Buffer][] = [
     ['documents/youtube/notes.md', '# 我自己的筆記'], ['documents/youtube/README.txt', 'read me'],

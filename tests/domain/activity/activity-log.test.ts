@@ -1,3 +1,4 @@
+// Broken, the activity page misses or repeats events, keeps them past 30 days, or shows a secret.
 import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,9 +12,6 @@ import { localDayStart } from '../../../src/transport/web/activity/activity-pres
 import { readEventFiles } from '../../support/event-files.js';
 import { stoppedTimers, timersAfter } from '../../support/timers.js';
 import { eventually } from '../../support/wait.js';
-
-// The device activity log: day files written once a second with a 30-day retention, newest-first
-// cursor pages, filters, masking, and a failed write that drops its events without corrupting the file.
 
 const DAY = 86_400_000;
 const VAULT = '/vaults/a';
@@ -34,7 +32,6 @@ class Clock {
   advance(ms: number): void { this.now = new Date(this.now.getTime() + ms); }
 }
 
-/** Timers that run only when the test fires them. */
 class ManualTimers {
   readonly waiting: Array<{ callback: () => void; ms: number }> = [];
   readonly timers = timersAfter((ms, callback) => {
@@ -76,7 +73,6 @@ describe('activity log files (A-T1)', () => {
 
     const page = await views.query({}, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.eventType)).toEqual(['job.completed', 'job.started', 'job.accepted']);
-    // The job learned its title after the event was written; parent and subscription are the event's own.
     expect(page.events[2]).toMatchObject({ sourceTitle: '影片標題' });
     expect(page.events[2]).not.toHaveProperty('parentJobId');
     expect(page.events[2]).not.toHaveProperty('subscriptionId');
@@ -140,7 +136,6 @@ describe('retention (A-T2)', () => {
     const segments = path.join(directory, 'events');
     await mkdir(segments, { recursive: true });
     const daysAgo = (days: number, hour = 6) => new Date(Date.UTC(2026, 9, 15 - days, hour)).toISOString();
-    // 31 days ago: wholly expired; 30 days ago: the boundary day; 29 days ago: kept.
     await writeFile(path.join(segments, `${daysAgo(31).slice(0, 10)}.jsonl`), lines([event(daysAgo(31))]));
     await writeFile(path.join(segments, `${daysAgo(30).slice(0, 10)}.jsonl`), lines([event(daysAgo(30, 5), { message: '邊界前' }), event(daysAgo(30, 7), { message: '邊界後' })]));
     await writeFile(path.join(segments, `${daysAgo(29).slice(0, 10)}.jsonl`), lines([event(daysAgo(29), { message: '29 天前' })]));
@@ -150,10 +145,8 @@ describe('retention (A-T2)', () => {
     let messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['29 天前', '邊界後']);
 
-    // A day later the boundary day has fully expired and the hourly purge removes its file.
     clock.advance(DAY);
     timers.fire(3_600_000);
-    // The next hourly purge is set once this one has finished.
     await eventually(() => expect(timers.waiting.some((entry) => entry.ms === 3_600_000)).toBe(true));
     expect(await readdir(segments)).toEqual([`${daysAgo(29).slice(0, 10)}.jsonl`]);
     messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
@@ -163,7 +156,6 @@ describe('retention (A-T2)', () => {
 
   it('counts local days across a UTC day boundary when the page asks for today', async () => {
     const directory = await tempDirectory();
-    // 2026-10-15 00:30 in UTC+8 is 2026-10-14 16:30 UTC; local today began 2026-10-14T16:00Z, in the 10-14 UTC file.
     const clock = new Clock(new Date('2026-10-14T16:30:00.000Z'));
     const log = await ActivityLog.open(directory, { now: () => clock.now });
     log.record(event('2026-10-14T15:59:00.000Z', { message: '本機昨天 23:59' }));
@@ -175,7 +167,6 @@ describe('retention (A-T2)', () => {
     const since = '2026-10-15T00:00:00+08:00';
     const page = await new ActivityViews(log).query({ since }, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.message)).toEqual(['本機今天 09:00', '本機今天 00:01']);
-    // The page computes the same bound from the viewer's clock.
     const viewerNow = new Date('2026-10-14T16:30:00.000Z');
     expect(localDayStart(viewerNow).getTime()).toBe(new Date(viewerNow.getFullYear(), viewerNow.getMonth(), viewerNow.getDate()).getTime());
     await log.close();
@@ -189,7 +180,6 @@ describe('cursor pages (A-T4)', () => {
     const log = await ActivityLog.open(directory, { now: () => clock.now });
     const stamps: string[] = [];
     for (let index = 0; index < 250; index += 1) {
-      // Pairs share a millisecond; the event ID orders them.
       const at = new Date(Date.UTC(2026, 9, 1, 0, 0, Math.floor(index / 2))).toISOString();
       stamps.push(at);
       log.record(event(at));
@@ -223,7 +213,6 @@ describe('cursor pages (A-T4)', () => {
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     const log = await ActivityLog.open(directory, { now: () => clock.now });
     for (const day of [14, 15]) for (let hour = 0; hour < 3; hour += 1) log.record(event(new Date(Date.UTC(2026, 9, 10 + day - 14, hour)).toISOString()));
-    // Older events on September 15 expire when the clock moves.
     for (let hour = 0; hour < 3; hour += 1) log.record(event(new Date(Date.UTC(2026, 8, 15, hour)).toISOString()));
     await log.flush();
     const page = await new ActivityViews(log).query({ limit: 4 }, { vaultPath: VAULT });
@@ -276,7 +265,6 @@ describe('masking (A-T6)', () => {
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     const token = 'a'.repeat(64);
     const secretMessage = `請求失敗 Authorization: Bearer sk-live-123 Cookie: SID=abc; HSID=def https://x.test/v?id=1&token=t0p&sig=s1g agent ${token}`;
-    // Stored before the token was protected, so only the masking on read hides it.
     await mkdir(path.join(directory, 'events'), { recursive: true });
     await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines([event('2026-10-15T01:00:00.000Z', { message: `stored agent ${token}` })]));
     const log = await ActivityLog.open(directory, { now: () => clock.now });
@@ -378,7 +366,6 @@ describe('event IDs and kinds (#262)', () => {
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
     let log = await ActivityLog.open(directory, { now: () => clock.now });
     for (let index = 0; index < 3; index += 1) { log.event({ ...recorded, eventType: 'job.started' }); clock.advance(1_000); }
-    // The newest event by time is no longer the one with the highest sequence.
     clock.advance(-60 * 60_000);
     log.event({ ...recorded, eventType: 'job.completed' });
     await log.close();

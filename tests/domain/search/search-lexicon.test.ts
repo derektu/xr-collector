@@ -1,6 +1,4 @@
-// The bundled Chinese word lexicon that splits search queries: it cuts text like the jieba-rs
-// reference, plans query groups for Chinese words and Latin terms, so a query looks for the words a
-// user typed, and a malformed dictionary stops search from starting instead of splitting wrongly.
+// Broken, a query looks for words the user did not type.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,7 +10,6 @@ const resource = path.resolve('resources/search/coct-main.txt');
 const lexiconPromise = loadSearchLexicon(resource);
 
 afterAll(async () => {
-  // Keep the large dictionary shared for the whole file; no mutable state is retained by cut().
   await lexiconPromise;
 });
 

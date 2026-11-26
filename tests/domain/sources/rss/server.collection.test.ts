@@ -1,3 +1,4 @@
+// Broken, RSS subscriptions do not check, remove or exchange as they do in the product.
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -21,10 +22,6 @@ import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 
-// RSS through the product's core: a workspace with the YouTube and RSS plugins over synthetic feeds
-// on a local server. Subscribing, checking, removing and exchanging use the same services the
-// product assembles; only the feeds are synthetic.
-
 let feeds: SyntheticFeeds;
 beforeEach(async () => { feeds = await SyntheticFeeds.start(); });
 afterEach(async () => {
@@ -32,7 +29,7 @@ afterEach(async () => {
   await feeds.close();
 });
 
-// RSS dates carry whole seconds.
+// External: RSS 2.0 dates follow RFC 822, which carries whole seconds.
 const now = Math.floor(Date.now() / 1000) * 1000;
 const ago = (days: number) => new Date(now - days * 86_400_000);
 const plugins = (): SourcePlugin[] => [...youtubePlugins(), rssPlugin((url, context) => fetchText(url, context.signal)) as unknown as SourcePlugin];
@@ -150,7 +147,6 @@ describe('a site that limits requests', () => {
   it('fails that feed\'s check and counts it, while another feed checked at the same time completes and RSS never cools down', async () => {
     feeds.set('/a.xml', { body: rss2('【合成】A 站', BLOG.slice(0, 1)) });
     feeds.set('/b.xml', { body: rss2('【合成】B 站', BLOG.slice(1, 2)) });
-    // The RSS plugin as the product assembles it: every feed request goes through the `rss` channel.
     const gate = await PacingGate.open(rssDefinition.pacing!, { waitRangeMs: { min: 0, max: 0 }, statePath: null });
     const events: PacingEvent[] = [];
     gate.subscribe((event) => events.push(event));
@@ -196,8 +192,6 @@ describe('a site that limits requests', () => {
     let ageRead = false;
     let limited = false;
     let reads = 0;
-    // While limited, each check lists the feed, then the article's capture finds that read too old,
-    // reads the feed again and meets a 429. The clock moves on once the listing's read is timed.
     const now = () => {
       const value = clock;
       if (ageRead) {

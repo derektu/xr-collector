@@ -1,6 +1,5 @@
-// Desktop notifications for an auto-paused subscription: one each time a subscription pauses itself
-// while notifications are on, none while they are off and no backlog when they turn back on, secrets
-// masked before anything is shown, and the active list scoped to the current Vault.
+// Broken, a user misses that a subscription paused itself, gets a backlog of notifications, or sees
+// a secret in one.
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

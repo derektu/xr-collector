@@ -1,6 +1,4 @@
-// Turning article HTML into the Markdown body an RSS article is saved with: headings, lists,
-// tables, code and quotes, links and images resolved against the article address, and scripts,
-// forms and links that lead nowhere left out.
+// Broken, a saved RSS article loses its formatting, links or images, or keeps scripts and forms.
 import { describe, expect, it } from 'vitest';
 import { htmlToMarkdown, htmlToText } from '../../../../src/domain/sources/rss/html.js';
 

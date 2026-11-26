@@ -25,15 +25,12 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 afterEach(cleanUp);
 
-/** Video IDs of the documents the two machines exchange; with the seeded document A starts with five. */
 const D1 = 'aaaaaaaaaa1'; const D2 = 'aaaaaaaaaa2'; const D3 = 'aaaaaaaaaa3'; const D4 = 'aaaaaaaaaa4'; const D5 = 'aaaaaaaaaa5';
 const X = 'bbbbbbbbbbX';
 const docPath = (root: string, id: string) => path.join(root, `documents/youtube/${id}.md`);
-/** A time after every collection a test makes; larger `n` is later. */
 const at = (n: number) => `2030-01-${String(n).padStart(2, '0')}T00:00:00.000Z`;
 const files = (root: string) => new VaultFileWriter(root, PRODUCT_SOURCES);
 
-/** The items of a Vault by key: the state and content, or the time of a deletion. Equal items mean equal content. */
 async function items(root: string): Promise<Map<string, string>> {
   const states = await itemStates(PRODUCT_SOURCES, registeredSource(await registeredFiles(root, PRODUCT_SOURCES)));
   return new Map([...states].map(([key, state]) => [key, state.state === 'present' ? `present:${state.digest}` : `deleted:${state.at}`]));
@@ -48,7 +45,6 @@ async function deletionTimes(root: string): Promise<Record<string, string>> {
 async function add(root: string, id: string, now?: string) {
   await new MarkdownVault(files(root), now ? { now: () => new Date(now) } : {}).add(transcriptDocument(video(id)));
 }
-/** Changes a document as the app records a change: new text and `updated_at` set to `when`. */
 async function modify(root: string, id: string, text: string, when: string) {
   const file = docPath(root, id);
   const [, front, body] = (await readFile(file, 'utf8')).match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u)!;
@@ -56,7 +52,6 @@ async function modify(root: string, id: string, text: string, when: string) {
   metadata.collector.updated_at = when;
   await writeFile(file, `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body!.trim()}\n${text}\n`);
 }
-/** Sets a document's status as the app does, with the Vault clock at `when`. */
 async function setStatus(root: string, id: string, status: 'draft' | 'published', when: string) {
   await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) })).setStatus(`youtube:${id}`, status);
 }
@@ -70,13 +65,11 @@ const counts = (documents: Partial<Record<'added' | 'updated' | 'removed', numbe
   documents: { added: 0, updated: 0, removed: 0, ...documents }, subscriptions: { added: 0, updated: 0, removed: 0, ...subscriptions },
 });
 
-/** Runs `use` on a workspace of the machine and closes it afterwards. */
 async function using<T>(at: Machine, use: (workspace: VaultWorkspace) => Promise<T>, overrides: OpenOverrides = {}): Promise<T> {
   const workspace = await open(at, overrides, false);
   try { return await use(workspace); } finally { await workspace.close(); }
 }
 
-/** Exports the machine's Vault to `<exports>/<name>.zip`. */
 async function exportFrom(at: Machine, name: string): Promise<string> {
   await mkdir(at.exports, { recursive: true });
   return using(at, async (workspace) => (await workspace.operations.exportTo(path.join(at.exports, `${name}.zip`))).result!.exportPath!);
@@ -84,10 +77,6 @@ async function exportFrom(at: Machine, name: string): Promise<string> {
 
 const createNew = (at: Machine, packageFile: string) => importNewVault({ sources: PRODUCT_SOURCES, packageFile, folder: at.vault, createdBy: 'XR Collector test' });
 
-/**
- * A on 家裡 and B on 公司: A holds five documents, two subscriptions and automatic collection on;
- * it exports, and B is created from that export. Built once; each test works on its own copy.
- */
 let base: { root: string; a: string; b: string };
 beforeAll(async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-exchange-base-'));
@@ -108,7 +97,6 @@ async function pair() {
   return { root, a, b };
 }
 
-/** B's changes: one addition, update and removal each of documents and subscriptions. */
 async function changeB(b: string) {
   await add(b, D5);
   await modify(b, D1, 'B 補充的段落', at(1));
@@ -121,10 +109,6 @@ const changedCounts = counts({ added: 1, updated: 1, removed: 1 }, { added: 1, u
 
 const workFolders = async (root: string) => (await readdir(root)).filter((name) => name.startsWith('.xr-collector-import-'));
 
-/**
- * What a document is after an import: a file with its body and status, a file a deletion record
- * hides, a deletion record alone, or neither.
- */
 async function documentState(root: string, id: string) {
   const deletedAt = (await deletionTimes(root))[id];
   if (existsSync(docPath(root, id))) {
@@ -140,7 +124,6 @@ const lacks = (text: string, status?: Status) => ({ kind: 'present', body: expec
 const deleted = (when: string) => ({ kind: 'deleted', at: when });
 const ABSENT = { kind: 'absent' };
 
-/** The stored row of a subscription, as its file holds it. */
 const rowOf = async (root: string, id = 'UC123') => (JSON.parse(await readFile(path.join(root, 'settings/youtube-channels.json'), 'utf8')) as {
   channels: Array<Record<string, unknown>>;
 }).channels.find((row) => row.id === id)!;
@@ -151,25 +134,19 @@ const progress = {
   failures: [{ videoId: D4, title: '影片', attempts: 1, errorCode: 'network_error', failedAt: '2026-10-18T00:00:00.000Z', skipped: false }],
 };
 const autoPauseFailures = { count: 5, since: '2026-10-16T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
-/** Pauses UC123 by itself at `when`, as the fifth failing check in a day does. */
 const autoPause = (root: string, when: string) => store(root, when).update('UC123', { enabled: false, nextCheckAt: null, autoPausedAt: when, checkFailures: autoPauseFailures });
 
 interface Rule {
   name: string;
-  /** Changes A and B make after B was created from A's export; B then exports and A imports. */
   change: (a: string, b: string) => Promise<void>;
   preview: Partial<ImportPreview>;
   mode?: ImportMode;
-  /** The message an apply is refused with, leaving A as it was. */
   refused?: string;
   documents?: Record<string, object>;
-  /** UC123's stored row on A afterwards; a field given as `undefined` is one the row does not have. */
   subscription?: Record<string, unknown>;
   subscriptionIds?: string[];
   removals?: [string, string][];
-  /** A's collection switch afterwards; the switch belongs to each Vault and never travels with an import. */
   collectionOn?: boolean;
-  /** A's items afterwards equal B's, as a replace makes the Vault what the file holds. */
   sameAsFile?: boolean;
 }
 

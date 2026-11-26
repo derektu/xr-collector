@@ -1,6 +1,4 @@
-// Turning subtitle lines into a transcript body: whitespace normalized, repeats kept, paragraphs
-// added without changing words, and Markdown characters escaped so subtitle text never renders as
-// formatting, while excerpts still show the original words.
+// Broken, a transcript changes the spoken words or renders subtitle text as formatting.
 import { describe, expect, it } from 'vitest';
 import { documentExcerpt } from '../../../../src/shared/documents/document-text.js';
 import { formatTranscriptSegments } from '../../../../src/domain/sources/youtube/transcript.js';

@@ -1,12 +1,9 @@
-// The index of Chinese fragments search filters by: a query group matches only when its characters
-// appear together inside one field, so searching 半導 skips documents where the characters are
-// scattered, and updates and deletions leave no stale matches.
+// Broken, searching 半導 matches documents where the characters are scattered, or removed text.
 import { describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { SearchQuery } from '../../../src/shared/api/search-types.js';
 import { ContiguousFragmentIndex } from '../../../src/domain/search/contiguous-fragment-index.js';
 
-/** A query without filters; the index reads only a query's filters. */
 const unfiltered: SearchQuery = { query: '' };
 
 function document(id: string, title: string, publisher: string, body: string): SavedDocument {

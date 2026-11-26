@@ -17,10 +17,9 @@ import type { SubscriptionStore } from '../../../src/domain/subscriptions/subscr
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
 
-// The request channel runs with a manual clock and timers, so every wait is checked exactly.
-
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 const MINUTE = 60_000;
+const MIDDLE_OF_RANGE = 0.5;
 
 interface Timer { at: number; callback: () => void; cancelled: boolean }
 
@@ -30,8 +29,7 @@ function harness() {
   const options: PacingGateOptions = {
     waitRangeMs: { min: 4_000, max: 12_000 },
     now: () => new Date(now),
-    // 0.5 always draws the middle of the range: 4000 + floor(0.5 × 8001) = 8000 ms.
-    random: () => 0.5,
+    random: () => MIDDLE_OF_RANGE,
     timers: timersAfter((ms, callback) => {
       const timer = { at: now + ms, callback, cancelled: false };
       timers.push(timer);
@@ -55,12 +53,10 @@ function harness() {
   return { options, advance, clock: () => now };
 }
 
-/** Lets resolved promises run their continuations. */
 async function settle(): Promise<void> {
   for (let index = 0; index < 50; index += 1) await Promise.resolve();
 }
 
-/** A request that stays running until the test ends it. */
 function controlled<T>() {
   let finish!: (value: T) => void;
   let fail!: (error: unknown) => void;
@@ -97,7 +93,6 @@ describe('YouTube request channel (P-T3)', () => {
     expect(second.started).toBe(false);
     first.finish('a');
     await settle();
-    // The wait counts from the end of the first request, not from when the second was asked for.
     await h.advance(7_999);
     expect(second.started).toBe(false);
     await h.advance(1);
@@ -193,8 +188,6 @@ describe('YouTube request channel (P-T3)', () => {
     expect(gate.status().state).toBe('busy');
     finishRunning();
     await running;
-    // Requests run one at a time in queue order and an interactive one goes first, so a preview still
-    // queued would run before this one.
     await gate.run('background', async () => undefined);
     expect(previewRequests).toBe(0);
     expect(gate.status().state).toBe('idle');
@@ -215,7 +208,6 @@ describe('cooldown after YouTube limits requests (P-T4)', () => {
       const until = (error as CollectorError).retryAt!;
       durations.push((Date.parse(until) - started) / MINUTE);
       expect(gate.status()).toMatchObject({ state: 'cooldown', cooldownUntil: until, level: index + 1 });
-      // Requests asked for during the cooldown fail at once with the same end time, whatever their priority.
       await expect(gate.run('interactive', async () => 'preview')).rejects.toMatchObject({ code: 'rate_limited', retryAt: until });
       await h.advance(Date.parse(until) - h.clock());
       expect(gate.status().state).toBe('idle');
@@ -264,7 +256,7 @@ describe('cooldown after YouTube limits requests (P-T4)', () => {
     await expect(waiting).rejects.toMatchObject({ code: 'rate_limited' });
   });
 
-  it('keeps the cooldown across restarts in its state file', async () => {
+  it('keeps the cooldown across restarts in its state file, and ends one that ran out while stopped', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-youtube-gate-'));
     directories.push(directory);
     const statePath = path.join(directory, 'youtube-pacing.json');
@@ -279,8 +271,6 @@ describe('cooldown after YouTube limits requests (P-T4)', () => {
     await h.advance(5 * MINUTE);
     expect(reopened.status().state).toBe('idle');
 
-    // A cooldown that ended while the service was stopped is over at the next start.
-    // Advancing the clock also ended the first gate's cooldown; both gates finish writing first.
     await Promise.all([first.flush(), reopened.flush()]);
     await writeFile(statePath, JSON.stringify({ cooldownUntil: new Date(h.clock() - 1).toISOString(), level: 3, lastLimitedAt: null }));
     const later = await PacingGate.open(YOUTUBE_PACING, { ...h.options, statePath });

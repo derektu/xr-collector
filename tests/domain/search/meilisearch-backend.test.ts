@@ -1,5 +1,4 @@
-// The indexed form of a YouTube document stays fixed, pinned by its content hash: a change would
-// make every existing search index look stale and rebuild it at the next start.
+// Broken, every existing search index looks stale and rebuilds at the next start.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,7 +12,6 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-/** The documents a full rebuild sends to the index. */
 async function indexed(vault: MarkdownVault): Promise<Array<{ id: string; contentHash: string; youtube: unknown }>> {
   const bodies: string[] = [];
   const fetch = async (url: string | URL | Request, init?: RequestInit) => {
@@ -27,8 +25,6 @@ async function indexed(vault: MarkdownVault): Promise<Array<{ id: string; conten
 }
 
 describe('the indexed form of a YouTube document', () => {
-  // The digest is pinned: any change to the indexed form of a YouTube document makes every index
-  // already on disk look stale, and starting the search would then rebuild it.
   it('keeps the content hash of an existing index', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-indexed-'));
     roots.push(root);
