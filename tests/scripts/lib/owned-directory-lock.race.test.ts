@@ -1,18 +1,11 @@
-// Guards the developer, not the user: a packaging or signing run that reads the directory lock at
-// the moment its holder writes, rewrites or releases its owner record still reports busy, takes the
-// lock, or names the lock left behind, and one that cannot write its own record leaves no lock. When
-// this breaks, a developer packaging while another run finishes sees a spurious metadata error or a
-// lock that blocks every later run until deleted by hand.
+// Guards the developer, not the user: broken, a packaging run that races another sees a spurious
+// error or leaves a lock that blocks every later run until deleted by hand.
 import { mkdir, mkdtemp, readdir, rm, rmdir, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { withOwnedDirectoryLock } from '../../../scripts/lib/owned-directory-lock.mjs';
 
-/**
- * Every file-system call the lock makes passes through `schedule.intercept`, so a test can change the
- * lock, as its holder would, at a chosen step of another process's inspection or acquisition.
- */
 type Step = { name: string; target: string };
 const schedule = vi.hoisted(() => ({
   intercept: undefined as undefined | ((step: Step, run: () => Promise<unknown>) => Promise<unknown>),
@@ -51,7 +44,6 @@ function lockOptions(token: string, inspectOwner: (pid: number) => Promise<unkno
   };
 }
 const liveOwner = async (pid: number) => ({ pid, uid, startedAt: 'current' });
-/** A lock held by a live owner, pid 41, as `withOwnedDirectoryLock` leaves it while work runs. */
 async function heldLock(extraEntries: string[] = [], ownerContent = JSON.stringify({ pid: 41, uid, startedAt: 'holder', token: 'a1' })) {
   const lock = await lockRoot();
   await mkdir(lock, { mode: 0o700 });

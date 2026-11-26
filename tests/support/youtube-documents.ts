@@ -20,7 +20,6 @@ export function transcriptOf(document: CapturedDocument): CapturedTranscript {
   };
 }
 
-/** The document key of a YouTube video. */
 export function youtubeKey(videoId: string): DocumentKey {
   return { sourceType: 'youtube', sourceId: videoId };
 }

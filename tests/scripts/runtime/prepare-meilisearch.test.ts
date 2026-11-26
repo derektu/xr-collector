@@ -1,6 +1,5 @@
-// The search engine an installer ships: the pinned Meilisearch release for the build's own target,
-// verified by size, checksum, executable format and version, served from the cache in cache-only
-// mode, and installed atomically, so a failed download or install keeps the previous binary.
+// Broken, an installer ships a wrong or corrupt search engine, or a failed download loses the
+// working one.
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

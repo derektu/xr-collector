@@ -1,6 +1,5 @@
-// Where the runtime archives are cached: one cache per user outside every checkout, so a second
-// checkout installs the same pins without downloading, and an override that is not an absolute path
-// is refused rather than resolved against whatever directory a command runs in.
+// Broken, each checkout downloads the runtimes again, or a relative cache path resolves against
+// whatever directory a command runs in.
 import { expect, it } from 'vitest';
 import { runtimeCacheRoot } from '../../../scripts/runtime/runtime-cache.mjs';
 

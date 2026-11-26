@@ -1,6 +1,4 @@
-// The packaging scripts' child processes: an aborted run ends its whole process tree, so a killed
-// packaging run leaves no child or grandchild still writing into the checkout, and a tree it cannot
-// confirm ended is reported as unsafe without waiting for it. POSIX-only cases skip Windows.
+// Broken, a killed packaging run leaves processes still writing into the checkout.
 import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

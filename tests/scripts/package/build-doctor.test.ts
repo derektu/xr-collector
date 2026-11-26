@@ -1,7 +1,5 @@
-// Guards the developer, not the user: `npm run doctor:build` and the check before packaging
-// name each missing build prerequisite (host, Node, npm, Git, dependencies) with its fix,
-// and packaging stops before any work while one is missing. The runtime cache and Developer ID
-// state, including the notarytool notarization needs, are reported without failing the check.
+// Guards the developer, not the user: broken, a missing build prerequisite goes unnamed, or
+// packaging starts without it.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

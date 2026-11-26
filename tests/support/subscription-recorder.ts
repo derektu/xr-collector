@@ -35,7 +35,6 @@ export type PortReport =
 export class SubscriptionRecorder implements SubscriptionPort {
   readonly subscriptions = new Map<string, RecordedSubscription>();
   readonly reports: PortReport[] = [];
-  /** Failed checks per item key, so a reported failure gets a count as the subscriptions would give it. */
   private readonly failures = new Map<string, number>();
   /** Set to make the next subscribe write its subscription and then never return, as a process killed right after. */
   hangAfterSubscribe = false;

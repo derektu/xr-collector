@@ -74,7 +74,6 @@ export class SyntheticYouTube implements YouTubeSource {
   }
 
   async resolveChannel(url: string): Promise<ResolvedYouTubeChannel> {
-    // A resolved channel address (/channel/<id>/videos) names the channel by its ID; any other by its handle.
     const byId = /\/channel\/([^/]+)/u.exec(url)?.[1];
     const id = byId ?? syntheticChannelId(url.split('/').pop()!.replace('@', ''));
     const channel = this.channels.get(id);

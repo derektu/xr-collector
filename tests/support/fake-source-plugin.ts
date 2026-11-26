@@ -1,3 +1,5 @@
+// Source plugins that hold the core to its contract without YouTube: types `fake` and `fake2`, each
+// in its own pacing group. An item is `https://<type>.example/item/<key>`, a feed `https://<type>.example/feed/<id>`.
 import { CollectorError } from '../../src/shared/lib/collector-error.js';
 import type { SubscriptionSettings } from '../../src/shared/subscriptions/subscription-types.js';
 import type { PacingGate } from '../../src/domain/pacing/pacing-gate.js';
@@ -12,13 +14,6 @@ import type {
   SubscriptionTarget,
 } from '../../src/shared/sources/source-contract.js';
 import { HeldCaptures } from './held-captures.js';
-
-/**
- * Source plugins for tests that hold the core to its contract without YouTube: two types, `fake`
- * and `fake2`, each in its own pacing group, over scripted in-memory sources. Their addresses are
- * `https://<type>.example/item/<key>` for one item and `https://<type>.example/feed/<id>` for a
- * subscription.
- */
 
 const DAY = 24 * 60 * 60_000;
 
