@@ -1,3 +1,5 @@
+// Broken, a subscription's next check or retry, or the tray's next check, shows the wrong day or time around midnight or
+// the end of a month or year.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { upcomingTime, upcomingTimeText } from '../../../src/shared/subscriptions/upcoming-time.js';
 

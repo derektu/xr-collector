@@ -1,3 +1,4 @@
+// Guards the developer, not the user: a Vault file store that writes past the Vault file entry can write a file no export carries.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { productFiles } from '../support/source-imports.js';

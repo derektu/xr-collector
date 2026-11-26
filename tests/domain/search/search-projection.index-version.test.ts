@@ -1,3 +1,4 @@
+// Broken, an upgrade reuses a search index the new Meilisearch or opencc-js cannot read or would build differently.
 import { expect, it } from 'vitest';
 import packageJson from '../../../package.json' with { type: 'json' };
 import runtimePins from '../../../src/domain/search/meilisearch-runtime-pins.json' with { type: 'json' };

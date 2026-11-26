@@ -1,3 +1,4 @@
+// Broken, a search engine that cannot start shows as a failure a rebuild could fix, or shows a local path instead of keeping it in the program log.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

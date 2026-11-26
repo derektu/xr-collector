@@ -1,3 +1,4 @@
+// Broken, the Jobs page names work wrongly, shows the wrong icon, retry time or failure, or shows a check's progress before its total is known.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JobOverviewEntry } from '../../../../src/shared/jobs/job-types.js';
 import { youtubeDeclaration } from '../../../../src/domain/sources/youtube/shared.js';

@@ -1,3 +1,4 @@
+// Broken, an older App opens a Vault or an export it cannot read.
 import { expect, it } from 'vitest';
 import { SOURCE_DEFINITIONS } from '../../../src/app/plugins/index.js';
 import { FORMAT_VERSION } from '../../../src/domain/vault/vault-directory.js';

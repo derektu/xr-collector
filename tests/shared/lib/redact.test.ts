@@ -1,3 +1,4 @@
+// Broken, a secret reaches a log, an error or a response unmasked, or ordinary words are masked.
 import { describe, expect, it } from 'vitest';
 import { maskSecrets, protectSecret, redact } from '../../../src/shared/lib/redact.js';
 

@@ -1,3 +1,4 @@
+// Broken, opening the Vault in use under another letter case starts a switch to itself, or exports and backups go to the wrong folder.
 import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

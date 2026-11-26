@@ -1,3 +1,5 @@
+// Broken, the UI or an authorized Agent cannot export, preview, import, open or create a Vault, an Agent without a key
+// reaches them, or an export replaces an existing file.
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHttpApp } from '../../../../src/transport/server/app.js';

@@ -1,3 +1,4 @@
+// Broken, the add dialog says wrongly how often a new or resumed subscription is checked.
 import { describe, expect, it } from 'vitest';
 import { intervalLabel } from '../../../src/shared/subscriptions/check-interval.js';
 

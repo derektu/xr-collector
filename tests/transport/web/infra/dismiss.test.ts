@@ -1,3 +1,4 @@
+// Broken, a menu or popover stays open on Escape or an outside click, or closes when clicked inside.
 import { describe, expect, it } from 'vitest';
 import { dismisses, type DismissRoot } from '../../../../src/transport/web/infra/dismiss.js';
 

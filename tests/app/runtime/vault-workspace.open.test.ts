@@ -1,3 +1,5 @@
+// Broken, opening or creating another Vault continues work in the wrong Vault or in a copy, changes the previous Vault,
+// or reports a switch finished before its job records are written.
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

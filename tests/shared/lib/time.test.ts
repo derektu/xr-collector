@@ -1,3 +1,4 @@
+// Broken, startup or collection hangs on an outside process that never answers, or the timeout error does not say what it waited for.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deadline, waitUntil } from '../../../src/shared/lib/time.js';
 

@@ -1,3 +1,4 @@
+// Broken, an export, import or Vault switch runs over another one or over a write, or a write right after one finishes is refused as busy.
 import { describe, expect, it, vi } from 'vitest';
 import { VaultOperationLock } from '../../../src/domain/vault/operation-lock.js';
 

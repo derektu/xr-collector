@@ -1,3 +1,4 @@
+// Broken, Windows users are told more than once or never that closing the window leaves the App running, or macOS users are told needlessly.
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

@@ -1,3 +1,4 @@
+// Broken, after an import replaces the Vault, turning automatic collection off leaves subscriptions checking on their own.
 import { afterEach, describe, expect, it } from 'vitest';
 import { MarkdownVault } from '../../../src/domain/vault/markdown-vault.js';
 import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';

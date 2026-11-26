@@ -1,3 +1,4 @@
+// Broken, the Activity page names a job by the wrong kind, or calls a job of an unknown source type a subscription.
 import { describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../../src/shared/jobs/job-types.js';
 import { jobKind, jobKindLabel } from '../../../../src/transport/web/jobs/job-presentation.js';

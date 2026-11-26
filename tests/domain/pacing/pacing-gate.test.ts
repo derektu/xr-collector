@@ -1,3 +1,5 @@
+// Broken, YouTube blocks collection for requests sent too fast or during a cooldown, a cooldown is forgotten on restart,
+// or one RSS feed's limit holds back the others.
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

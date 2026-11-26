@@ -1,3 +1,4 @@
+// Broken, an export leaves out Vault files or replaces an existing file, or an import accepts a damaged or unsafe file and writes part of it.
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

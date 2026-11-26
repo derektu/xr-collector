@@ -1,3 +1,5 @@
+// Broken, an import between two Vaults loses or brings back documents and subscriptions, previews counts it does not apply,
+// or a failed import leaves the Vault half changed without a backup.
 import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

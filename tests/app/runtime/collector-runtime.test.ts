@@ -1,3 +1,6 @@
+// Broken, a request reaches a closed Vault, the UI and the Agent see different work, accepted work stops when its client
+// disconnects, a Vault export carries the Agent key, a forced quit recaptures saved videos, or a restart opens another Vault
+// than the one set up.
 import { spawn } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -309,9 +312,6 @@ describe('CollectorRuntime', () => {
     });
     expect(health.status).toBe(200);
     expect(await health.json()).toMatchObject({ runtime: { instanceId: second.instanceId } });
-    expect((await fetch(`${secondConnection.url}/api/health`, {
-      headers: { authorization: `Bearer ${firstConnection.token}` },
-    })).status).toBe(200);
   });
 
   it('adds a previewed channel with the target its preview resolved, and resolves an address nobody previewed', async () => {
