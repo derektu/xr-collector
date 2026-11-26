@@ -1,7 +1,4 @@
-// Collection jobs and their status: a video is accepted before its capture and captured once
-// however often it is submitted, captures rotate between jobs so one large channel does not hold up
-// the rest, and on a stop running work finishes, unfinished work reads interrupted and an unreadable
-// jobs file is set aside.
+// Broken, a video is captured twice, one large channel holds up the rest, or a stop loses work.
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -72,7 +69,6 @@ class MemoryVault implements DocumentVault {
   readonly now = () => new Date();
 }
 
-/** A YouTube source whose captures wait until the test releases them. */
 class ControlledSource implements YouTubeSource {
   readonly captures: string[] = [];
   readonly holds = new HeldCaptures();
@@ -121,9 +117,7 @@ function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; sto
     createId: () => `job-${++sequence}`,
   });
   subs.attach(manager);
-  /** Subscribes to the channel and checks it once. */
   const collect = (target: SubscriptionTarget) => {
-    // Listed videos carry no publish time, so they are all in range; the limit is the largest offered.
     const subscribed = subs.get('youtube', target.id)
       ?? subs.add('youtube', target, { settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 } });
     return manager.submitCheck('youtube', subscribed, 'manual');
@@ -167,7 +161,6 @@ describe('JobManager', () => {
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created', saved: true, indexed: false } });
     expect(job.result?.indexMessage).toBeTruthy();
     expect(vault.documents.has(id)).toBe(true);
-    // The Activity page reads the index failure from the completion event, not from its message.
     const { events } = await records.views.query({ jobId: job.id, eventType: ['job.completed'] }, { vaultPath: job.vaultPath });
     expect(events[0]).toMatchObject({ jobRole: 'item', outcome: 'created', indexed: false });
   });
@@ -229,7 +222,6 @@ describe('JobManager', () => {
       order.push(next);
       source.release(next);
     }
-    // The manual video and the second channel start long before the large channel's 20 videos finish.
     expect(order.slice(0, 6)).toContain(videoId(1, 'm'));
     expect(order.slice(0, 6).some((id) => id.startsWith('o'))).toBe(true);
     expect(manager.get(big.job.id).state).toBe('running');
@@ -293,7 +285,6 @@ describe('JobManager', () => {
     const previewed = channel('UCpreviewedxxxxxxxxxxxxx', '預覽的頻道');
     recentTargets.remember('youtube', 'https://www.youtube.com/@previewed', previewed);
 
-    // A request nobody previewed holds the single discovery slot, so the previewed one waits in the queue.
     const blocker = await manager.submit('youtube', '@blocker');
     await eventually(() => expect(manager.get(blocker.job.id).phase).toBe('resolve'));
     const added = await manager.submit('youtube', '@previewed');
@@ -401,7 +392,6 @@ describe('JobStore', () => {
     source.channelVideos.set('UC-STOP', videos(2, 's'));
     const accepted = await collect(channel('UC-STOP', '停止中的頻道'));
 
-    // Acceptance is durable before the HTTP response.
     const onDisk = JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8'));
     expect(onDisk.jobs.map((job: { id: string }) => job.id)).toContain(accepted.job.id);
 
@@ -411,7 +401,6 @@ describe('JobStore', () => {
     await store.flush();
     await records.activity.flush();
 
-    // A process that stops without closing leaves running and queued jobs on disk.
     const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES);
     const reopened = reopenedRecords.jobs;
     const channelJob = reopened.get(accepted.job.id)!;

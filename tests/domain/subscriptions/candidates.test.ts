@@ -1,6 +1,4 @@
-// Which videos a channel check picks: the newest within the time range and item limit, skipping
-// upcoming streams and never filling a known video's place with an older one, so a check never
-// collects videos older than the range the user set.
+// Broken, a check collects videos older than the range the user set.
 import { describe, expect, it } from 'vitest';
 import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subscription-types.js';
 import { SyntheticYouTube } from '../../support/synthetic-youtube.js';
@@ -33,10 +31,8 @@ describe('channel discovery', () => {
     const known = new Set([ids[0], ids[2]]);
 
     const result = await discoverChannelVideos(source, channel, range(30, 10), async (videoId) => known.has(videoId));
-    // The upcoming stream takes no place; the two known candidates are dropped, not replaced.
     expect(result.videos.map((video) => video.id)).toEqual([ids[1], ...ids.slice(3, 10)]);
     expect(result.publishedNotBefore).toBe(range(30, 10).windowStart.toISOString());
-    // Ten candidates fit in the first page, so the listing is read once.
     expect(source.listingRequests).toHaveLength(1);
 
     const allKnown = await discoverChannelVideos(source, channel, range(30, 10), async () => true);
@@ -62,7 +58,6 @@ describe('channel discovery', () => {
   it('counts a listed video without a publish time as inside the range and lets the capture confirm it (R-08)', async () => {
     const { source, id, channel } = setup();
     const ids = source.publish(id, 'a', NOW, [1, 2, 31]);
-    // The listing shows no time for the newest video and a rounded time inside the range for the oldest.
     source.channels.get(id)!.videos[0]!.listedAt = null;
     source.channels.get(id)!.videos[2]!.listedAt = new Date(NOW.getTime() - 29 * DAY).toISOString();
     const result = await discoverChannelVideos(source, channel, range(30, 10), nothingKnown);

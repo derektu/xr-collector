@@ -74,41 +74,6 @@
       "count": 1
     }
   },
-  "tests/domain/jobs/connectivity.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 4
-    }
-  },
-  "tests/domain/jobs/job-manager.activity.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 14
-    }
-  },
-  "tests/domain/jobs/job-manager.check-end-order.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 1
-    }
-  },
-  "tests/domain/jobs/job-manager.pacing.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 9
-    }
-  },
-  "tests/domain/jobs/job-manager.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 8
-    }
-  },
-  "tests/domain/jobs/job-queue.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
-    }
-  },
-  "tests/domain/jobs/job-recovery.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 24
-    }
-  },
   "tests/domain/pacing/pacing-gate.test.ts": {
     "xr-collector/comment-policy": {
       "count": 10
@@ -157,41 +122,6 @@
   "tests/domain/sources/youtube/ytdlp-capture.test.ts": {
     "xr-collector/comment-policy": {
       "count": 5
-    }
-  },
-  "tests/domain/subscriptions/candidates.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 3
-    }
-  },
-  "tests/domain/subscriptions/scheduler.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 15
-    }
-  },
-  "tests/domain/subscriptions/subscription-fields.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 6
-    }
-  },
-  "tests/domain/subscriptions/subscription-files.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
-    }
-  },
-  "tests/domain/subscriptions/subscription-service.collection.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 13
-    }
-  },
-  "tests/domain/subscriptions/subscription-service.rules.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 17
-    }
-  },
-  "tests/domain/subscriptions/subscription-service.status.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 6
     }
   },
   "tests/domain/updates/update-service.test.ts": {

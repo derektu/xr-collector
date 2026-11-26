@@ -1,6 +1,4 @@
-// The order in which queued jobs start. Broken, a large subscription holds every capture slot while
-// other subscriptions and single items wait, a step a pause or cooldown stopped loses its turn, or a
-// job that may not start yet (cooling down, waiting for a retry) blocks unrelated work behind it.
+// Broken, one large subscription or a job that may not start yet holds up unrelated work.
 import { describe, expect, it } from 'vitest';
 import { JobQueue, type QueuePlace } from '../../../src/domain/jobs/job-queue.js';
 
@@ -8,7 +6,6 @@ const DISCOVERY: QueuePlace = { line: 'discovery' };
 const lane = (name: string): QueuePlace => ({ line: 'capture', lane: name });
 const always = () => true;
 
-/** Every capture, in the order the queue gives them while all may start. */
 function drainCaptures(queue: JobQueue, ready: (id: string) => boolean = always): string[] {
   const order: string[] = [];
   for (let id = queue.nextCapture(ready); id; id = queue.nextCapture(ready)) order.push(id);
@@ -119,7 +116,6 @@ describe('the job queue', () => {
     queue.nextCapture(always);
     const joinOrders = ['stopped', 'first', 'item'].map((id) => queue.joinOrder(id)!);
     expect([...joinOrders].sort((left, right) => left - right)).toEqual(joinOrders);
-    // A job that joins again moves behind every job that joined before.
     queue.add('first', DISCOVERY);
     expect(queue.joinOrder('first')!).toBeGreaterThan(queue.joinOrder('item')!);
     queue.forget('item');

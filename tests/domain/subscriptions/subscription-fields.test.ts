@@ -1,7 +1,4 @@
-// The field table of a subscription decides which changes stamp `updatedAt`, which count as a change
-// in an import, and what an import takes from each machine. A field in the wrong part either lets
-// an import overwrite a person's newer change, or lets another machine's progress overwrite this
-// machine's.
+// Broken, an import overwrites a person's newer change, or another machine's progress overwrites this machine's.
 import path from 'node:path';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,7 +11,6 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 
 const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { code: 'network_error', message: '無法連線。' } };
 
-/** A subscription with every field set. */
 const record: Required<SubscriptionRecord> = {
   id: 'UCa', title: '頻道 A', url: 'https://www.youtube.com/channel/UCa', enabled: true, addedAt: '2026-09-01T00:00:00.000Z',
   updatedAt: '2026-09-02T00:00:00.000Z', settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 },
@@ -24,7 +20,6 @@ const record: Required<SubscriptionRecord> = {
   failures: [{ videoId: 'aaaaaaaaaa2', title: '影片', attempts: 1, errorCode: 'network_error', failedAt: '2026-10-19T00:00:00.000Z', skipped: false }],
 };
 
-/** Another valid value of every field, as the other machine might hold it. */
 const other: Required<SubscriptionRecord> = {
   id: 'UCa', title: '頻道 A（改名）', url: 'https://www.youtube.com/channel/UCa/videos', enabled: false, addedAt: '2026-09-05T00:00:00.000Z',
   updatedAt: '2026-10-21T00:00:00.000Z', settings: { intervalMinutes: 360, backfillDays: 7, backfillMaxItems: 5 },
@@ -34,11 +29,8 @@ const other: Required<SubscriptionRecord> = {
   failures: [{ videoId: 'bbbbbbbbbb2', title: '另一支', attempts: 2, errorCode: 'capture_failed', failedAt: '2026-10-24T00:00:00.000Z', skipped: false }],
 };
 
-/** `record` without a pause it made itself, so that turning `enabled` off is a pause by the person. */
 const { autoPausedAt: _recordPause, ...base } = record;
-/** `other` paused by the person rather than by itself. */
 const { autoPausedAt: _otherPause, ...otherByPerson } = other;
-/** `record` after it paused itself. */
 const pausedItself = { ...record, enabled: false };
 
 const fields = Object.keys(SUBSCRIPTION_FIELDS) as Array<keyof SubscriptionRecord>;
@@ -63,7 +55,6 @@ describe('the field table', () => {
     expect(subscriptionContent({ ...base, enabled: false })).not.toBe(subscriptionContent(base));
   });
 
-  /** The stored record after `changes` are applied one after another to `start`. */
   async function stored(start: SubscriptionRecord, ...changes: Array<Partial<SubscriptionRecord>>): Promise<SubscriptionRecord> {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-fields-'));
     roots.push(root);

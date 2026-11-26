@@ -1,6 +1,4 @@
-// A check reports to its subscription what happened, as it happened: a failed item and a failed
-// check come with how the source type treats the failure, including a limit or a needed sign-in,
-// so the subscriptions decide what counts against them.
+// Broken, subscriptions count failures against themselves that they should not, or miss ones they should.
 import { describe, expect, it } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';

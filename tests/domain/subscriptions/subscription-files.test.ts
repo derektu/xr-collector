@@ -1,8 +1,4 @@
-// The subscription and schedule files in a Vault: a file of another version or with invalid values
-// is refused and left untouched rather than guessed at or converted, saves keep the fields they do
-// not manage, and subscriptions, failed items and the automatic collection switch survive a
-// restart. A subscription's change time moves only for a person's changes, which a Vault merge
-// compares, and a removal is recorded until the channel is subscribed again.
+// Broken, a Vault's subscription files are misread, overwritten or lost across a restart.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -37,7 +33,6 @@ function row(id: string, enabled = true) {
   };
 }
 
-/** A subscription row with fields the store does not know. */
 function rowWithUnknownFields(id: string, enabled = true) {
   return { ...row(id, enabled), extraObject: { name: 'extra', items: ['one'] }, extraFlag: false };
 }
@@ -112,7 +107,6 @@ describe('JsonSubscriptionStore', () => {
   it('reads and writes failed items with a subscription, as collection progress that is not a change of it (N69-T1)', async () => {
     const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
     const failure = { videoId: 'aaaaaaaaaaa', title: '影片', attempts: 2, errorCode: 'no_subtitles', failedAt: '2026-10-15T03:30:00.000Z', skipped: false };
-    // A file written before failures were recorded reads as a subscription without failures.
     const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
     const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));
     expect((await store.list())[0]!.failures).toBeUndefined();

@@ -1,3 +1,4 @@
+// Broken, interrupted work does not continue after a restart.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -28,12 +29,6 @@ import { HeldCaptures } from '../../support/held-captures.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
-
-// Interrupted work continues after a restart. A "crash" flushes the job store and opens the same
-// directory again without closing the manager: the atomic snapshot on disk is what a killed process
-// leaves behind. The Vault and subscriptions are shared memory objects standing in for files that
-// survive the restart. Each generation gets a source of its own, so held work of the old process
-// never finishes.
 
 const VAULT = '/vaults/recovery';
 const VAULT_ID = 'vault-id';
@@ -79,7 +74,6 @@ function never(): Promise<never> {
   return new Promise<never>(() => undefined);
 }
 
-/** Calls and failures shared by every generation of the source. */
 interface Script {
   captures: string[];
   discoveries: number;
@@ -90,7 +84,6 @@ interface Script {
   channelVideos: Map<string, DiscoveredYouTubeVideo[]>;
 }
 
-/** One process's YouTube source; held steps wait until this generation releases them. */
 class ScriptedSource implements YouTubeSource {
   readonly holds = new HeldCaptures();
   holdCaptures = new Set<string>();
@@ -141,13 +134,7 @@ interface Generation {
   manager: JobManager;
   source: ScriptedSource;
   timers: Timer[];
-  /** Runs every timer that is due and not cancelled. */
   fireTimers(): void;
-  /**
-   * Resolves once the steps already running have finished. While collection is held or paused no
-   * step starts, so a test that waits here and finds nothing started knows nothing will start until
-   * the hold or pause ends.
-   */
   quiet(): Promise<void>;
 }
 
@@ -211,14 +198,12 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   return {
     directory, vault, subs, script, clock, boot,
     setIndexHangs(value: boolean) { indexHangs = value; },
-    /** Leaves the generation as a killed process would and starts the next one. */
     async crash(previous: Generation, prepare?: (source: ScriptedSource) => void): Promise<Generation> {
       await previous.store.flush();
       const next = await boot(prepare);
       await next.manager.resume();
       return next;
     },
-    /** Closes the generation and starts the next one. */
     async restart(previous: Generation, prepare?: (source: ScriptedSource) => void): Promise<Generation> {
       await previous.manager.close();
       const next = await boot(prepare);
@@ -234,14 +219,12 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   };
 }
 
-/** Subscribes to the channel in the recorder every generation shares. */
 function subscribe(subs: SubscriptionRecorder, id: string): RecordedSubscription {
   return subs.add('youtube', { id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos` }, {
     settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
   });
 }
 
-/** The one subscription the recorder holds. */
 function onlySubscription(subs: SubscriptionRecorder): RecordedSubscription {
   expect(subs.subscriptions.size).toBe(1);
   return [...subs.subscriptions.values()][0]!;
@@ -319,7 +302,6 @@ describe('subscription requests across restarts start over (R-T3)', () => {
     const chosen = { intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@chosen', chosen);
-    // Its activity events are labelled as a first collection.
     expect(adding.job.scope).toEqual({ trigger: 'subscribe' });
     await eventually(() => expect(g1.manager.get(adding.job.id).phase).toBe('resolve'));
 
@@ -329,7 +311,6 @@ describe('subscription requests across restarts start over (R-T3)', () => {
 
     expect(onlySubscription(w.subs).settings).toEqual(chosen);
     expect(followUp.scope).toEqual({ trigger: 'subscribe' });
-    // The chosen settings serve the restart only; the job as UI and Agents read it has no checkpoint.
     expect(done).not.toHaveProperty('checkpoint');
   });
 });
@@ -394,7 +375,6 @@ describe('checks across restarts start over (R-T4)', () => {
     const accepted = await g1.manager.submitCheck('youtube', subscribed, 'manual');
     await eventually(() => expect(g1.manager.get(accepted.job.id).phase).toBe('discover'));
 
-    // While the service is down the limit is lowered and time moves on.
     subscribed.settings = { ...subscribed.settings, backfillDays: 7, backfillMaxItems: 5 };
     w.script.channelVideos.set(subscribed.id, [...listed(6, 'e'), ...videos]);
     w.clock.now = new Date(T0.getTime() + 3 * 24 * 60 * 60_000);
@@ -469,7 +449,6 @@ describe('system sleep (#97)', () => {
     const accepted = await g.manager.submitItem('youtube', watchUrl(id));
     await g.source.holds.started(id);
     pause.set('sleep', true);
-    // The request in flight at suspend loses the network in a dark wake.
     g.source.holdCaptures.clear();
     g.source.release(id);
     await eventually(() => expect(g.manager.get(accepted.job.id).state).toBe('queued'));
@@ -497,7 +476,6 @@ describe('system sleep (#97)', () => {
     await eventually(() => expect(g.manager.get(first.job.id).retry?.nextAttemptAt).toBeTruthy());
     pause.set('sleep', true);
     const second = await g.manager.submitItem('youtube', watchUrl(queued));
-    // The retry wait ends while the system sleeps.
     g.fireTimers();
     await g.quiet();
     expect(w.script.captures).toEqual([retried]);
@@ -513,7 +491,6 @@ describe('system sleep (#97)', () => {
 });
 
 describe('lost network (#128)', () => {
-  /** A connectivity service whose probe answers `state.online`, once `state.gate` (when set) opens. */
   function offlineWorld(online: boolean) {
     const pause = new CollectionPause();
     const state = { online, probes: 0, gate: null as Promise<void> | null };
@@ -591,7 +568,6 @@ describe('system sleep and Vault holds together (#97)', () => {
     const w = await world({ pause });
     const g = await w.boot();
 
-    // The hold ends while the system still sleeps.
     pause.set('sleep', true);
     const releaseFirst = await g.manager.hold();
     const first = await g.manager.submitItem('youtube', watchUrl(videoId(8, 's')));
@@ -601,7 +577,6 @@ describe('system sleep and Vault holds together (#97)', () => {
     pause.set('sleep', false);
     expect(await g.manager.whenSettled(first.job.id)).toMatchObject({ state: 'completed' });
 
-    // The system wakes while the hold is still in force.
     const releaseSecond = await g.manager.hold();
     pause.set('sleep', true);
     const second = await g.manager.submitItem('youtube', watchUrl(videoId(9, 's')));
@@ -673,7 +648,6 @@ describe('automatic retries (R-T6, R-T7)', () => {
     const g1 = await w.boot();
     const failing = await g1.manager.submitItem('youtube', watchUrl(videoId(6)));
     await eventually(() => expect(g1.manager.get(failing.job.id).retry?.attempts).toBe(1));
-    // The only capture slot is free while the job waits.
     const other = await g1.manager.submitItem('youtube', watchUrl(videoId(7)));
     expect(await g1.manager.whenSettled(other.job.id)).toMatchObject({ state: 'completed' });
     g1.fireTimers();
@@ -741,7 +715,6 @@ describe('repeated unclean stops (R-T8)', () => {
 });
 
 describe('interrupted work in its subscription\'s activity (#255)', () => {
-  /** The event types of one job that the activity filter of a subscription returns. */
   async function subscriptionEvents(records: JobRecords, subscriptionId: string, jobId: string): Promise<string[]> {
     const page = await records.views.query({ subscriptionId, limit: 500 }, { vaultPath: VAULT });
     return page.events.filter((event) => event.jobId === jobId).map((event) => event.eventType);
@@ -758,7 +731,6 @@ describe('interrupted work in its subscription\'s activity (#255)', () => {
 
     const g2 = await w.crash(g1);
     await g2.manager.whenSettled(check.job.id);
-    // Finished jobs beyond the store's limit drop out oldest first, so these push out the check and its item.
     for (let index = 0; index < 1001; index += 1) {
       const at = new Date(T0.getTime() + 86_400_000 + index).toISOString();
       g2.store.put({

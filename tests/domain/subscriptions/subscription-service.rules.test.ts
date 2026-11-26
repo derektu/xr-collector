@@ -1,3 +1,4 @@
+// Broken, subscriptions miscount failures, pause when they should not, or collect items out of range.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,11 +21,6 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { stoppedTimers } from '../../support/timers.js';
 
-// The subscription rules hold through SubscriptionService, the only writer of subscriptions, with a
-// real job manager running checks of fake source types: failure counts, out-of-range items,
-// dispatch times and the check time, failed checks in a row and the pause they lead to, and
-// refusing a check request as a whole.
-
 const SOURCES = productSourcesWith(FAKE, FAKE2);
 
 const DAY = 24 * 60 * 60_000;
@@ -43,11 +39,6 @@ class MemoryScheduleStore implements ScheduleStore {
 
 type FakeType = 'fake' | 'fake2';
 
-/**
- * One Vault with both fake types: subscription files and services, a job manager on a job record
- * kept in a directory, a scheduler and a manual clock. `crash()` leaves the running generation as
- * a killed process would and resumes its jobs in a new one on the same Vault and job record.
- */
 async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionRecord) => void | Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-writer-'));
   const jobsDirectory = await mkdtemp(path.join(tmpdir(), 'xr-subscription-writer-jobs-'));
@@ -94,11 +85,9 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
     async record(type: FakeType, id: string): Promise<SubscriptionRecord> {
       return (await current.stores[type].list()).find((record) => record.id === id)!;
     },
-    /** Writes fields of a subscription file directly, as another writer of the same Vault would. */
     async patch(type: FakeType, id: string, patch: Partial<SubscriptionRecord>): Promise<void> {
       await current.stores[type].updateWith(() => new Map([[id, patch]]));
     },
-    /** Subscribes through the service and returns the first check once it ends. */
     async subscribe(type: FakeType, id: string, settings?: Record<string, number>): Promise<CollectionJob> {
       const added = await current.jobs.whenSettled((await current.services.of(type)!.add(`https://${type}.example/feed/${id}`, settings)).job.id);
       expect(added.result).toMatchObject({ outcome: 'created' });
@@ -151,7 +140,6 @@ describe('failed items across checks', () => {
     await w.subscribe('fake', 'f');
     expect((await w.record('fake', 'f')).failures?.map((entry) => entry.itemKey)).toEqual([recovers, leaves]);
 
-    // Five newer items fill the five candidates of the next check, so `leaves` drops out of its range.
     const feed = w.sources.fake.feed('f');
     feed.items.unshift(...[1, 2, 3, 4, 5].map((index) => ({ key: `new-${index}`, title: `新的 ${index}`, publishedAt: new Date(w.clock.now.getTime() - index * MINUTE).toISOString() })));
     await w.checkNow('fake', 'f');
@@ -215,7 +203,6 @@ describe('out-of-range items', () => {
   it('leaves an item out of every check whose range starts no earlier than the one that found it out of range', async () => {
     const w = await world();
     const [late] = w.sources.fake.addFeed('f', w.clock.now, [40]);
-    // The listing reports it inside the 30-day range; its exact publish time is earlier.
     w.sources.fake.feed('f').items[0]!.listedAt = new Date(w.clock.now.getTime() - DAY).toISOString();
     await w.subscribe('fake', 'f');
     const record = await w.record('fake', 'f');
@@ -246,7 +233,6 @@ describe('dispatch times', () => {
       lastDispatchedAt: manualAt.toISOString(), nextCheckAt: new Date(manualAt.getTime() + INTERVAL).toISOString(), lastCheckedAt: manualAt.toISOString(),
     });
 
-    // Two minutes late, a scheduled check keeps the rhythm of the time that came due.
     const due = new Date(manualAt.getTime() + INTERVAL);
     w.advance(INTERVAL + 2 * MINUTE);
     await w.scheduler.checkNow();
@@ -263,7 +249,6 @@ describe('dispatch times', () => {
     const added = await w.jobs.whenSettled((await w.services.of('fake')!.add('https://fake.example/feed/f')).job.id);
     const check = added.result!.followUpJobId!;
     await w.sources.fake.holds.reach([held!]);
-    // Listed, with an item still collecting: the first check has not ended.
     const before = dispatchTimes(await w.record('fake', 'f'));
     expect(before.lastCheckedAt).toBeNull();
 
@@ -282,7 +267,6 @@ describe('dispatch times', () => {
     const first = await w.subscribe('fake', 'f');
     expect((await w.record('fake', 'f')).lastCheckedAt).toBe(first.finishedAt);
 
-    // The feed gains a second item; the next check lists it and collects it while the test holds it.
     const [, held] = w.sources.fake.addFeed('f', w.clock.now, [1, 2]);
     w.sources.fake.held.add(held!);
     w.advance(10 * MINUTE);
@@ -330,7 +314,6 @@ describe('failed checks in a row', () => {
       status: 'error', lastError: { code: 'feed_gone' }, checkFailures: { count: 3 }, autoPausedAt: null,
       checkStatus: { state: 'failing', failures: 3 },
     });
-    // A failed check never enters the failed section of the jobs page.
     expect((await w.jobs.overview()).failed.map((entry) => entry.jobId)).not.toContain(third.id);
 
     w.advance(10 * MINUTE);
@@ -350,16 +333,13 @@ describe('failed checks in a row', () => {
     w.sources.fake.listFailures.push(gone());
     const failed = await w.checkNow('fake', 'f');
 
-    // A sign-in failure ends the check without counting it.
     w.advance(10 * MINUTE);
     w.sources.fake.listFailures.push(new CollectorError('login_needed', '需要重新登入。'));
     const signIn = await w.checkNow('fake', 'f');
     expect(signIn.state).toBe('failed');
     expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: signIn.finishedAt, checkFailures: { count: 1, since: failed.finishedAt } });
 
-    // A check a pause stopped while its item finished records its time and leaves the count.
     w.advance(10 * MINUTE);
-    // The feed gains a third item, which the check collects.
     const [, , added] = w.sources.fake.addFeed('f', w.clock.now, [0, 1, 2]);
     w.sources.fake.held.add(added!);
     const accepted = await w.services.of('fake')!.checkNow('f');
@@ -370,7 +350,6 @@ describe('failed checks in a row', () => {
     expect(stopped.state).toBe('completed');
     expect(await w.record('fake', 'f')).toMatchObject({ lastCheckedAt: stopped.finishedAt, checkFailures: { count: 1 } });
 
-    // A limit leaves the check waiting for the cooldown; it neither ends nor counts.
     w.sources.fake.listFailures.push(gone());
     const resumed = await w.services.of('fake')!.setEnabled('f', true);
     expect(await w.jobs.whenSettled(resumed.submission!.job.id)).toMatchObject({ state: 'failed' });

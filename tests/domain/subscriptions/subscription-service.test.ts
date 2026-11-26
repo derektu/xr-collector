@@ -1,6 +1,4 @@
-// The YouTube subscription service: adding an address runs a job that saves the channel with
-// collection on, a run checks every enabled channel or the requested ones and refuses a paused or
-// unknown one, and pausing and removing go through the same service.
+// Broken, adding, checking, pausing or removing a YouTube subscription fails.
 import { describe, expect, it } from 'vitest';
 import { SubscriptionService, SubscriptionServices } from '../../../src/domain/subscriptions/subscription-service.js';
 import { forwardingPort } from '../../../src/domain/jobs/subscription-port.js';
