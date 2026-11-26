@@ -22,6 +22,7 @@ import type { CapturedTranscript } from '../../../src/domain/sources/youtube/ada
 import { withYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
 import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
+import { portBelowEphemeralRange } from '../../support/ports.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { apiRouteLines } from '../../support/api-routes.js';
@@ -667,7 +668,7 @@ describe('CollectorRuntime Vault setup', () => {
     const first = await startCollectorServer(setup.value);
     const agent = await agentClient(first);
     const firstConnection = await connectionOf(first);
-    const fixedPort = Number(new URL(firstConnection.url).port);
+    const fixedPort = await portBelowEphemeralRange();
     const configured = await fetch(`${first.listeners.ui.url}/api/device/agent/port`, {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'fixed', port: fixedPort }),
     });

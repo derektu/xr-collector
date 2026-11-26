@@ -13,7 +13,7 @@ import { VaultSelection } from '../../src/domain/vault/vault-selection.js';
 import { VaultWorkspace, type WorkspaceOptions } from '../../src/app/runtime/vault-workspace.js';
 import { ensureMarker } from './package-fixtures.js';
 import type { CapturedTranscript } from '../../src/domain/sources/youtube/adapter.js';
-import { withYouTube, type YouTubeTestSources } from './youtube-sources.js';
+import { workspaceWithYouTube, type YouTubeTestSources } from './youtube-sources.js';
 import { transcriptDocument } from '../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../src/domain/vault/vault-files.js';
 import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
@@ -109,7 +109,7 @@ export async function open(at: Machine, overrides: OpenOverrides = {}, track = t
     createSearch: async (destination) => ({ search: fakeSearch(destination, sources), close: async () => undefined }),
     ...overrides,
   };
-  const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
+  const workspace = await VaultWorkspace.open(workspaceWithYouTube({
     sources, root: selected ?? at.vault, selection, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },

@@ -1,17 +1,9 @@
-import { readdirSync } from 'node:fs';
-import path from 'node:path';
 import { importsOf, isNodeBuiltin } from '../../tooling/source-structure.js';
+import { filesUnder } from './source-files.js';
 
 export { importsOf, isNodeBuiltin, type SourceImport } from '../../tooling/source-structure.js';
 
 export const PRODUCT_SOURCE = /\.(?:ts|tsx|cts)$/u;
-
-export function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
 
 /** The product files that compile to code: TypeScript under `src`, without declaration files. */
 export function productFiles(): string[] {

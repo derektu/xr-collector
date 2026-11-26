@@ -3,23 +3,18 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { codeLines } from '../support/source-files.js';
 
 const TYPE_FILES = readdirSync('src/shared', { recursive: true }).map(String).filter((name) => name.endsWith('-types.ts'))
   .map((name) => `src/shared/${name.split(path.sep).join('/')}`);
-
-function withoutComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//gu, (comment) => comment.replace(/[^\n]/gu, ''))
-    .replace(/(^|[^:\\])\/\/[^\n]*/gu, '$1');
-}
 
 const TYPE_STATEMENT = /^(?:(?:export\s+)?(?:interface|type)\s|import\s+type\s|export\s+type\s*\{|\})/u;
 const VALUE_DECLARATION = /^\s*(?:export\s+)?(?:default\s+|declare\s+|abstract\s+|async\s+)*(?:const|let|var|function|class|enum)\s+[\w${[]/u;
 
 function nonTypeLines(file: string): string[] {
-  return withoutComments(readFileSync(file, 'utf8')).split('\n').flatMap((line, index) => {
-    const topLevel = line.length > 0 && !/^\s/u.test(line);
-    const code = (topLevel && !TYPE_STATEMENT.test(line)) || VALUE_DECLARATION.test(line);
-    return code ? [`${file}:${index + 1}: ${line.trim()}`] : [];
+  return codeLines(readFileSync(file, 'utf8')).flatMap(({ number, code, topLevel }) => {
+    const nonType = (topLevel && !TYPE_STATEMENT.test(code)) || VALUE_DECLARATION.test(code);
+    return nonType ? [`${file}:${number}: ${code.trim()}`] : [];
   });
 }
 

@@ -2,19 +2,18 @@
 // and two runtimes in one process see each other's types.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { codeLines } from '../support/source-files.js';
 
 const MODULES = ['src/shared/sources/source-registry.ts', 'src/shared/subscriptions/subscription-exchange.ts'];
 
-function withoutComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/(^|[^:\\])\/\/[^\n]*/gu, '$1');
-}
-
 function moduleVariables(text: string): string[] {
-  return [...withoutComments(text).matchAll(/^(?:export\s+)?(?:let|var|const)\s+([\w$]+)/gmu)].map((match) => match[1]!);
+  return codeLines(text).filter((line) => line.topLevel)
+    .flatMap((line) => /^(?:export\s+)?(?:let|var|const)\s+([\w$]+)/u.exec(line.code)?.[1] ?? []);
 }
 
 function registrationExports(text: string): string[] {
-  return [...withoutComments(text).matchAll(/^export\s+(?:async\s+)?function\s+(register[\w$]*)/gmu)].map((match) => match[1]!);
+  return codeLines(text).filter((line) => line.topLevel)
+    .flatMap((line) => /^export\s+(?:async\s+)?function\s+(register[\w$]*)/u.exec(line.code)?.[1] ?? []);
 }
 
 describe('the source registry and the subscription exchange', () => {
@@ -25,7 +24,7 @@ describe('the source registry and the subscription exchange', () => {
   });
 
   it('reads a module-level variable and a registration function where they are', () => {
-    const text = '/** let documented = 1; */\nlet registered = null;\nexport const list = new Map();\n'
+    const text = '/** let documented = 1; */\n/* after a comment */let registered = null;\nexport const list = new Map();\n'
       + 'export function registerSources(): void {}\nfunction inner() { let local = 1; }\n';
     expect(moduleVariables(text)).toEqual(['registered', 'list']);
     expect(registrationExports(text)).toEqual(['registerSources']);

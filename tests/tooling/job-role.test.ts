@@ -2,18 +2,13 @@
 // spellings of one work key stop deduplicating jobs.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../support/source-files.js';
 import { productFiles } from '../support/source-imports.js';
 
 const ROLE_MODULE = 'src/shared/jobs/job-role.ts';
 
 const ROLE_READ = /\bjobRole\(/u;
 const WORK_KEY = /:(?:item|check|add):/u;
-
-function withoutComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//gu, (comment) => comment.replace(/[^\n]/gu, ' '))
-    .replace(/(^|[^:\\])\/\/[^\n]*/gu, '$1');
-}
 
 function codeLines(pattern: RegExp): string[] {
   return productFiles().flatMap((file) => withoutComments(readFileSync(file, 'utf8')).split('\n')

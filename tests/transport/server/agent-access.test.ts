@@ -28,6 +28,7 @@ import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { subscriptionCollection } from '../../support/subscription-collection.js';
 import { deadline } from '../../../src/shared/lib/time.js';
+import { portBelowEphemeralRange } from '../../support/ports.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -228,9 +229,9 @@ describe('Agent authenticated HTTP access', () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
     const options = { sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') };
-    const blocker = await listenOnFreePort();
+    const taken = await portBelowEphemeralRange();
+    const blocker = await listenOn(taken);
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
-    const taken = (blocker.address() as { port: number }).port;
 
     const moved = await startAgentAccess({ ...options, preferredPort: taken });
     const movedPort = Number(new URL(moved.connection().url).port);
@@ -319,7 +320,7 @@ describe('Agent authenticated HTTP access', () => {
 
   it('keeps the app usable when its configured fixed port cannot bind', async () => {
     const { root, collector } = await fixture();
-    const blocker = await listenOnFreePort();
+    const blocker = await listenOn(0);
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
     const fixed = (blocker.address() as { port: number }).port;
     const settingsFile = path.join(root, 'agent-settings.json');
@@ -367,16 +368,17 @@ describe('Agent authenticated HTTP access', () => {
   });
 });
 
-function listenOnFreePort(): Promise<Server> {
+function listenOn(port: number): Promise<Server> {
   const server = createServer();
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen({ host: '127.0.0.1', port: 0 }, () => resolve(server));
+    server.listen({ host: '127.0.0.1', port }, () => resolve(server));
   });
 }
 
+
 async function freePort(): Promise<number> {
-  const server = await listenOnFreePort();
+  const server = await listenOn(0);
   const { port } = server.address() as { port: number };
   await new Promise((resolve) => server.close(resolve));
   return port;
