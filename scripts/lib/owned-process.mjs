@@ -73,7 +73,7 @@ export async function runOwnedProcess(command, args, options = {}) {
       if (!abortReason && Number.isInteger(child.pid) && platform !== 'win32') {
         try {
           if (await inspectOwnedProcessTree(processTree, options) !== false) {
-            settle(reject, new UnsafeProcessTreeError(`Process group ${child.pid} outlived its root process.`, processTree));
+            settle(reject, Object.assign(new UnsafeProcessTreeError(`Process group ${child.pid} outlived its root process.`, processTree), { exitCode: code }));
             return;
           }
         } catch (error) {
@@ -89,7 +89,8 @@ export async function runOwnedProcess(command, args, options = {}) {
       if (abortReason) { settle(reject, abortReason); return; }
       if (spawnError) { settle(reject, spawnError); return; }
       if (code !== 0) {
-        settle(reject, new Error(`${path.basename(command)} exited with status ${code}${closeSignal ? ` (${closeSignal})` : ''}: ${(stderr || stdout).trim() || 'no diagnostic output'}`));
+        settle(reject, Object.assign(new Error(`${path.basename(command)} exited with status ${code}${closeSignal ? ` (${closeSignal})` : ''}: ${(stderr || stdout).trim() || 'no diagnostic output'}`),
+          { exitCode: code }));
         return;
       }
       settle(resolve, { stdout, stderr });

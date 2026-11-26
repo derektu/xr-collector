@@ -6,6 +6,13 @@ XR Collector 套用 [開發驗證流程](development-validation.md) 時的指令
 
 `npm run verify`：lint、單元、HTTP 與檔案系統整合測試（含真實 Meilisearch 的案例）、typecheck、build。改到 verify skill 的 `scripts/` 或 `tests/` 時另跑 `npm run test:verify-skill`。執行時不接 `| tee`，或先 `set -o pipefail`，保留 exit code。
 
+**時間上限**：`npm run verify`（`scripts/verify.mjs`）的每個步驟，以及 verify skill 的 `flows run` 整體，各有時間上限，步驟順序與數字都在 `scripts/lib/time-limits.mjs`。上限依 Mac 上的實際耗時留足餘裕，只有卡住的執行會碰到。每個步驟與 `flows run` 都在自己的程序群組裡執行；超過上限，或外層程序收到 SIGINT、SIGTERM、SIGHUP 時，印出步驟名稱與仍在執行的程序，結束整個群組，以失敗結束（超時為 1，訊號為 128 加訊號編號）。`flows run` 另外停掉該次啟動的每個 run（server、Electron 與 Meilisearch 各自帶頭一個群組），並印出還在跑的流程。在 Mac 上，步驟正常結束時群組裡若還有程序，一併結束並印出警告，步驟的 exit code 不變。Windows 沒有程序群組，以 `taskkill /T` 結束程序樹，訊息只列出根程序，也不檢查結束後留下的程序。
+
+已知限制：
+- 自行脫離群組的程序（例如測試以 detached 啟動的子程序）不在收拾範圍內，要由啟動它的程式自己結束。
+- 外層程序（`scripts/verify.mjs` 或 `flows run` 的 supervisor）本身被 SIGKILL 時無法收拾；連同子孫程序一起結束的呼叫端不受影響。
+- Desktop 流程在 `electron.launch` 之後、記下 App 的 PID 之前卡在同步迴圈時，supervisor 找不到那個 Electron，在 Mac 上會留下來。
+
 只改 Markdown 的修改不跑 `npm run verify`，CI 也不執行，只確認連結有效與呈現正確。`skills/xr-collector-agent/SKILL.md` 例外：測試會讀它，改它時照常跑。同一次修改含有其他檔案時照常跑。
 
 **測試的等待**：可直接等的 promise 就等它，其餘經 `tests/support/wait.ts` 的共用 helper 輪詢，上限統一 10 秒。Vitest 的 `testTimeout` 與 `hookTimeout` 統一 30 秒。由什麼強制見 [程式規範](code-guidelines.md#時間與非同步)。證明「某件事沒有發生」時，等產品排在那件事之後的步驟，再斷言；要證明某個狀態在一段時間內不變時，觀察窗寫成具名的取樣並註明為什麼需要。

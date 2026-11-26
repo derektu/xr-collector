@@ -5,7 +5,7 @@
 // and stop also serve Desktop runs on Windows.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkoutRoot, claimEvidence, cleanEnv, dropUnusedEvidence, commitOf, hasMarker, runMarker, runsRoot, stamp } from './paths.mjs';
@@ -63,6 +63,13 @@ export async function createRun(issue, { label, suffix = '' } = {}) {
     await rm(runDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** The run directories under `root` that process `pid` created (createRun names them after it). */
+export function runsLaunchedBy(pid, root = runsRoot()) {
+  if (!existsSync(root)) return [];
+  const launched = new RegExp(`T\\d{2}-\\d{2}-\\d{2}-${pid}(?:-\\d+)?(?:-electron)?$`, 'u');
+  return readdirSync(root).filter((name) => launched.test(name)).map((name) => path.join(root, name));
 }
 
 /**
