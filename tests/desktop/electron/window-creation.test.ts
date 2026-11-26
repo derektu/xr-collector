@@ -1,5 +1,4 @@
-// A launch at login opens no window while a later Dock activation does, and a show request while the
-// first window is loading joins it instead of opening a second window.
+// Broken, a login launch opens a window, or a show request during loading opens a second one.
 import { describe, expect, it, vi } from 'vitest';
 import { shouldShowForActivation } from '../../../src/desktop/electron/login-startup.js';
 import { WindowCreationGate } from '../../../src/desktop/electron/window-creation.js';

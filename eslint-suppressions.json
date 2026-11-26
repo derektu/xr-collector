@@ -1,69 +1,4 @@
 {
-  "tests/app/plugins/index.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 3
-    }
-  },
-  "tests/app/runtime/bundled-resources.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
-    }
-  },
-  "tests/app/runtime/collector-runtime.secret-masking.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 14
-    }
-  },
-  "tests/app/runtime/collector-runtime.source-registration.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 6
-    }
-  },
-  "tests/app/runtime/collector-runtime.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 17
-    }
-  },
-  "tests/app/runtime/fixtures/killed-runtime.ts": {
-    "xr-collector/comment-policy": {
-      "count": 3
-    }
-  },
-  "tests/app/runtime/vault-workspace.open.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
-    }
-  },
-  "tests/desktop/electron/desktop-dialogs.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 1
-    }
-  },
-  "tests/desktop/electron/login-startup.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 4
-    }
-  },
-  "tests/desktop/electron/main-window.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 5
-    }
-  },
-  "tests/desktop/electron/system-notifications.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 1
-    }
-  },
-  "tests/desktop/electron/tray.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 1
-    }
-  },
-  "tests/desktop/electron/update-check-scheduler.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
-    }
-  },
   "tests/domain/activity/activity-log.test.ts": {
     "xr-collector/comment-policy": {
       "count": 13
@@ -157,21 +92,6 @@
   "tests/domain/vault/vault-package.test.ts": {
     "xr-collector/comment-policy": {
       "count": 1
-    }
-  },
-  "tests/shared/lib/json-file.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 1
-    }
-  },
-  "tests/shared/sources/source-contract.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 17
-    }
-  },
-  "tests/shared/subscriptions/upcoming-time.test.ts": {
-    "xr-collector/comment-policy": {
-      "count": 2
     }
   },
   "tests/transport/server/agent-access.test.ts": {

@@ -1,6 +1,4 @@
-// The App's identity and window size come from its package and environment: a validation package's
-// appId must reach the AppUserModelId and the login item, or its notifications and login startup
-// would act on the production App.
+// Broken, a validation package's notifications and login startup act on the production App.
 import { describe, expect, it } from 'vitest';
 import { appIdOf, windowSize } from '../../../src/desktop/electron/desktop-environment.js';
 

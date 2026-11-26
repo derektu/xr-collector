@@ -1,6 +1,4 @@
-// The native dialogs the page asks for over IPC: a folder picker starts at the nearest existing
-// folder, the export dialog adds `.zip` and then asks before replacing, a canceled dialog returns
-// null, and revealing shows only the folder, export file or backup the runtime reports.
+// Broken, a native dialog starts in the wrong folder, replaces an export without asking, or reveals the wrong file.
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -61,7 +59,6 @@ describe('desktop dialogs', () => {
     expect(subject.shown[0]).toMatchObject({ kind: 'open', owner: subject.owner, options: { defaultPath: existing, properties: ['openDirectory'] } });
 
     await subject.invoke('xrCollector:desktop:chooseVaultLocation', 'relative/path');
-    // Documents does not exist either, so the walk up from it ends at the nearest folder that does.
     expect(subject.shown[1]!.options).toMatchObject({ defaultPath: root, properties: ['openDirectory', 'createDirectory'] });
   });
 

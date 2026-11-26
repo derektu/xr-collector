@@ -1,5 +1,4 @@
-// A query of nothing but Unicode spaces browses the documents instead of searching for blanks; the
-// spaces inside a query stay, since they separate the groups every result must match.
+// Broken, a query of Unicode spaces searches for blanks, or a query loses the spaces that separate its groups.
 import { describe, expect, it } from 'vitest';
 import { trimSearchQueryWhitespace } from '../../../src/shared/api/search-query.js';
 

@@ -45,7 +45,6 @@ async function options(
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const closeSearch = vi.fn(async () => undefined);
   const vaultPath = path.join(root, 'vault');
-  // Vaults go beside the profile, never inside it.
   const profilePath = path.join(root, 'profile');
   await mkdir(profilePath);
   return {
@@ -97,7 +96,6 @@ describe('CollectorRuntime', () => {
     expect(await uiHealth.json()).toMatchObject({ status: 'unavailable', runtime: { state: 'not_ready', vaultPath: null } });
     expect((await fetch(`${runtime.listeners.ui.url}/api/documents`)).status).toBe(503);
     expect((await fetch(`${runtime.listeners.ui.url}/api/device/agent/connection`)).status).toBe(200);
-    // Pacing reads without a Vault; no source type has loaded yet, so there is no request channel.
     const pacing = await fetch(`${runtime.listeners.ui.url}/api/pacing`);
     expect(pacing.status).toBe(200);
     expect(await pacing.json()).toEqual({ groups: [] });
@@ -192,7 +190,6 @@ describe('CollectorRuntime', () => {
     expect(runtime.status()).toMatchObject({ state: 'ready' });
     const ui = apiRouteLines(runtime.listeners.ui.app.printRoutes({ commonPrefix: false }));
     const agent = apiRouteLines(runtime.listeners.agent!.app.printRoutes({ commonPrefix: false }));
-    // Both lists cover the business routes, not only the device routes served before a Vault is set.
     expect(ui).toContain('/api/subscriptions/:type/:id (PATCH, DELETE, GET, HEAD)');
     expect(ui).toContain('/api/jobs/:id/retry (POST)');
     expect(agent).toEqual(ui);
@@ -228,7 +225,6 @@ describe('CollectorRuntime', () => {
     try {
       await eventually(() => expect(capture).toHaveBeenCalledOnce());
       await clientExited;
-      // The UI submission of the same video joins the Agent's job instead of capturing again.
       const ui = await fetch(`${runtime.listeners.ui.url}/api/items`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: captured.sourceUrl }),
@@ -333,7 +329,6 @@ describe('CollectorRuntime', () => {
       });
     };
 
-    // The UI and the Agent subscribe with the address the preview returned.
     const preview = (await (await post('/api/subscription-previews', { url: '@runtime' })).json()).preview;
     await addAndWait(preview.target.url);
     expect(resolve).toHaveBeenCalledTimes(1);
@@ -359,7 +354,6 @@ describe('CollectorRuntime', () => {
     });
 
     const preview = (await (await post('/api/subscription-previews', { url: '@runtime' })).json()).preview;
-    // A request nobody previewed resolves in the single discovery slot, so the previewed one waits in the queue.
     const blocking = (await (await post('/api/subscriptions', { url: 'https://www.youtube.com/@other' })).json()).job.id as string;
     await eventually(async () => {
       expect((await (await fetch(`${runtime.listeners.ui.url}/api/jobs/${blocking}`)).json()).job.state).toBe('running');
@@ -371,7 +365,6 @@ describe('CollectorRuntime', () => {
     const { overview } = await (await fetch(`${runtime.listeners.ui.url}/api/jobs/overview`)).json();
     expect(overview.running).toEqual([expect.objectContaining({ jobId: blocking, title: null })]);
     expect(overview.queued).toEqual([expect.objectContaining({ jobId: job.id, role: 'add', title: 'Runtime' })]);
-    // The stored event names the channel itself, not only once the log reads it next to the job.
     await eventually(async () => {
       const events = await readEventFiles(path.join(setup.value.profilePath, 'jobs'));
       expect(events.find((event) => event.jobId === job.id && event.eventType === 'job.accepted')).toMatchObject({ sourceTitle: 'Runtime' });
@@ -407,8 +400,6 @@ describe('CollectorRuntime', () => {
     await eventually(async () => {
       expect((await (await agent(`/api/jobs/${addJob}`)).json()).job).toMatchObject({ state: 'completed', result: { subscriptionId: 'UC-runtime' } });
     });
-    // Adding a channel starts its first collection job. Wait for that check to record its end and
-    // leave the job board before comparing complete UI and Agent snapshots.
     const uiChannels = await eventually(async () => {
       const channels = (await (await fetch(`${runtime.listeners.ui.url}/api/subscriptions?type=youtube`)).json()).subscriptions;
       expect(channels).toMatchObject([{
@@ -419,7 +410,6 @@ describe('CollectorRuntime', () => {
       });
       return channels;
     });
-    // The Agent reads the same subscriptions and previews through the same service.
     expect((await (await agent('/api/subscriptions?type=youtube')).json()).subscriptions).toEqual(uiChannels);
     const preview = await agent('/api/subscription-previews', { method: 'POST', body: JSON.stringify({ url: '@runtime' }) });
     expect((await preview.json()).preview).toMatchObject({
@@ -462,7 +452,6 @@ describe('CollectorRuntime', () => {
     const settings = path.join(setup.vaultPath, 'settings');
     await mkdir(settings, { recursive: true });
     await writeVaultMarker(setup.vaultPath, 'XR Collector test');
-    // The Vault passes inspection; its schedule file goes bad once search has started, so the scheduler fails to load it.
     const createSearch = setup.value.workspace.createSearch!;
     setup.value.workspace.createSearch = async (root, statusChanged) => {
       await writeFile(path.join(settings, 'youtube-schedule.json'), JSON.stringify({ version: 2, enabled: 'bad' }));
@@ -507,8 +496,6 @@ describe('CollectorRuntime', () => {
       expect((await fetch(`${next.url}/api/health`, { headers: { authorization: `Bearer ${next.token}` } })).status).toBe(200);
       let closed = false;
       const closing = runtime.close().then(() => { closed = true; });
-      // The Agent listener stops accepting at once and then waits for the accepted rebuild
-      // (tests/transport/server/start.test.ts); the runtime stops only after its listeners.
       await eventually(async () => { await expect(fetch(`${next.url}/api/health`)).rejects.toThrow(); });
       await new Promise((resolve) => setImmediate(resolve));
       expect(closed).toBe(false);
@@ -522,10 +509,7 @@ describe('CollectorRuntime', () => {
 });
 
 describe('CollectorRuntime start and stop order', () => {
-  // The Agent token is protected before the Vault opens, where resumed work can fail at once and
-  // report it; the listeners serve an open Vault; and they stop accepting requests before the Vault
-  // stops, so no request reaches a closed Vault.
-  it('opens the Agent credential, then the Vault, then the listeners, and closes the listeners before the Vault', async () => {
+  it('opens the Agent credential, then the Vault, then the listeners, and closes the listeners before the Vault, so no request reaches a closed Vault', async () => {
     const setup = await options({ capture: vi.fn() });
     const steps: string[] = [];
     const settingsSaved = () => access(setup.value.agentSettingsFile).then(() => true, () => false);
@@ -697,7 +681,6 @@ describe('CollectorRuntime Vault setup', () => {
     const opened = await agent('/api/vault/open', { path: target });
     expect(opened.status).toBe(202);
     await eventually(async () => expect(await (await (await agent('/api/vault/status')).json()).state).toBe('completed'));
-    // Readers follow the switch's progress, then read everything again from the other Vault.
     await eventually(() => expect(changes.filter((change) => change.kind === 'vault').map((change) => 'scope' in change && change.scope).at(-1)).toBe('contents'));
     expect(changes).toContainEqual({ kind: 'vault', scope: 'transfer' });
     expect((await (await agent('/api/health')).json()).runtime.vaultPath).toBe(path.resolve(target));

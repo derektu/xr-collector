@@ -1,6 +1,4 @@
-// The time range and item limit of a subscription: the
-// message for each invalid value, and the publish date a check reaches back to, so a subscription
-// collects exactly the range the user set.
+// Broken, a subscription collects outside the time range or item limit the user set.
 import { describe, expect, it } from 'vitest';
 import {
   isValidSettings,

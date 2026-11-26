@@ -1,5 +1,4 @@
-// Automatic App update checks: one 30 seconds after start and then every 24 hours, timed again
-// from a manual check, run on wake only when due, and kept going after a failed check.
+// Broken, the App stops checking for updates, or checks more often than it should.
 import { afterEach, expect, it, vi } from 'vitest';
 import { startUpdateCheckScheduler, updateCheckTiming } from '../../../src/desktop/electron/update-check-scheduler.js';
 
@@ -56,13 +55,13 @@ it('re-arms startup and interval timers from a newer manual attempt instead of c
   let lastAttempt: string | null = null;
   const check = vi.fn(async () => undefined);
   const scheduler = startUpdateCheckScheduler({ check, lastAttemptAt: () => lastAttempt, available: () => true });
-  lastAttempt = new Date(Date.now()).toISOString(); // manual check before the startup timer
+  lastAttempt = new Date(Date.now()).toISOString();
   await vi.advanceTimersByTimeAsync(updateCheckTiming.startupDelayMs);
   expect(check).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(updateCheckTiming.intervalMs - updateCheckTiming.startupDelayMs);
   expect(check).toHaveBeenCalledTimes(1);
   vi.setSystemTime(new Date(Date.now() + updateCheckTiming.intervalMs - 60 * 60 * 1_000));
-  lastAttempt = new Date(Date.now()).toISOString(); // manual check one hour before the old timer
+  lastAttempt = new Date(Date.now()).toISOString();
   await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
   expect(check).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(updateCheckTiming.intervalMs - 60 * 60 * 1_000);

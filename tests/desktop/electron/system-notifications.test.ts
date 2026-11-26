@@ -1,6 +1,4 @@
-// A system notification is handed to the OS at once: collection never waits for the OS to report it
-// shown, and a later OS failure is reported as a readable failure message. Secrets never reach the
-// OS notification or the failure message.
+// Broken, collection stalls waiting on the OS, a notification failure goes unreported, or a secret reaches the OS.
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { protectSecret } from '../../../src/shared/lib/redact.js';
@@ -11,7 +9,7 @@ vi.mock('electron', () => ({
   Notification: class extends EventEmitter {
     static isSupported() { return true; }
     constructor(options: { title: string; body: string }) { super(); created.push({ title: options.title, body: options.body }); }
-    show() { /* The OS reports nothing. */ }
+    show() {}
   },
 }));
 

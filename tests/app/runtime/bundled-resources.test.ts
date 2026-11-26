@@ -1,7 +1,4 @@
-// Where the App looks for the files it ships beside its code: the runtime programs, the search
-// lexicon, the Agent Skill and the tray icons. A wrong path, or a package whose electron-builder.yml
-// puts a file somewhere the App does not look, leaves the App without search, collection or tray
-// icons on that platform while every other test passes.
+// Broken, the App on some platform runs without search, collection or tray icons while every other test passes.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config.js';
@@ -16,7 +13,6 @@ const OVERRIDES = {
   XR_COLLECTOR_SEARCH_LEXICON: '/custom/lexicon.txt',
 };
 
-/** Every path the App asks for on `platform`, by name. */
 function answers(layout: ResourceLayout, platform: NodeJS.Platform, env: Record<string, string> = {}): Record<string, string> {
   const resources = bundledResources(layout, { platform, env });
   return {
@@ -110,10 +106,6 @@ describe('the paths of the bundled resources', () => {
 
 type ExtraResource = string | { from?: string; to?: string; filter?: string | string[] };
 
-/**
- * The checkout file electron-builder copies to `packaged` (a path under the package's resources
- * folder, with `/` separators), or null when no entry of `entries` puts a file there.
- */
 function packagedFrom(entries: readonly ExtraResource[], packaged: string): string | null {
   for (const entry of entries) {
     if (typeof entry === 'string' || !entry.from || !entry.to) continue;

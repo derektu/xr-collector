@@ -1,3 +1,4 @@
+// Broken, a runtime runs jobs its Vault and HTTP API do not know, or two runtimes in one process answer from each other's source types.
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,10 +13,6 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { eventually } from '../../support/wait.js';
 import { productPlugins, youtubePlugins } from '../../support/youtube-sources.js';
 
-// A runtime runs with the source types it is given: its plugins must be those types in their order,
-// or it would run jobs the Vault and the HTTP API do not know, and two runtimes in one process each
-// answer from their own types.
-
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -27,7 +24,6 @@ async function temp(): Promise<string> {
   return root;
 }
 
-/** Options of a runtime over its own profile and Vault, with no search engine. */
 async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorServerOptions> {
   const root = await temp();
   return {
@@ -68,13 +64,11 @@ describe('a runtime and its source types', () => {
 
     expect(await types(product)).toEqual(['youtube', 'rss']);
     expect(await types(fake)).toEqual(['fake']);
-    // Listing subscriptions reaches the subscription service of each type in the runtime's own Vault.
     const subscriptionTypes = async (runtime: CollectorServer) =>
       ((await (await get(runtime, '/api/subscriptions')).json()) as { types: { type: string }[] }).types.map((entry) => entry.type);
     expect(await subscriptionTypes(product)).toEqual(['youtube', 'rss']);
     expect(await subscriptionTypes(fake)).toEqual(['fake']);
 
-    // A fake item address is a fake item to one runtime and an RSS address, which names no item, to the other.
     const item = 'https://fake.example/item/one-1';
     expect((await post(fake, '/api/items', { url: item })).status).toBe(202);
     const refused = await post(product, '/api/items', { url: item });

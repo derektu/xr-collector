@@ -1,3 +1,4 @@
+// Broken, jobs of a source type added on one side only show with no noun or icon while everything still compiles.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { SourceEntry } from '../../../src/shared/sources/source-contract.js';
@@ -5,10 +6,6 @@ import { SOURCE_DECLARATIONS } from '../../../src/app/plugins/declarations.js';
 import { serverSources, SOURCES } from '../../../src/app/plugins/index.js';
 import { SOURCE_ICONS } from '../../../src/transport/web/plugins.js';
 import { fakeDefinition } from '../../support/fake-source-plugin.js';
-
-// Guards a new source type added on one side only. The server and the UI take their types from one
-// declaration list; a type the server collects but the UI does not know shows every one of its jobs
-// as a subscription job, with an empty noun and no icon, while everything still compiles.
 
 const ids = SOURCE_DECLARATIONS.map((declaration) => declaration.id);
 const entry = (id: string): SourceEntry => ({ definition: fakeDefinition(id, `${id}-net`), create: () => { throw new Error('not built'); } });

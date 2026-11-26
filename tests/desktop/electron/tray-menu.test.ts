@@ -1,6 +1,4 @@
-// What the tray menu shows: the status lines, icon and tooltip for idle, collecting, offline,
-// automatic checks off and subscriptions that need attention, which state wins, the App version and
-// update entry, which changes make it read again, and the close hint the user sees only once.
+// Broken, the tray shows the wrong status, icon or update entry, or shows the close hint more than once.
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

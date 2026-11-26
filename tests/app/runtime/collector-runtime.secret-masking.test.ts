@@ -1,12 +1,4 @@
-// Secrets in source errors never leave the app: when a source's error carries the Agent token or a
-// credential (an Authorization header, a secret URL parameter), the job error, the activity log, the
-// subscription's check failure in the Vault and the HTTP error answer that the UI and the Agent read
-// all show it masked, and no file the app writes outside the Agent settings holds it. Work that a
-// restart resumes and that fails at once is masked too: the token is protected before the Vault opens.
-// The known secrets (the Agent token, the search engine key) in status messages that carry text of
-// other programs (the update and Vault operation status) reach the UI and the Agent masked, also when
-// read after the change stream announces them. The search status carries no text of the search
-// engine's start failure; the program log holds it masked.
+// Broken, the Agent token or a credential reaches the UI, the Agent or a file on disk unmasked.
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -30,7 +22,6 @@ const channel = { id: 'UC-masking', title: 'Masking', url: 'https://www.youtube.
 const BEARER = 'leaked.bearer.value';
 const PARAMETER = 'leaked-parameter-value';
 
-/** Every file under `root` with its text, except the Agent settings, which hold the token by design. */
 async function writtenFiles(root: string, except: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
   for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
@@ -78,13 +69,11 @@ describe('secrets in source errors', () => {
       ...init, headers: { authorization: `Bearer ${token}`, ...(init?.body ? { 'content-type': 'application/json' } : {}) },
     });
     const secrets = [token, BEARER, PARAMETER];
-    // Soft, so that one run reports every exit that shows a secret.
     const expectMasked = (exit: string, text: string) => {
       for (const secret of secrets) expect.soft(text, exit).not.toContain(secret);
       expect.soft(text, exit).toContain('[已遮蔽]');
     };
 
-    // A single item: the job error the Agent and the UI read.
     const item = await agent('/api/items', { method: 'POST', body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=iiiiiiiiiii' }) });
     expect(item.status).toBe(202);
     const itemJob = (await item.json()).job.id as string;
@@ -97,7 +86,6 @@ describe('secrets in source errors', () => {
     expectMasked('job error (Agent)', failed.error.message);
     expectMasked('job error (UI)', JSON.stringify((await (await fetch(`${ui}/api/jobs/${itemJob}`)).json()).job.error));
 
-    // A subscription whose check fails: the check failure the Vault's subscription file keeps.
     const added = await agent('/api/subscriptions', { method: 'POST', body: JSON.stringify({ url: channel.url }) });
     expect(added.status).toBe(202);
     const subscription = await eventually(async () => {
@@ -107,7 +95,6 @@ describe('secrets in source errors', () => {
     });
     expectMasked('subscription check failure', subscription.checkFailures.error.message);
 
-    // A request answered with an error.
     for (const base of [ui, connection.url]) {
       const preview = await (base === ui
         ? fetch(`${ui}/api/subscription-previews`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://www.youtube.com/@broken' }) })
@@ -117,7 +104,6 @@ describe('secrets in source errors', () => {
       expectMasked(`error answer (${base === ui ? 'UI' : 'Agent'})`, body.error.message);
     }
 
-    // The activity the Agent reads: the failure's message and the tool output kept as its detail.
     const failedEvent = await eventually(async () => {
       const events = (await (await agent(`/api/activity?jobId=${itemJob}`)).json()).events as Array<{ eventType: string; message: string; detail?: string }>;
       const event = events.find((candidate) => candidate.eventType === 'job.failed');
@@ -127,14 +113,12 @@ describe('secrets in source errors', () => {
     expectMasked('activity message', failedEvent.message);
     expectMasked('activity detail', failedEvent.detail!);
 
-    // Every file written to the profile and the Vault, once the job store and activity are on disk.
     await runtime.close();
     const files = await writtenFiles(root, agentSettingsFile);
     for (const [file, text] of files) {
       for (const secret of secrets) expect.soft(text.includes(secret), `${file} holds a secret`).toBe(false);
     }
     const masked = [...files].filter(([, text]) => text.includes('[已遮蔽]')).map(([file]) => file);
-    // The job store, the activity day file and the Vault's subscription file.
     expect(masked.some((file) => file.startsWith(`profile${path.sep}jobs`) && !file.endsWith('.jsonl'))).toBe(true);
     expect(masked.some((file) => file.endsWith('.jsonl'))).toBe(true);
     expect(masked.some((file) => file.startsWith(`vault${path.sep}`))).toBe(true);
@@ -180,7 +164,6 @@ describe('secrets in source errors', () => {
       uiPort: 0,
     };
 
-    // Before the restart: a subscription and a single video that waits behind a running capture.
     const first = await startCollectorServer(runtimeOptions);
     const post = (route: string, body: unknown) => fetch(`${first.listeners.ui.url}${route}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -198,7 +181,6 @@ describe('secrets in source errors', () => {
     for (const release of releases.splice(0)) release();
     await closing;
 
-    // The restart loads a token no earlier run held, and finds the queued video and a check that is due.
     token = 'c0ffee'.repeat(10) + 'beef';
     await writeFile(agentSettingsFile, `${JSON.stringify({ schemaVersion: 1, token, port: { mode: 'auto' } })}\n`, { mode: 0o600 });
     const channels = path.join(root, 'vault', 'settings', 'youtube-channels.json');
@@ -231,7 +213,6 @@ describe('secrets in source errors', () => {
     const agentSettingsFile = path.join(root, 'agent-settings.json');
     const token = 'feed'.repeat(12);
     await writeFile(agentSettingsFile, `${JSON.stringify({ schemaVersion: 1, token, port: { mode: 'auto' } })}\n`, { mode: 0o600 });
-    // Stands for the search engine's key, which the engine protects when it starts.
     const searchKey = 'search-engine-key-296';
     protectSecret(searchKey);
     const leak = `agent ${token} search ${searchKey}`;
@@ -276,7 +257,6 @@ describe('secrets in source errors', () => {
       for (const secret of [token, searchKey]) expect.soft(text, exit).not.toContain(secret);
       expect.soft(text, exit).toContain('[已遮蔽]');
     };
-    /** Waits for a change of `kind` on the change stream after `revision`, and returns the stream's revision. */
     const announced = async (kind: string, revision: string) => {
       const answer = JSON.parse(await read(agentUrl, `/api/changes?after=${revision}&kind=${kind}&wait=10`)) as { batches: unknown[]; revision: string };
       expect(answer.batches.length).toBeGreaterThan(0);
@@ -284,12 +264,10 @@ describe('secrets in source errors', () => {
     };
     let revision = (JSON.parse(await read(agentUrl, '/api/changes')) as { revision: string }).revision;
 
-    // The update status, after a check that failed with the text of the update source.
     await read(ui, '/api/device/updates/check', { method: 'POST' });
     revision = await announced('update', revision);
     for (const base of [ui, agentUrl]) expectMasked(`update status (${base === ui ? 'UI' : 'Agent'})`, await read(base, '/api/device/updates'));
 
-    // The Vault operation status, after an export to a folder whose name carries the secrets.
     const folder = path.join(root, `exports ${leak}`);
     await mkdir(folder, { recursive: true });
     await read(agentUrl, '/api/vault/export', { method: 'POST', body: JSON.stringify({ path: path.join(folder, 'export.zip'), overwrite: false }) });
