@@ -3,7 +3,6 @@
 .onboarding-brand { display:flex; align-items:center; gap:10px; font-size:15px; font-weight:700; }
 .onboarding-settings-back { margin-left:auto; padding:7px 10px; border:0; border-radius:6px; color:var(--accent); background:transparent; font-size:13px; font-weight:650; }
 .onboarding-settings-back:hover { text-decoration:underline; }
-.onboarding-settings-back:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
 .onboarding-main { min-height:calc(100vh - 78px); padding:clamp(36px,7vh,82px) 20px; display:flex; align-items:flex-start; justify-content:center; }
 .onboarding-card { width:min(100%,620px); padding:clamp(28px,5vw,48px); border:1px solid var(--border); border-radius:14px; background:color-mix(in srgb,var(--frame) 94%,transparent); box-shadow:0 24px 70px rgba(3,8,18,.18); }
 .onboarding-card h1 { margin:0; color:var(--primary); font-size:clamp(28px,4vw,38px); font-weight:650; letter-spacing:-.045em; }
@@ -38,7 +37,7 @@
 .ob-actions { display:flex; justify-content:center; margin-top:24px; }
 .ob-actions .button { min-width:160px; height:40px; font-size:14px; }
 .ob-back { display:inline-flex; gap:6px; align-items:center; margin:0 0 14px; padding:0; border:0; background:none; color:var(--secondary); font-size:13px; }
-.ob-back:hover:not(:disabled) { color:var(--accent); }.ob-back:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+.ob-back:hover:not(:disabled) { color:var(--accent); }
 .ob-error { margin:12px 2px 0; color:var(--error-fg); font-size:13px; line-height:1.6; }
 
 @media (max-width:560px) { .onboarding-header { height:64px; }.onboarding-main { min-height:calc(100vh - 64px); padding:24px 14px; }.onboarding-card { padding:26px 20px; border-radius:11px; }.onboarding-intro { margin-bottom:26px; }.ob-row { flex-wrap:wrap; }.ob-control { flex:1 1 100%; justify-content:flex-start; } }
