@@ -134,9 +134,9 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
       expect(new Set(pages.flatMap((page) => page.hits.map(({ id }) => id))).size).toBe(30);
       expect(pages[0]!.hits[0]!.snippet).toContain('<mark>');
 
-      const legacy = await search.search({ query: '共同關鍵詞', sourceType: 'youtube', publisherId: 'none' });
-      expect(legacy.total).toBe(3);
-      expect(legacy.hits.every((hit) => hit.publisher.id === null)).toBe(true);
+      const withoutPublisher = await search.search({ query: '共同關鍵詞', sourceType: 'youtube', publisherId: 'none' });
+      expect(withoutPublisher.total).toBe(3);
+      expect(withoutPublisher.hits.every((hit) => hit.publisher.id === null)).toBe(true);
     });
   });
 

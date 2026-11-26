@@ -2,16 +2,12 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { planFragmentQuery } from '../../../src/domain/search/fragment-query.js';
 import { loadSearchLexicon } from '../../../src/domain/search/search-lexicon.js';
 
 const resource = path.resolve('resources/search/coct-main.txt');
 const lexiconPromise = loadSearchLexicon(resource);
-
-afterAll(async () => {
-  await lexiconPromise;
-});
 
 describe('external COCT search lexicon', () => {
   it('matches a frozen Rust jieba-rs 0.10.3 cut(false) oracle', async () => {

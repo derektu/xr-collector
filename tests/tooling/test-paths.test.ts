@@ -1,17 +1,10 @@
 // Guards the developer, not the user: a test away from its src file's path cannot be found from the file, and
 // a moved file hides which tests went with it.
-import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { filesUnder } from '../support/source-files.js';
 
 const EXEMPT_ROOTS = ['tests/tooling/', 'tests/support/'];
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
 
 const nameWithoutExtension = (file: string): string => path.posix.basename(file).replace(/\.[^.]+$/u, '');
 

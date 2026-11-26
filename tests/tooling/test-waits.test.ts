@@ -1,15 +1,8 @@
 // Guards the developer, not the user: a test that waits with its own bound fails on a busy machine although
 // the product works.
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
+import { filesUnder } from '../support/source-files.js';
 
 const sources = filesUnder('tests').filter((file) => /\.tsx?$/u.test(file) && file !== 'tests/support/wait.ts');
 const using = (pattern: RegExp) => sources.filter((file) => pattern.test(readFileSync(file, 'utf8'))).sort();

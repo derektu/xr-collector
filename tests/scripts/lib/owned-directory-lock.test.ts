@@ -235,11 +235,11 @@ it('reports busy for a dead holder whose normally recorded child group is still 
   await expect(stat(path.join(lock, 'owner-a1.json'))).resolves.toBeDefined();
 });
 
-itOnPosix('fails closed on legacy files and symlink locks without touching their targets', async () => {
+itOnPosix('fails closed on plain files and symlink locks without touching their targets', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-lock-path-'));
   roots.push(root);
-  const legacy = path.join(root, 'legacy.lock');
-  await writeFile(legacy, 'old file protocol');
+  const plainFile = path.join(root, 'file.lock');
+  await writeFile(plainFile, 'plain file');
   const options = {
     ownerIdentity: async () => ({ pid: process.pid, uid: process.getuid!(), startedAt: 'current' }),
     inspectOwner: async () => null,
@@ -248,8 +248,8 @@ itOnPosix('fails closed on legacy files and symlink locks without touching their
     busyMessage: 'busy',
     randomToken: () => 'a1',
   };
-  await expect(withOwnedDirectoryLock(legacy, async () => undefined, options)).rejects.toThrow(/non-symlink directory/u);
-  expect(await readFile(legacy, 'utf8')).toBe('old file protocol');
+  await expect(withOwnedDirectoryLock(plainFile, async () => undefined, options)).rejects.toThrow(/non-symlink directory/u);
+  expect(await readFile(plainFile, 'utf8')).toBe('plain file');
 
   const external = path.join(root, 'external');
   const linked = path.join(root, 'linked.lock');

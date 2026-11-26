@@ -1,8 +1,8 @@
 // A type-specific or channel-named route, field or error code makes the API differ by source type, so an
 // Agent written against the Skill misses it.
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { filesUnder } from '../support/source-files.js';
 
 const ROOTS = ['src', 'skills'];
 const EXEMPT = ['src/domain/sources/youtube/'];
@@ -21,13 +21,6 @@ const API_NAMES: Array<[string, RegExp]> = [
 
 const WIRE_KEY_ROOTS = ['src/transport/server/', 'src/transport/web/', 'src/domain/sources/'];
 const WIRE_KEY = /\bchannel(?:s|Id)?\s*:/u;
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
 
 const files = ROOTS.flatMap(filesUnder)
   .filter((file) => /\.(?:ts|tsx|md)$/u.test(file) && !EXEMPT.some((prefix) => file.startsWith(prefix)));

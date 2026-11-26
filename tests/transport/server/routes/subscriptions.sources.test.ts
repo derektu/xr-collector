@@ -73,12 +73,12 @@ describe('source list (T-06, T-08)', () => {
     await w.jobs.whenSettled((await w.jobs.submitItem('youtube', `https://youtu.be/${lateAlpha}`)).job.id);
     const unsubscribedAt = w.clock.now.toISOString();
     await w.channels.remove(leaving);
-    const legacy: SavedDocument = {
-      id: 'youtube:legacy00001', type: 'Transcript', title: '舊文件', sourceUrl: 'https://www.youtube.com/watch?v=legacy00001',
-      sourceType: 'youtube', sourceId: 'legacy00001', publisher: { id: null, name: '未知頻道' },
-      publishedAt: null, collectedAt: '2026-01-01T00:00:00.000Z', status: 'published', bodyMarkdown: '舊字幕',
+    const withoutPublisher: SavedDocument = {
+      id: 'youtube:nopublisher', type: 'Transcript', title: '無頻道文件', sourceUrl: 'https://www.youtube.com/watch?v=nopublisher',
+      sourceType: 'youtube', sourceId: 'nopublisher', publisher: { id: null, name: '未知頻道' },
+      publishedAt: null, collectedAt: '2026-01-01T00:00:00.000Z', status: 'published', bodyMarkdown: '字幕',
     };
-    w.documents.documents.set('legacy00001', legacy);
+    w.documents.documents.set('nopublisher', withoutPublisher);
 
     const { status, body } = await w.get('/api/subscriptions');
 

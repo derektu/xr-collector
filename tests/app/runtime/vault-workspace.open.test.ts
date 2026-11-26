@@ -14,7 +14,7 @@ import { VaultWorkspace, type WorkspaceOptions } from '../../../src/app/runtime/
 import { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { JsonSubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import type { CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';
-import { withYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
+import { workspaceWithYouTube, type YouTubeTestSources } from '../../support/youtube-sources.js';
 import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
@@ -108,7 +108,7 @@ async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTu
   const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
   const jobStore = overrides.jobStore ?? records!.jobs;
   if (track && records) stores.push(records);
-  const workspace = await VaultWorkspace.open(withYouTube<WorkspaceOptions>({
+  const workspace = await VaultWorkspace.open(workspaceWithYouTube({
     sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },

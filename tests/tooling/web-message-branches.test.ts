@@ -1,17 +1,10 @@
 // Guards the developer, not the user: a screen that reads a server message's wording breaks when only the
 // wording changes.
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { filesUnder } from '../support/source-files.js';
 
 const BRANCHING = /\.message\s*(?:[!=]==?|\??\.(?:startsWith|endsWith|includes|indexOf|match|slice)\()/u;
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
 
 function messageBranches(): string[] {
   return filesUnder('src/transport/web').filter((file) => /\.tsx?$/u.test(file)).flatMap((file) => readFileSync(file, 'utf8').split('\n')

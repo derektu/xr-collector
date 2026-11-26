@@ -1,15 +1,8 @@
 // Jobs and subscriptions that reach into each other's files, rules or code can no longer change one without
 // breaking the other.
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const file = path.posix.join(directory, entry.name);
-    return entry.isDirectory() ? filesUnder(file) : [file];
-  });
-}
+import { filesUnder } from '../support/source-files.js';
 
 function matchingLines(directory: string, pattern: RegExp): string[] {
   return filesUnder(directory).filter((file) => file.endsWith('.ts')).flatMap((file) => readFileSync(file, 'utf8').split('\n')
