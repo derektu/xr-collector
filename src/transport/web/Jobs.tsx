@@ -4,7 +4,7 @@ import { api } from './api-client.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { jobEntryLabel } from './jobs-presentation.js';
-import { useLiveRead } from './use-changes.js';
+import { useLiveRead } from './infra/use-changes.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 export function Jobs({ offline, onNotice }: {

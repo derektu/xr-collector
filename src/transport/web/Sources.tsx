@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useRef, useState, type MouseEvent } from 'react';
 import type {
   CollectionSchedule,
   SubscriptionEntry,
@@ -8,10 +8,11 @@ import type { SourceTypeInfo } from '../../shared/sources/source-info-types.js';
 import { subscriptionAddItems, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { api } from './api-client.js';
-import { useLiveRead } from './use-changes.js';
+import { useDismiss } from './infra/dismiss.js';
+import { menuPlace, useFloatingPosition } from './infra/floating-position.js';
+import { useLiveRead } from './infra/use-changes.js';
 import { OFFLINE_UNAVAILABLE } from './app-shell.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
-import { useFloatingMenu } from './floating-menu.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import {
   checkTimesLine,
@@ -46,8 +47,11 @@ export function Sources({ state, onState, sourceTypes, schedule, offline, onAdd,
   const [checking, setChecking] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [draft, setDraft] = useState(state.query);
-
-  useEffect(() => { setDraft(state.query); }, [state.query]);
+  const [draftQuery, setDraftQuery] = useState(state.query);
+  if (draftQuery !== state.query) {
+    setDraftQuery(state.query);
+    setDraft(state.query);
+  }
 
   async function checkAll(): Promise<void> {
     setChecking(true);
@@ -148,17 +152,9 @@ function SourceRow({ source, icon, today, onOpen, onNotice }: { source: Subscrip
   const menu = useRef<HTMLDivElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const menuList = useRef<HTMLDivElement>(null);
-  useFloatingMenu(menuOpen, moreButton, menuList);
+  useFloatingPosition(menuOpen, moreButton, menuList, menuPlace());
+  useDismiss(menuOpen, menu, () => setMenuOpen(false));
   const paused = source.status === 'paused';
-
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-    const close = (event: Event) => { if (!menu.current?.contains(event.target as Node)) setMenuOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
-  }, [menuOpen]);
 
   async function run(work: () => Promise<string>): Promise<void> {
     setBusy(true);

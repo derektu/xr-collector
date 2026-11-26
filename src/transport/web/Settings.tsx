@@ -6,7 +6,7 @@ import { VaultLocationSection } from './VaultLocation.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { LoginStartup } from './LoginStartup.js';
 import { AgentConnection } from './AgentConnection.js';
-import { useLiveRead } from './use-changes.js';
+import { useLiveRead } from './infra/use-changes.js';
 import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
 
 const themeLabels: Record<ThemePreference, string> = { system: '跟隨系統', dark: '深色', light: '淺色' };

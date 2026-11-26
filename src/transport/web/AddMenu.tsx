@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { useFloatingMenu } from './floating-menu.js';
+import { useRef, useState } from 'react';
+import { showModalOnMount } from './infra/dialog.js';
+import { useDismiss } from './infra/dismiss.js';
+import { menuPlace, useFloatingPosition } from './infra/floating-position.js';
 import { menuIndexForKey, unsupportedText, type AddMenuItem, type AddMode } from './add-menu.js';
 import { Icon } from './icons.js';
 
@@ -13,21 +15,14 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', disabl
   testId: string;
 }) {
   const [open, setOpen] = useState(false);
+  if (open && disabledReason) setOpen(false);
   const [unsupported, setUnsupported] = useState<AddMenuItem | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const entries = useRef<Array<HTMLButtonElement | null>>([]);
   const list = useRef<HTMLDivElement>(null);
-  useFloatingMenu(open, button, list, align);
-  useEffect(() => { if (disabledReason) setOpen(false); }, [disabledReason]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    entries.current[0]?.focus();
-    const outside = (event: Event) => { if (!anchor.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', outside);
-    return () => document.removeEventListener('mousedown', outside);
-  }, [open]);
+  useFloatingPosition(open, button, list, menuPlace(align));
+  useDismiss(open, anchor, () => setOpen(false));
 
   function close(): void {
     setOpen(false);
@@ -55,7 +50,7 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', disabl
       entries.current[next]?.focus();
     }}>
       {items.map((item, index) => <button key={item.id} ref={(element) => { entries.current[index] = element; }} type="button" role="menuitem"
-        tabIndex={-1} onClick={() => choose(item)} data-testid={`add-item-${item.id}`}>
+        tabIndex={-1} autoFocus={index === 0} onClick={() => choose(item)} data-testid={`add-item-${item.id}`}>
         <span>{item.label}</span>{item.mode ? null : <span className="menu-tag">尚未支援</span>}
       </button>)}
     </div> : null}
@@ -64,22 +59,15 @@ export function AddMenu({ label, items, onChoose, primary, align = 'end', disabl
 }
 
 function UnsupportedDialog({ item, onClosed }: { item: AddMenuItem; onClosed: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
   // External: A modal <dialog> makes the rest of the page inert, so nothing outside it takes focus while it is open.
   // https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/dialog
-  const close = () => { dialog.current?.close(); onClosed(); };
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-    confirm.current?.focus();
-  }, []);
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="unsupported-title" data-testid="unsupported-dialog"
-    onCancel={(event) => { event.preventDefault(); close(); }}>
+  const close = (dialog: HTMLDialogElement | null) => { dialog?.close(); onClosed(); };
+  return <dialog ref={showModalOnMount} className="confirm-dialog" aria-labelledby="unsupported-title" data-testid="unsupported-dialog"
+    onCancel={(event) => { event.preventDefault(); close(event.currentTarget); }}>
     <h2 id="unsupported-title">{item.dialogTitle}</h2>
     <p>{unsupportedText(item)}</p>
     <div className="dialog-actions">
-      <button ref={confirm} type="button" className="button primary" onClick={close}>知道了</button>
+      <button type="button" className="button primary" onClick={(event) => close(event.currentTarget.closest('dialog'))} data-initial-focus>知道了</button>
     </div>
   </dialog>;
 }

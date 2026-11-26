@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { SearchStatusReport } from '../../shared/api/search-types.js';
 import { api } from './api-client.js';
 import { dateTimeLabel } from './document-presentation.js';
-import { useLiveRead } from './use-changes.js';
+import { useLiveRead } from './infra/use-changes.js';
 
 const STATE_LABELS: Record<SearchStatusReport['state'], string> = {
   starting: '啟動中', updating: '更新中', rebuilding: '重建中', ready: '就緒', error: '無法使用', unavailable: '無法使用',

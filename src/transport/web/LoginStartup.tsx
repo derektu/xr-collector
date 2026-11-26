@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api } from './api-client.js';
+import { useWindowEvent } from './infra/lifecycle.js';
+import { useRead } from './infra/use-read.js';
 import { LoginStartupControl, loginStartupNote, type LoginStartupState } from './login-startup-control.js';
 
 export function LoginStartup({ onNotice }: { onNotice: (message: string) => void }) {
@@ -11,15 +13,11 @@ export function LoginStartup({ onNotice }: { onNotice: (message: string) => void
     write: (enabled, signal) => api.setLoginStartup(enabled, signal),
   }, setState, (enabled) => announce.current(enabled ? '已開啟登入自啟' : '已關閉登入自啟')), []);
 
-  useEffect(() => {
-    void control.start();
-    const onFocus = () => { void control.focus(); };
-    window.addEventListener('focus', onFocus);
-    return () => {
-      control.close();
-      window.removeEventListener('focus', onFocus);
-    };
+  useRead((signal) => {
+    signal.addEventListener('abort', () => control.close());
+    return control.start();
   }, [control]);
+  useWindowEvent('focus', () => void control.focus());
   const update = (enabled: boolean) => control.write(enabled);
 
   const unavailable = status?.supported === false;

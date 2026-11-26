@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { API_ROUTES } from '../../shared/api/api-routes.js';
-import { replacesEverything, staleAfter, type Change, type ChangeBatch, type Resource } from './change-feed.js';
-import { createChangeRead, type ReadOutcome } from './change-read.js';
-import type { ChangeListener, ChangeSource } from './read-until.js';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { API_ROUTES } from '../../../shared/api/api-routes.js';
+import { replacesEverything, staleAfter, type Change, type ChangeBatch, type Resource } from '../change-feed.js';
+import { createChangeRead, type ChangeRead, type ReadOutcome } from '../change-read.js';
+import type { ChangeListener, ChangeSource } from '../read-until.js';
+import { useDepsVersion } from './deps-version.js';
 
 const REOPEN_REFUSED_STREAM_MS = 2000;
 const READ_GAP_MS = 1000;
@@ -65,12 +66,9 @@ export function useChangeStream(): void {
 
 export function useChanges(resources: readonly Resource[], matches?: (change: Change) => boolean): number {
   const [tick, setTick] = useState(0);
-  const key = resources.join(',');
-  const filter = useRef(matches);
-  filter.current = matches;
+  const affects = useEffectEvent((change: Change) => staleAfter(resources)(change) && (replacesEverything(change) || (matches?.(change) ?? true)));
 
   useEffect(() => {
-    const stale = staleAfter(resources);
     let lastTickAt = Date.now();
     let gapTimer: ReturnType<typeof setTimeout> | undefined;
     const readAgain = () => {
@@ -82,34 +80,34 @@ export function useChanges(resources: readonly Resource[], matches?: (change: Ch
       }, Math.max(0, lastTickAt + READ_GAP_MS - Date.now()));
     };
     const stop = changeHub.listen((refresh) => {
-      if (refresh.kind === 'changes' && !refresh.changes.some((change) => stale(change) && (replacesEverything(change) || (filter.current?.(change) ?? true)))) return;
+      if (refresh.kind === 'changes' && !refresh.changes.some((change) => affects(change))) return;
       readAgain();
     });
     return () => {
       stop();
       clearTimeout(gapTimer);
     };
-  }, [key]);
+  }, []);
 
   return tick;
 }
 
 export function useChangeRead<T>(tick: number, deps: readonly unknown[], request: (signal: AbortSignal) => Promise<T>,
   answer: (outcome: ReadOutcome<T>) => void, enabled = true): void {
-  const latest = useRef({ request, answer });
-  latest.current = { request, answer };
-  const [reads] = useState(() => createChangeRead<T>((signal) => latest.current.request(signal), (outcome) => latest.current.answer(outcome)));
-  const asked = useRef<readonly unknown[] | null>(null);
-
-  useEffect(() => () => reads.cancel(), [reads]);
+  const version = useDepsVersion([...deps, enabled]);
+  const ask = useEffectEvent((signal: AbortSignal) => request(signal));
+  const reply = useEffectEvent((outcome: ReadOutcome<T>) => answer(outcome));
+  const reads = useRef<ChangeRead | null>(null);
 
   useEffect(() => {
-    const next = [...deps, enabled];
-    const previous = asked.current;
-    asked.current = next;
-    if (!previous || previous.length !== next.length || previous.some((value, index) => !Object.is(value, next[index]))) reads.cancel();
-    if (enabled) reads.read();
-  }, [tick, ...deps, enabled]);
+    const own = createChangeRead<T>((signal) => ask(signal), (outcome) => reply(outcome));
+    reads.current = own;
+    return () => own.cancel();
+  }, [version]);
+
+  useEffect(() => {
+    if (enabled) reads.current?.read();
+  }, [tick, version, enabled]);
 }
 
 export function useLiveRead<T>(resources: readonly Resource[], read: (signal: AbortSignal) => Promise<T>, deps: readonly unknown[], options: {
