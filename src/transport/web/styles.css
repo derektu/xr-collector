@@ -187,7 +187,7 @@ dialog::backdrop { background:var(--overlay); }
 .settings-section p { margin:10px 0 0; color:var(--secondary); font-size:13px; line-height:1.6; }
 .settings-section .hint { color:var(--text-muted); font-size:12px; }
 .settings-section .button { margin-top:14px; }
-.software-update { padding:10px 0 4px; border-bottom:1px solid var(--border); }
+.software-update { padding:10px 0 4px; }
 .software-update-line { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
 .software-update-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .settings-section .software-update-actions .button { margin-top:0; }
