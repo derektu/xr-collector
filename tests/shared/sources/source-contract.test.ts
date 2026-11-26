@@ -1,3 +1,4 @@
+// Broken, a source type other than YouTube fails to collect, subscribe, pace, delete or resume.
 import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,10 +32,6 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { timersAfter } from '../../support/timers.js';
 
-// The core collects, subscribes, paces, deletes and resumes for source types it never names: two
-// fake types in separate pacing groups run through the same job manager, subscription services,
-// scheduler and Markdown Vault the product assembles for YouTube.
-
 const SOURCES = productSourcesWith(FAKE, FAKE2);
 
 const DAY = 24 * 60 * 60_000;
@@ -55,12 +52,6 @@ interface Timer { ms: number; run: () => void; cancelled: boolean }
 const itemUrl = (type: string, key: string) => `https://${type}.example/item/${key}`;
 const feedUrl = (type: string, id: string) => `https://${type}.example/feed/${id}`;
 
-/**
- * One Vault with both fake types assembled as the workspace assembles plugins: a Markdown Vault
- * with deletion records, one subscription file and service per type, one pacing gate per group, a
- * scheduler over every type and a controllable clock. Retry and cooldown timers fire only when the
- * test fires them. `restart()` builds new services on the same Vault and job record.
- */
 async function world(options: { retry?: { maxAttempts: number; delaysMs: number[] }; capture?: number } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-core-agnostic-'));
   const jobsDirectory = await mkdtemp(path.join(tmpdir(), 'xr-core-agnostic-jobs-'));
@@ -124,7 +115,6 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     get scheduler() { return current.scheduler; },
     service(type: 'fake' | 'fake2') { return current.services[type]; },
     advance(ms: number) { clock.now = new Date(clock.now.getTime() + ms); },
-    /** Fires the timers that are due, as time passing would. */
     fire() {
       for (const timer of timers.splice(0)) if (!timer.cancelled) timer.run();
     },
@@ -140,10 +130,8 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
       return (await current.services[type].listSubscriptions()).find((entry) => entry.id === id)?.checkStatus;
     },
     async idle() {
-      // A dispatched check records the dispatch before it submits its jobs.
       await current.scheduler.idle();
       await eventually(() => expect(current.jobs.isBusy()).toBe(false));
-      // A check leaves the job list before it records its end in the subscription.
       (await current.jobs.hold())();
     },
     async restart() {
@@ -322,7 +310,6 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
 
   it('keeps a job of a type no plugin provides as interrupted and warns instead of running it', async () => {
     const w = await world({ capture: 1 });
-    // A capture of another item holds the only capture slot, so the job is still queued when the manager stops.
     w.sources.fake2.held.add('busy-1');
     await w.jobs.submitItem('fake2', itemUrl('fake2', 'busy-1'));
     await w.sources.fake2.holds.reach(['busy-1']);
@@ -362,7 +349,6 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
     await w.scheduler.idle();
     expect(await w.checkStatus('fake', 'status')).toEqual({ state: 'scheduled', nextCheckAt: (await w.subscription('fake', 'status'))!.nextCheckAt });
 
-    // One check runs and holds its capture; the next one waits for its turn.
     w.sources.fake.feed('status').items.unshift({ key: 'status-new', title: '新', publishedAt: w.clock.now.toISOString() });
     w.sources.fake.held.add('status-new');
     w.advance(MINUTE);
@@ -401,7 +387,6 @@ describe('the status of a subscription of a type the core does not name (P-T2)',
 describe('exchanging a Vault that holds several source types (P-T2)', () => {
   afterEach(cleanUp);
 
-  /** A time after every collection the test makes; larger `n` is later. */
   const at = (n: number) => `2030-01-${String(n).padStart(2, '0')}T00:00:00.000Z`;
   const plugins = (): SourcePlugin[] => [
     ...youtubePlugins(), createFakePlugin(FAKE, new FakeSource('fake')), createFakePlugin(FAKE2, new FakeSource('fake2')),
@@ -438,7 +423,6 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     await new VaultSelection(b.profile).write(created);
     expect(await items(b.vault)).toEqual(await items(a.vault));
 
-    // B adds a document of one type, deletes one of the other and subscribes to a feed of the other.
     await new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) }).add(document('fake', 'b-only'));
     await new Collector(new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) })).delete('fake2:shared-2');
     await new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake2', () => new Date(at(1))).add(feed('fake2', 'b-feed'));
@@ -479,7 +463,6 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
       (await new JsonSubscriptionStore(new VaultFileWriter(vault, SOURCES), type).list()).find((row) => row.id === id)?.failures;
     expect(await failuresIn(b.vault, 'fake', 'news')).toEqual([failed('news-a', 1)]);
 
-    // B renames the feed and records its own failures; it also subscribes to a feed A does not have.
     const later = new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake', () => new Date(at(2)));
     await later.update('news', { title: '新名稱', failures: [failed('news-b', 3)] });
     await new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake2', () => new Date(at(2))).add({ ...feed('fake2', 'b-feed'), failures: [failed('b-1', 2)] });
@@ -492,7 +475,6 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     expect(merged).toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
     expect(await failuresIn(a.vault, 'fake2', 'b-feed')).toEqual([failed('b-1', 2)]);
 
-    // Replacing takes the package's subscriptions too, and like a merge keeps this Vault's collection progress of one it has.
     await using(replacing, async (workspace) => { await importFile(workspace, file, 'replace'); });
     expect((await new JsonSubscriptionStore(new VaultFileWriter(replacing.vault, SOURCES), 'fake').list()).find((row) => row.id === 'news'))
       .toMatchObject({ title: '新名稱', failures: [failed('news-a', 1)] });
@@ -567,7 +549,6 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     expect(overview.failed).toEqual([expect.objectContaining({
       jobId: failedOne.job.id, role: 'item', type: 'fake', error: { code: 'video_unavailable', message: expect.any(String) }, failedAt: expect.any(String),
     })]);
-    // The finished single item carries the publisher its capture reported.
     expect(w.jobs.get(named.job.id).source).toMatchObject({ title: '單篇 single-1', publisher: 'fake 作者' });
     expect(w.jobs.summary(new Date(0).toISOString())).toMatchObject({ active: 0, failed: 1 });
     await w.close();
@@ -594,7 +575,6 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     expect(await listed()).toEqual([]);
     await expect(w.jobs.dismiss(removed.id)).rejects.toMatchObject({ code: 'job_not_dismissable' });
 
-    // A check of the feed that publishes the item collects it, and the failed entry leaves.
     w.sources.fake.addFeed('later', w.clock.now, [1]);
     const [inFeed] = w.sources.fake.feed('later').items.map((item) => item.key);
     await failed(inFeed!);
@@ -624,11 +604,9 @@ describe('failed items of a type the core does not name (N69-T5–T7)', () => {
     const subscription = (await w.service('fake').listSubscriptions()).find((entry) => entry.id === 'r')!;
     const documents = (await w.collector.list()).filter((document) => document.publisher.id === 'r');
     const record = collectionRecord(SOURCES, 'fake', subscription, documents, w.service('fake').checkJobs('r'));
-    // The second check, a minute later, tried the failing item again; a check comes before the items of the same instant.
     expect(record.map((entry) => entry.kind === 'check' ? `check:${entry.created}/${entry.failed}` : `${entry.kind}:${'key' in entry ? entry.key : undefined}`)).toEqual([
       'check:0/1', `failed:${failing}`, 'check:1/2', `collected:${ok}`, `skipped:${gone}`,
     ]);
-    // Pausing skips nothing that ran, so no extra check row appears.
     expect(record.find((entry) => entry.kind === 'failed')).toMatchObject({ reason: '沒有內文', attempts: 2, maxAttempts: 3, url: itemUrl('fake', failing!) });
     expect(record.find((entry) => entry.kind === 'skipped')).toMatchObject({ reason: '文章不存在', skippedBy: 'failure' });
     expect(empty.result?.outcome).toBe('partial');

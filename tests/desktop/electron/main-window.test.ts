@@ -1,8 +1,4 @@
-// How the Electron main process starts, through the modules main.ts wires to Electron: a login
-// launch reads its reason when it claims the launch and passes it with the single-instance lock; a
-// process that loses the lock quits; a login launch stays in the tray while later manual launches
-// show the one window; a manual launch during loading joins the window already loading; a
-// notification clicked while the page loads opens its target once the page listens.
+// Broken, a second App instance stays running, a login launch shows a window, or a notification clicked while loading is lost.
 import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMain, WebContents } from 'electron';
 import { describe, expect, it } from 'vitest';
 import { claimLaunch, type LaunchHost } from '../../../src/desktop/electron/desktop-launch.js';
@@ -16,7 +12,6 @@ function deferred() {
   return { promise, resolve };
 }
 
-/** Electron's app as a launch sees it; `openedAtLogin` counts its reads. */
 function launchHost(options: { platform?: NodeJS.Platform; openedAtLogin?: boolean; lock?: boolean } = {}) {
   const listeners = { secondInstance: [] as ((commandLine: string[], data: unknown) => void)[], activate: [] as (() => void)[] };
   const host = {
@@ -36,7 +31,6 @@ function launchHost(options: { platform?: NodeJS.Platform; openedAtLogin?: boole
   return host;
 }
 
-/** BrowserWindows whose page finishes loading when the test says so. */
 function windows() {
   const load = deferred();
   const created: FakeWindow[] = [];
@@ -82,7 +76,7 @@ function mainWindow(fakes: ReturnType<typeof windows>, started: () => WindowRunt
 }
 
 describe('Electron main login-startup wiring', () => {
-  it('reads the macOS launch reason when it claims the launch and sends that process reason with the lock', () => {
+  it('reads the macOS launch reason when it claims the launch and sends that process reason with the lock; on Windows it never asks Electron', () => {
     const host = launchHost({ openedAtLogin: true });
     expect(host.loginReads).toBe(0);
     const launch = claimLaunch(host, () => undefined, () => false);
@@ -90,7 +84,6 @@ describe('Electron main login-startup wiring', () => {
     expect(launch?.startedAtLogin).toBe(true);
     expect(host.lockData).toEqual({ xrCollectorStartedAtLogin: true });
 
-    // Windows publishes the reason as a launch argument; Electron's macOS reading is never asked.
     const windowsHost = launchHost({ platform: 'win32', openedAtLogin: true });
     expect(claimLaunch(windowsHost, () => undefined, () => false)?.startedAtLogin).toBe(false);
     expect(windowsHost.loginReads).toBe(0);
@@ -159,7 +152,6 @@ describe('Electron main login-startup wiring', () => {
       navigationReady: (sender) => window.navigationReady(sender),
     });
 
-    // A click before the runtime starts waits for it; one during loading waits for the page.
     window.show({ notification: { vaultId: 'vault-a', sourceType: 'youtube', subscriptionId: 'a' } });
     started = runtime;
     window.runtimeStarted();
@@ -171,7 +163,6 @@ describe('Electron main login-startup wiring', () => {
     await opening;
     expect(page!.sent).toEqual([]);
 
-    // Another window's page announcing itself delivers nothing.
     for (const listener of readyListeners) listener({ sender: {} as WebContents });
     expect(page!.sent).toEqual([]);
     for (const listener of readyListeners) listener({ sender: page!.webContents as unknown as WebContents });

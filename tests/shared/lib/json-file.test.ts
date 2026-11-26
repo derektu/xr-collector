@@ -1,7 +1,4 @@
-// On Windows a scan that holds a just-written state file open without delete sharing makes the
-// replacing rename fail with EPERM. Without a retry, jobs, cooldowns and subscription changes are not
-// saved and come back in their old state after a restart; a target that stays locked must still end
-// the write with an error instead of blocking it.
+// Broken on Windows, jobs, cooldowns and subscription changes come back in their old state after a restart, or a locked file blocks the write.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -24,10 +21,6 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-/**
- * A PowerShell process that opens `file` sharing read and write but not delete, then closes it after
- * `holdMs`, standing in for a scan of a file just written.
- */
 async function holdWithoutDeleteSharing(file: string, holdMs: number): Promise<ChildProcess> {
   const script = `$f = [System.IO.File]::Open('${file}', 'Open', 'Read', 'ReadWrite'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds ${holdMs}; $f.Close()`;
   const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: ['ignore', 'pipe', 'inherit'], env: windowsPowerShellEnvironment() });

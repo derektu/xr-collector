@@ -1,6 +1,4 @@
-// The change feed publishes the changes of one turn under one revision and replays the batches
-// after a reader's revision, or tells it to reset once they are no longer kept, so an open window
-// catches up on what changed instead of showing stale lists.
+// Broken, an open window keeps showing stale lists instead of catching up on what changed.
 import { describe, expect, it } from 'vitest';
 import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
 import { parseCursor, type ChangeBatch } from '../../../src/shared/api/changes.js';

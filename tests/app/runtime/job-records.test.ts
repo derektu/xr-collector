@@ -1,6 +1,4 @@
-// The job record and the activity log are kept apart and meet in the job records: a log line shows
-// the title its job learned after the line was written, and each recorded event reaches the screens
-// that follow changes. Broken, the log would lose titles.
+// Broken, log lines lose the titles their jobs learned later, and open screens miss recorded events.
 import { describe, expect, it } from 'vitest';
 import type { Change } from '../../../src/shared/api/changes.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';

@@ -1,7 +1,4 @@
-// The start-at-login setting reports only what the OS reads back. An unpackaged App cannot register,
-// macOS approval is surfaced, and on Windows only the App's own Run entry with its current executable
-// and login switch counts, so the setting never shows on while the OS would not start this App.
-// A login launch is told apart from a manual one.
+// Broken, the start-at-login setting shows on while the OS would not start this App, or a login launch passes for a manual one.
 import { describe, expect, it } from 'vitest';
 import {
   DesktopLoginStartup, isLoginStartupLaunch, LOGIN_STARTUP_ARGUMENT,
@@ -15,11 +12,11 @@ type RunEntry = { name: string; path: string; args: string[]; enabled: boolean; 
 class WindowsAdapter implements LoginItemAdapter {
   readonly platform = 'win32' as const;
   readonly isPackaged = true;
-  /** Windows Run entries are keyed by registry value name, irrespective of path. */
+  // External: Windows Run entries are keyed by registry value name, irrespective of path.
   readonly items = new Map<string, RunEntry>();
   constructor(readonly executablePath: string) {}
   get(options: { path?: string; args?: string[] } = {}): LoginItemSettings {
-    // Electron 44 reads openAtLogin from the AppUserModelID-named value, with path/args comparison.
+    // External: Electron 44 reads openAtLogin from the AppUserModelID-named value, with path/args comparison.
     const queriedPath = options.path?.startsWith('"')
       ? options.path.slice(1, options.path.indexOf('"', 1))
       : options.path?.split(' ')[0];
@@ -27,8 +24,8 @@ class WindowsAdapter implements LoginItemAdapter {
     const item = candidate?.path.toLocaleLowerCase('en-US') === queriedPath?.toLocaleLowerCase('en-US')
       ? candidate : undefined;
     const commandMatches = item?.args.join('\0') === (options.args ?? []).join('\0');
-    // Chromium CommandLine::GetArgs() omits switches. Electron therefore returns an empty args
-    // array for our --login-startup command even while openAtLogin matches the complete command.
+    // External: Chromium CommandLine::GetArgs() omits switches, so Electron returns an empty args
+    // array for a --login-startup command even while openAtLogin matches the complete command.
     const launchItem = item ? { ...item, args: item.args.filter((argument) => !argument.startsWith('--')) } : undefined;
     return {
       openAtLogin: Boolean(item && commandMatches),

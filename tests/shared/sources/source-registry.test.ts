@@ -1,6 +1,4 @@
-// The source types a reader is handed: one value built from a list, in its order, that cannot
-// change after it is built. A page or job of a type the value lacks reads as unknown, and two values
-// built from different lists answer each from its own list.
+// Broken, a reader treats a page or job of a type it was not handed as known, or two readers answer from each other's types.
 import { describe, expect, it } from 'vitest';
 import { roleOf } from '../../../src/shared/jobs/job-role.js';
 import { SourceDeclarations } from '../../../src/shared/sources/source-registry.js';

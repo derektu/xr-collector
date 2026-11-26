@@ -1,6 +1,4 @@
-// The tray reads the App's state again when a change it shows arrives: changes that arrive
-// together cost one read no sooner than the read gap after the last, a change during a read gets
-// one more read.
+// Broken, the tray shows stale state, or reads the App's state on every change.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeBatch } from '../../../src/shared/api/changes.js';
 
@@ -14,7 +12,6 @@ const { AppTray, READ_GAP_MS } = await import('../../../src/desktop/electron/tra
 
 const jobChange: ChangeBatch = { revision: 'a:1', at: '2026-10-24T10:00:00.000Z', changes: [{ kind: 'job', id: 'j', parentId: null, state: 'running' }] };
 
-/** The app's API as the tray reads it; `hold` keeps reads waiting until `release`, and a held read answers what the API held when it was asked. */
 function api() {
   let held: Array<() => void> | null = null;
   const bodies: Record<string, unknown> = {

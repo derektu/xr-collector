@@ -71,7 +71,6 @@ function fakeSearch(root: string): TranscriptSearch {
   };
 }
 
-/** A capture that waits at `gate` for the videos named in `held`, and records the order videos start in. */
 function gatedCapture(held: Set<string> = new Set()) {
   let open!: () => void;
   const gate = new Promise<void>((resolve) => { open = resolve; });
@@ -103,7 +102,6 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
   return { root, source, profile, selection: new VaultSelection(profile), jobsDir: path.join(profile, 'jobs') };
 }
 
-/** Opens the Vault the device selection names (the source when none), as the runtime does at startup. */
 async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
   const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
   const jobStore = overrides.jobStore ?? records!.jobs;
