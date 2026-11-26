@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import { SOURCE_DECLARATIONS } from '../../app/plugins/declarations.js';
-import { registerIcons } from './icons.js';
+import { registerIcons } from './shell/icons.js';
 import './plugins.css';
 
 export const PRODUCT_SOURCES = new SourceDeclarations(SOURCE_DECLARATIONS);

@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 // @ts-expect-error The script is executable JavaScript without type declarations.
-import { windowsPowerShellEnvironment } from '../../../scripts/windows-powershell.mjs';
+import { windowsPowerShellEnvironment } from '../../../scripts/lib/windows-powershell.mjs';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { UnavailableTranscriptSearch, ManagedTranscriptSearch } from '../../../src/domain/search/managed-transcript-search.js';
 import { MeilisearchBackend } from '../../../src/domain/search/meilisearch-backend.js';

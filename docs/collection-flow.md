@@ -123,7 +123,7 @@ RSS 的每個 feed 是不同的網站，一個 feed 限流不代表其他 feed �
 
 ## 狀態
 
-`workStatus` 算出工作狀態，`checkStatus` 加上訂閱自己的狀態算出訂閱狀態；UI 與 Agent 讀同一份，畫面文字在 `src/transport/web/*-presentation.ts`。
+`workStatus` 算出工作狀態，`checkStatus` 加上訂閱自己的狀態算出訂閱狀態；UI 與 Agent 讀同一份，畫面文字在 `src/transport/web/` 各功能資料夾的 `*-presentation.ts`。
 
 - `queued`：還沒開始，冷卻中也是。
 - `checking`：列出中，或新增訂閱辨識中。

@@ -7,7 +7,7 @@ import { ActivityViews } from '../../../src/domain/activity/activity-views.js';
 import { limitText, protectSecret, redact } from '../../../src/shared/lib/redact.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { JobEvent } from '../../../src/shared/activity/activity-types.js';
-import { localDayStart } from '../../../src/transport/web/activity-presentation.js';
+import { localDayStart } from '../../../src/transport/web/activity/activity-presentation.js';
 import { readEventFiles } from '../../support/event-files.js';
 import { stoppedTimers, timersAfter } from '../../support/timers.js';
 import { eventually } from '../../support/wait.js';

@@ -1,5 +1,5 @@
-import type { ElectronThemeBridge } from './app-shell.js';
-import type { DesktopNavigationTarget } from './desktop-navigation.js';
+import type { ElectronThemeBridge } from './shell/app-shell.js';
+import type { DesktopNavigationTarget } from './shell/desktop-navigation.js';
 import type { DesktopPlatform } from '../../shared/api/device-types.js';
 export interface DesktopBridge {
   chooseVaultLocation(start?: string): Promise<string | null>;

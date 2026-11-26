@@ -1,8 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
-import { replacesEverything, staleAfter, type Change, type ChangeBatch, type Resource } from '../change-feed.js';
-import { createChangeRead, type ChangeRead, type ReadOutcome } from '../change-read.js';
-import type { ChangeListener, ChangeSource } from '../read-until.js';
+import { replacesEverything, staleAfter, type Change, type ChangeBatch, type Resource } from '../api/change-feed.js';
+import { createChangeRead, type ChangeRead, type ReadOutcome } from '../api/change-read.js';
+import type { ChangeListener, ChangeSource } from '../api/read-until.js';
 import { useDepsVersion } from './deps-version.js';
 
 const REOPEN_REFUSED_STREAM_MS = 2000;

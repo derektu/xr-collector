@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
-import type { DesktopNavigationTarget } from '../desktop-navigation.js';
+import type { DesktopNavigationTarget } from '../shell/desktop-navigation.js';
 
 export function useWindowEvent<K extends keyof WindowEventMap>(type: K, listener: (event: WindowEventMap[K]) => void): void {
   const handle = useEffectEvent((event: WindowEventMap[K]) => listener(event));

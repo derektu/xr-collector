@@ -43,7 +43,7 @@ const files = ROOTS.flatMap(filesUnder)
 
 describe('API names in the code and the Skill (B-T4)', () => {
   it('reads the server, web client and Skill files', () => {
-    expect(files).toEqual(expect.arrayContaining(['src/transport/server/app.ts', 'src/transport/web/api-client.ts', 'src/domain/sources/source-types.ts', 'skills/xr-collector-agent/SKILL.md']));
+    expect(files).toEqual(expect.arrayContaining(['src/transport/server/app.ts', 'src/transport/web/api/api-client.ts', 'src/domain/sources/source-types.ts', 'skills/xr-collector-agent/SKILL.md']));
   });
 
   it('names no type-specific route, channel field or channel error code', () => {

@@ -34,5 +34,5 @@ Preconditions:
 
 ## Backlog
 
-- `appearance-theme`：一個簡短的 Web 操作：切換深色／淺色並比對 `aria-checked` 與 `data-theme`，鍵盤操作一次。主題解析與鍵盤索引已有 `tests/transport/web/app-shell.test.ts`。
+- `appearance-theme`：一個簡短的 Web 操作：切換深色／淺色並比對 `aria-checked` 與 `data-theme`，鍵盤操作一次。主題解析與鍵盤索引已有 `tests/transport/web/shell/app-shell.test.ts`。
 - `appearance-persist`：Web 重新整理後保留；跟隨系統隨瀏覽器外觀改變；Desktop 偏好檔的保存歸平台專項，讀寫規則已有 `tests/desktop/electron/theme-preference.test.ts`。

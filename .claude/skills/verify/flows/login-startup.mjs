@@ -3,7 +3,7 @@
 // shows what the platform reads back. Without it a development executable could register itself
 // as a login item, or the switch could claim a state the OS never took. The ordering rules (a
 // refused write reads again, focus reads again) are in
-// tests/transport/web/login-startup-control.test.ts; both listeners refusing a development write are in
+// tests/transport/web/settings/login-startup-control.test.ts; both listeners refusing a development write are in
 // tests/transport/server/routes/device.login-startup.test.ts. The Settings page it opens has no notifications section;
 // the notification preference is the device API's (tests/transport/server/routes/device.notifications.test.ts).
 import { readFile } from 'node:fs/promises';

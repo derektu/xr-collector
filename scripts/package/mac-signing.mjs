@@ -1,0 +1,883 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import plist from 'plist';
+import { prepareRuntimeDependencies, verifyRuntimeDependencyInstallation } from '../runtime/runtime-dependencies.mjs';
+import { OWNED_LOCK_LEFT_BEHIND as LOCK_LEFT_BEHIND, withOwnedDirectoryLock } from '../lib/owned-directory-lock.mjs';
+import { inspectOwnedProcessTree, runOwnedProcess } from '../lib/owned-process.mjs';
+import { noStageTimer } from '../lib/stage-timings.mjs';
+
+export const DEVELOPER_ID_POLICY = 'developer-id-notarized';
+/** Upper bound on concurrent `codesign` processes for runtime Mach-O files. */
+export const RUNTIME_SIGNING_CONCURRENCY = 8;
+export const DENO_TEAM_ID = '2H4KBF436B';
+export const DENO_ENTITLEMENTS = [
+  'com.apple.security.cs.allow-dyld-environment-variables', 'com.apple.security.cs.allow-jit',
+  'com.apple.security.cs.allow-unsigned-executable-memory', 'com.apple.security.cs.disable-executable-page-protection',
+  'com.apple.security.cs.disable-library-validation',
+];
+const KEYCHAIN_SEARCH_LOCK = path.join(tmpdir(), 'xr-collector-mac-keychain-search.lock');
+
+/** Installs the Apple intermediate that links Developer ID Application certificates to the Apple root. */
+export const DEVELOPER_ID_INTERMEDIATE_FIX = 'curl -fsSLo ~/Downloads/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer'
+  + ' && security import ~/Downloads/DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db';
+
+const ENV_KEYS = new Set(['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER', 'APPLE_TEAM_ID']);
+
+export async function loadMacSigningConfiguration({ environmentFile, pathRoot }, dependencies = {}) {
+  if (!path.isAbsolute(environmentFile ?? '') || !path.isAbsolute(pathRoot ?? '')) {
+    throw new Error('Developer ID signing requires absolute --mac-signing-env and --mac-signing-root paths.');
+  }
+  const real = dependencies.realpath ?? realpath;
+  const inspect = dependencies.stat ?? stat;
+  const load = dependencies.readFile ?? readFile;
+  const root = await real(pathRoot);
+  const envPath = await real(environmentFile);
+  assertInside(root, envPath, 'signing environment file');
+  assertProtectedFile(await inspect(envPath), 'signing environment file');
+  const values = parseProtectedEnvironment(await load(envPath, 'utf8'));
+  const required = [...ENV_KEYS];
+  for (const key of required) if (!values[key]) throw new Error(`Signing environment is missing ${key}.`);
+  if (!/^[A-Z0-9]{10}$/u.test(values.APPLE_TEAM_ID)) throw new Error('Signing environment APPLE_TEAM_ID is invalid.');
+  if (!/^[A-Z0-9]{10}$/u.test(values.APPLE_API_KEY_ID)) throw new Error('Signing environment APPLE_API_KEY_ID is invalid.');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(values.APPLE_API_ISSUER)) {
+    throw new Error('Signing environment APPLE_API_ISSUER is invalid.');
+  }
+  const certificatePath = await resolveProtectedCredential(root, values.CSC_LINK, 'CSC_LINK', { real, inspect });
+  const apiKeyPath = await resolveProtectedCredential(root, values.APPLE_API_KEY, 'APPLE_API_KEY', { real, inspect });
+  return {
+    policy: DEVELOPER_ID_POLICY,
+    root,
+    environmentFile: envPath,
+    certificatePath,
+    certificatePassword: values.CSC_KEY_PASSWORD,
+    teamId: values.APPLE_TEAM_ID,
+    notary: { apiKeyPath, keyId: values.APPLE_API_KEY_ID, issuer: values.APPLE_API_ISSUER, teamId: values.APPLE_TEAM_ID },
+  };
+}
+
+export function parseProtectedEnvironment(source) {
+  const result = {};
+  for (const [lineIndex, raw] of source.split(/\r?\n/u).entries()) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/u.exec(line);
+    if (!match) throw new Error(`Signing environment line ${lineIndex + 1} is invalid.`);
+    const [, key, encoded] = match;
+    if (!ENV_KEYS.has(key)) throw new Error(`Signing environment contains unsupported key ${key}.`);
+    if (Object.hasOwn(result, key)) throw new Error(`Signing environment repeats ${key}.`);
+    result[key] = decodeEnvironmentValue(encoded.trim(), lineIndex + 1);
+  }
+  return result;
+}
+
+/**
+ * Imports the configured p12 into an owned temporary keychain and confirms it holds exactly one
+ * valid Developer ID Application identity for the configured Team. The keychain never enters the
+ * user search list, and it is deleted before this returns. Stale keychains from interrupted
+ * signing runs stay for the next signing run to recover, because recovering them rewrites the
+ * user search list.
+ */
+export function checkDeveloperIdIdentity(configuration, dependencies = {}) {
+  return withTemporarySigningKeychain(configuration, async ({ identity }) => identity, dependencies, { appendToSearchList: false });
+}
+
+/**
+ * Runs `work` with the configured identity in an owned temporary keychain. Signing appends the
+ * keychain to the user search list so electron-builder and codesign can find it; the identity check
+ * passes `appendToSearchList: false`.
+ */
+export async function withTemporarySigningKeychain(configuration, work, dependencies = {}, { appendToSearchList = true } = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const controller = dependencies.signal ? null : new AbortController();
+  const signal = dependencies.signal ?? controller.signal;
+  let interruptedSignal = null;
+  const unregisterSignals = controller
+    ? registerSigningAbortSignals(controller, (name) => { interruptedSignal ??= name; }, dependencies)
+    : () => {};
+  let sessionProcessTracker = null;
+  const lifecycleRun = async (command, args, runOptions = {}) => {
+    signal.throwIfAborted();
+    const processTrackers = [dependencies.processTracker, sessionProcessTracker, ...(runOptions.processTrackers ?? [])].filter(Boolean);
+    const result = await run(command, args, { signal, processTrackers });
+    signal.throwIfAborted();
+    return result;
+  };
+  const makeTemp = dependencies.mkdtemp ?? mkdtemp;
+  const remove = dependencies.rm ?? rm;
+  const write = dependencies.writeFile ?? writeFile;
+  const canonicalize = dependencies.realpath ?? realpath;
+  const tempRoot = dependencies.tempRoot ?? tmpdir();
+  const password = (dependencies.randomPassword ?? (() => randomBytes(32).toString('base64url')))();
+  if (appendToSearchList) await recoverStaleSigningKeychains({ ...dependencies, run, remove, tempRoot });
+  const directory = await canonicalize(await makeTemp(path.join(tempRoot, 'xr-mac-signing-')));
+  const directoryInfo = await (dependencies.inspectDirectory ?? stat)(directory);
+  if (!directoryInfo.isDirectory() || (directoryInfo.mode & 0o077) !== 0
+    || (typeof process.getuid === 'function' && directoryInfo.uid !== process.getuid())) {
+    throw new Error('Temporary signing directory must be owned by this user and inaccessible to group or other users.');
+  }
+  const keychain = path.join(directory, 'signing.keychain-db');
+  let created = false;
+  let cleanupPromise;
+  let primaryError;
+  const cleanup = () => cleanupPromise ??= (async () => {
+    const cleanupErrors = [];
+    try {
+      if (created) await withKeychainSearchLock((lockTracker) => run('/usr/bin/security', ['delete-keychain', keychain], {
+        processTrackers: [dependencies.processTracker, sessionProcessTracker, lockTracker].filter(Boolean),
+      }), dependencies);
+    } catch (cleanupError) {
+      if (cleanupError?.preserveOwnedResources) throw cleanupError;
+      cleanupErrors.push(cleanupError);
+      // The fallback needs the same search-list lock, which a lock left behind keeps refusing.
+      if (cleanupError?.code !== LOCK_LEFT_BEHIND) try {
+        await withKeychainSearchLock(async (lockTracker) => {
+          const trackedRun = (command, args) => run(command, args, {
+            processTrackers: [dependencies.processTracker, sessionProcessTracker, lockTracker].filter(Boolean),
+          });
+          const current = parseUserKeychainList((await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+          if (current.includes(keychain)) {
+            await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...current.filter((entry) => entry !== keychain)]);
+            const remaining = parseUserKeychainList((await trackedRun('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+            if (remaining.includes(keychain)) throw new Error('Owned signing keychain remains in the user search list after cleanup fallback.');
+          }
+        }, dependencies);
+      } catch (fallbackError) {
+        if (fallbackError?.preserveOwnedResources) throw fallbackError;
+        cleanupErrors.push(fallbackError);
+      }
+    }
+    try { await remove(directory, { recursive: true, force: true }); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) throw cleanupErrors.length === 1 ? cleanupErrors[0] : new AggregateError(cleanupErrors, 'Temporary signing keychain cleanup failed.');
+  })();
+  try {
+    const sessionOwner = await signingOwnerIdentity(dependencies);
+    const sessionOwnerPath = path.join(directory, 'owner.json');
+    await write(sessionOwnerPath, `${JSON.stringify(sessionOwner)}\n`, { flag: 'wx', mode: 0o600 });
+    sessionProcessTracker = createSigningSessionProcessTracker(sessionOwnerPath, sessionOwner);
+    await lifecycleRun('/usr/bin/security', ['create-keychain', '-p', password, keychain]);
+    created = true;
+    signal.throwIfAborted();
+    await lifecycleRun('/usr/bin/security', ['set-keychain-settings', '-lut', '900', keychain]);
+    await lifecycleRun('/usr/bin/security', ['unlock-keychain', '-p', password, keychain]);
+    try {
+      await lifecycleRun('/usr/bin/security', ['import', configuration.certificatePath, '-k', keychain, '-P', configuration.certificatePassword,
+        '-T', '/usr/bin/codesign', '-T', '/usr/bin/productbuild']);
+    } catch (error) {
+      if (!signal.aborted && /MAC verification failed|wrong password/iu.test(String(error?.message))) {
+        throw signingIdentityError('CSC_KEY_PASSWORD does not open the CSC_LINK certificate',
+          'Set CSC_KEY_PASSWORD in keys/mac/.env to the password chosen when the p12 was exported.', error);
+      }
+      throw error;
+    }
+    await lifecycleRun('/usr/bin/security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
+    if (appendToSearchList) await withKeychainSearchLock(async (lockTracker) => {
+      const tracked = { processTrackers: [lockTracker] };
+      const userKeychains = parseUserKeychainList((await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user'], tracked)).stdout);
+      if (userKeychains.includes(keychain)) throw new Error('Owned signing keychain unexpectedly already exists in the user search list.');
+      await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...userKeychains, keychain], tracked);
+      const activeKeychains = parseUserKeychainList((await lifecycleRun('/usr/bin/security', ['list-keychains', '-d', 'user'], tracked)).stdout);
+      if (!userKeychains.every((entry, index) => activeKeychains[index] === entry)
+        || activeKeychains.filter((entry) => entry === keychain).length !== 1 || activeKeychains.indexOf(keychain) < userKeychains.length) {
+        throw new Error('Temporary signing keychain was not appended without reordering the existing user search list.');
+      }
+    }, dependencies);
+    const valid = await lifecycleRun('/usr/bin/security', ['find-identity', '-v', '-p', 'codesigning', keychain]);
+    const matching = parseDeveloperIdIdentities(valid.stdout).some(({ teamId }) => teamId === configuration.teamId)
+      ? '' : (await lifecycleRun('/usr/bin/security', ['find-identity', '-p', 'codesigning', keychain])).stdout;
+    const identity = selectDeveloperIdIdentity(valid.stdout, configuration.teamId, matching);
+    return await work({ keychain, identity, signal, processTracker: sessionProcessTracker,
+      processTrackers: [dependencies.processTracker, sessionProcessTracker].filter(Boolean) });
+  } catch (error) {
+    primaryError = error;
+    if (error?.preserveOwnedResources) {
+      try {
+        const ownerPath = path.join(directory, 'owner.json');
+        const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+        await writeJsonAtomic(ownerPath, { ...owner, unsafeProcessTree: error.processTree });
+      } catch (markError) {
+        const failure = new AggregateError([error, markError], 'Unsafe signing process state could not be recorded for recovery.');
+        failure.preserveOwnedResources = true;
+        failure.processTree = error.processTree;
+        primaryError = failure;
+        throw failure;
+      }
+    }
+    throw error;
+  } finally {
+    unregisterSignals();
+    if (!primaryError?.preserveOwnedResources) {
+      try { await cleanup(); }
+      catch (cleanupFailure) {
+        if (primaryError) {
+          // A search-list lock left behind refuses signing and cleanup alike; it is reported once, as
+          // the error itself, so its path and delete command reach the person running the build.
+          if (primaryError.code === LOCK_LEFT_BEHIND && cleanupFailure?.code === LOCK_LEFT_BEHIND) throw primaryError;
+          const failure = new AggregateError([primaryError, cleanupFailure], cleanupFailure?.code === LOCK_LEFT_BEHIND
+            ? `Signing failed and its temporary keychain cleanup also failed. ${cleanupFailure.message}`
+            : 'Signing failed and its temporary keychain cleanup also failed.');
+          if (cleanupFailure?.preserveOwnedResources) {
+            failure.preserveOwnedResources = true;
+            failure.processTree = cleanupFailure.processTree;
+          }
+          throw failure;
+        }
+        throw cleanupFailure;
+      }
+    }
+    if (interruptedSignal) (dependencies.terminateAfterSignal ?? ((name) => { process.exitCode = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[name]; }))(interruptedSignal);
+  }
+}
+
+async function signingOwnerIdentity(dependencies) {
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const identity = await inspect(process.pid);
+  if (!identity) throw new Error('Unable to identify the signing process owner.');
+  return identity;
+}
+
+function createSigningSessionProcessTracker(ownerPath, expectedOwner) {
+  const update = async (processState) => {
+    const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+    if (owner.pid !== expectedOwner.pid || owner.uid !== expectedOwner.uid || owner.startedAt !== expectedOwner.startedAt) {
+      throw new Error('Signing session owner changed before process state could be persisted.');
+    }
+    const next = { ...owner };
+    if (processState) next.processState = processState;
+    else delete next.processState;
+    await writeJsonAtomic(ownerPath, next);
+  };
+  return {
+    beforeSpawn: () => update({ status: 'starting' }),
+    started: (processTree) => update({ status: 'active', processTree }),
+    finished: () => update(null),
+  };
+}
+
+async function inspectSigningProcess(pid) {
+  try {
+    const result = await runCaptured('/bin/ps', ['-o', 'uid=', '-o', 'lstart=', '-p', String(pid)], { environment: { ...process.env, LC_ALL: 'C' } });
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(result.stdout);
+    if (!match) throw new Error(`ps returned malformed signing process identity for ${pid}.`);
+    return { pid, uid: Number(match[1]), startedAt: match[2] };
+  } catch (error) {
+    if (/exited with status 1\b/u.test(String(error?.message))) return null;
+    throw new Error(`Unable to inspect signing process ${pid}.`, { cause: error });
+  }
+}
+
+async function recoverStaleSigningKeychains(dependencies) {
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const tempRoot = dependencies.tempRoot ?? tmpdir();
+  const canonicalize = dependencies.realpath ?? realpath;
+  const canonicalTemp = await canonicalize(tempRoot);
+  const entries = await readdir(tempRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('xr-mac-signing-')) continue;
+    const directory = path.join(tempRoot, entry.name);
+    const info = await lstat(directory);
+    if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0
+      || (typeof process.getuid === 'function' && info.uid !== process.getuid())) continue;
+    const canonicalDirectory = await canonicalize(directory);
+    const relative = path.relative(canonicalTemp, canonicalDirectory);
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    let owner;
+    try { owner = JSON.parse(await readFile(path.join(directory, 'owner.json'), 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+      if (Date.now() - info.mtimeMs < (dependencies.ownerGraceMs ?? 5_000)) continue;
+      try { await stat(path.join(directory, 'signing.keychain-db')); continue; }
+      catch (keychainError) { if (keychainError.code !== 'ENOENT') throw keychainError; }
+      await dependencies.remove(directory, { recursive: true, force: true });
+      continue;
+    }
+    if (owner.uid !== info.uid || typeof owner.startedAt !== 'string') continue;
+    const current = Number.isInteger(owner.pid) ? await inspect(owner.pid) : null;
+    if (current && current.uid === owner.uid && current.startedAt === owner.startedAt) continue;
+    if (owner.processState?.status === 'starting') continue;
+    if (owner.processState?.status === 'active') {
+      const active = await (dependencies.inspectProcessTree ?? inspectOwnedProcessTree)(owner.processState.processTree);
+      if (active !== false) continue;
+    }
+    if (owner.unsafeProcessTree) {
+      const active = await (dependencies.inspectProcessTree ?? inspectOwnedProcessTree)(owner.unsafeProcessTree);
+      if (active !== false) continue;
+    }
+    const keychain = path.join(directory, 'signing.keychain-db');
+    await withKeychainSearchLock(async (lockTracker) => {
+      const run = (command, args) => dependencies.run(command, args, {
+        processTrackers: [dependencies.processTracker, lockTracker].filter(Boolean),
+      });
+      const listed = parseUserKeychainList((await run('/usr/bin/security', ['list-keychains', '-d', 'user'])).stdout);
+      if (listed.includes(keychain)) await run('/usr/bin/security', ['list-keychains', '-d', 'user', '-s', ...listed.filter((item) => item !== keychain)]);
+      try { await run('/usr/bin/security', ['delete-keychain', keychain]); } catch { /* directory removal below is the final recovery */ }
+    }, dependencies);
+    await dependencies.remove(directory, { recursive: true, force: true });
+  }
+}
+
+function registerSigningAbortSignals(controller, onSignal, dependencies) {
+  const target = dependencies.signalTarget ?? process;
+  const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, () => {
+    onSignal(signal);
+    controller.abort(new Error(`Signing interrupted by ${signal}.`));
+  }]));
+  for (const [signal, handler] of handlers) target.once(signal, handler);
+  return () => { for (const [signal, handler] of handlers) target.removeListener(signal, handler); };
+}
+
+/**
+ * Picks the one valid Developer ID Application identity for `expectedTeamId` from
+ * `security find-identity -v` output. When there is none, `matchingOutput` (the same query without
+ * `-v`, which also lists identities macOS does not trust) explains why: an untrusted identity, an
+ * identity for another Team, or no identity at all.
+ */
+export function selectDeveloperIdIdentity(validOutput, expectedTeamId, matchingOutput = '') {
+  const valid = parseDeveloperIdIdentities(validOutput);
+  const forTeam = valid.filter((identity) => identity.teamId === expectedTeamId);
+  if (forTeam.length === 1) return forTeam[0];
+  if (forTeam.length > 1) {
+    throw signingIdentityError(`CSC_LINK holds ${forTeam.length} valid Developer ID Application identities for Team ${expectedTeamId}; signing needs exactly one`,
+      'Export only the one Developer ID Application certificate and its private key into the p12.');
+  }
+  const validSha1 = new Set(valid.map((identity) => identity.sha1));
+  const listed = [...new Map(parseDeveloperIdIdentities(matchingOutput).map((identity) => [identity.sha1, identity])).values()];
+  const untrusted = listed.find((identity) => identity.teamId === expectedTeamId && !validSha1.has(identity.sha1));
+  if (untrusted) {
+    // A certificate whose chain stops short of the Apple root is listed with no reason or with
+    // CSSMERR_TP_NOT_TRUSTED; any other reason, such as an expired certificate, names its own fault.
+    const { problem } = untrusted;
+    if (!problem || /NOT_TRUSTED/u.test(problem)) {
+      throw signingIdentityError(`the Developer ID Application identity for Team ${expectedTeamId} is not trusted${problem ? ` (${problem})` : ''}; `
+        + 'this Mac lacks the Apple Developer ID G2 intermediate certificate', DEVELOPER_ID_INTERMEDIATE_FIX);
+    }
+    throw signingIdentityError(`the Developer ID Application identity for Team ${expectedTeamId} is invalid (${problem})`,
+      'Export a current Developer ID Application certificate and its private key into the p12.');
+  }
+  const otherTeams = [...new Set(listed.concat(valid).map((identity) => identity.teamId))];
+  if (otherTeams.length > 0) {
+    throw signingIdentityError(`CSC_LINK holds a Developer ID Application identity for Team ${otherTeams.join(', ')}, but APPLE_TEAM_ID is ${expectedTeamId}`,
+      'Use the p12 for the APPLE_TEAM_ID Team, or set APPLE_TEAM_ID in keys/mac/.env to the certificate Team.');
+  }
+  throw signingIdentityError(`CSC_LINK holds no Developer ID Application identity for Team ${expectedTeamId}`,
+    'Export the Developer ID Application certificate with its private key as the p12; Apple Development and Apple Distribution certificates cannot sign.');
+}
+
+function parseDeveloperIdIdentities(output) {
+  return output.split(/\r?\n/u).flatMap((line) => {
+    const match = /^\s*\d+\)\s+([0-9A-F]{40})\s+"(Developer ID Application: .+ \(([A-Z0-9]{10})\))"(?:\s+\(([^)]+)\))?/u.exec(line);
+    return match ? [{ sha1: match[1], name: match[2], teamId: match[3], ...(match[4] ? { problem: match[4] } : {}) }] : [];
+  });
+}
+
+/** A signing-identity failure whose `detail` and `fix` the build doctor reports as separate fields. */
+function signingIdentityError(detail, fix, cause) {
+  return Object.assign(new Error(`Developer ID signing: ${detail}. Fix: ${fix}`, cause ? { cause } : undefined), { detail: `${detail[0].toUpperCase()}${detail.slice(1)}.`, fix });
+}
+
+export function parseUserKeychainList(output) {
+  const lines = output.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const result = lines.map((line) => {
+    if (!line.startsWith('"') || !line.endsWith('"')) throw new Error('security list-keychains returned an unexpected entry.');
+    try { return JSON.parse(line); } catch (error) { throw new Error('security list-keychains returned an invalid quoted path.', { cause: error }); }
+  });
+  if (new Set(result).size !== result.length || result.some((entry) => typeof entry !== 'string' || !path.isAbsolute(entry))) {
+    throw new Error('security list-keychains returned duplicate or non-absolute entries.');
+  }
+  return result;
+}
+
+export function signedBuilderEnvironment(base, { keychain, identity, teamId, sourceRoot }) {
+  return {
+    ...base,
+    CSC_KEYCHAIN: keychain,
+    CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    XR_MAC_SIGNING_IDENTITY_SHA1: identity.sha1,
+    XR_MAC_SIGNING_TEAM_ID: teamId,
+    XR_MAC_SIGNING_SOURCE_ROOT: sourceRoot,
+  };
+}
+
+export async function signStagedMacRuntimes({ appPath, sourceBin, identitySha1, expectedTeamId, keychain }, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
+  const bin = path.join(appPath, 'Contents/Resources/bin');
+  const dependencyManifestPath = path.join(bin, 'runtime-dependencies.json');
+  const sourceDependencyManifestPath = path.join(sourceBin, 'runtime-dependencies.json');
+  const [dependencyManifest, sourceDependencyManifest, meiliManifest] = await Promise.all([
+    readJson(dependencyManifestPath), readJson(sourceDependencyManifestPath), readJson(path.join(sourceBin, 'meilisearch-build.json')),
+  ]);
+  await timer.time('check runtime provenance (independent archive extraction)', async () => {
+    const reconstructed = await (dependencies.mkdtemp ?? mkdtemp)(path.join(tmpdir(), 'xr-runtime-provenance-'));
+    try {
+      await (dependencies.prepareRuntimeDependencies ?? prepareRuntimeDependencies)({ target: 'darwin-arm64', outputDir: reconstructed, cacheOnly: true });
+      const reconstructedManifest = await readJson(path.join(reconstructed, 'runtime-dependencies.json'));
+      if (JSON.stringify(dependencyManifest) !== JSON.stringify(reconstructedManifest)
+        || JSON.stringify(sourceDependencyManifest) !== JSON.stringify(reconstructedManifest)
+        || !await verifyRuntimeDependencyInstallation(reconstructed, reconstructedManifest)
+        || !await verifyRuntimeDependencyInstallation(bin, dependencyManifest)
+        || !await verifyRuntimeDependencyInstallation(sourceBin, sourceDependencyManifest)) {
+        throw new Error('Staged runtime dependencies do not match an independent extraction of the hash-pinned archives.');
+      }
+    } finally {
+      await (dependencies.rm ?? rm)(reconstructed, { recursive: true, force: true });
+    }
+  });
+  const stagedMeili = path.join(bin, 'meilisearch');
+  const sourceMeili = path.join(sourceBin, 'meilisearch');
+  if (!sameFileIdentity(await describeFile(stagedMeili), await describeFile(sourceMeili))) throw new Error('Staged Meilisearch does not match its raw source bytes.');
+  if (!sameFileIdentity(await describeFile(stagedMeili), meiliManifest.binary)) throw new Error('Raw Meilisearch bytes do not match the producer manifest before signing.');
+
+  await repairPythonFramework(path.join(bin, 'yt-dlp/_internal/Python.framework'));
+  const denoPath = path.join(bin, dependencyManifest.executables.deno);
+  const codeFiles = (await listMachOFiles(bin)).filter((file) => file !== denoPath).sort(deepestFirst);
+  const signArgs = (target) => ['--force', '--sign', identitySha1, '--keychain', keychain, '--options', 'runtime', '--timestamp', target];
+  // Signing is inside-out: every leaf Mach-O file is signed before the bundle that contains it.
+  // Leaf files do not contain one another, so they are signed concurrently; the framework waits
+  // for all of them.
+  await timer.time('codesign --timestamp runtime Mach-O files', () => mapConcurrent(codeFiles, RUNTIME_SIGNING_CONCURRENCY,
+    (file) => run('/usr/bin/codesign', signArgs(file))), { count: codeFiles.length });
+  const framework = path.join(bin, 'yt-dlp/_internal/Python.framework');
+  await timer.time('codesign --timestamp Python.framework', () => run('/usr/bin/codesign', signArgs(framework)), { count: 1 });
+
+  return timer.group('verify signed runtime files', (child) => verifySignedRuntimeFiles(bin, expectedTeamId, { run, timer: child, concurrency: RUNTIME_SIGNING_CONCURRENCY }));
+}
+
+/** Checks the Developer ID signature of every runtime Mach-O file and the Python framework, and Deno's pinned entitlements. */
+export async function verifySignedRuntimeFiles(bin, expectedTeamId, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
+  const files = [...await listMachOFiles(bin), path.join(bin, 'yt-dlp/_internal/Python.framework')];
+  const signatures = await timer.time('codesign verify runtime files', () => mapConcurrent(files, dependencies.concurrency ?? 1, async (file) => {
+    const relative = path.relative(bin, file);
+    await run('/usr/bin/codesign', ['--verify', '--strict', file]);
+    const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', file])).stderr);
+    assertDeveloperIdSignature(metadata, relative === 'deno' ? DENO_TEAM_ID : expectedTeamId, relative);
+    if (relative === 'deno') {
+      const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', file]);
+      metadata.entitlements = parseTrueEntitlements(`${result.stdout}\n${result.stderr}`);
+      assertDenoEntitlements(metadata.entitlements);
+    }
+    return metadata;
+  }), { count: files.length });
+  return Object.fromEntries(files.map((file, index) => [path.relative(bin, file), signatures[index]]));
+}
+
+export async function verifyDeveloperIdApplication(appPath, expectedTeamId, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
+  await timer.time('codesign --verify --deep --strict', () => run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]));
+  const signature = await timer.time('App signature and entitlements', async () => {
+    const metadata = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', appPath])).stderr);
+    assertDeveloperIdSignature(metadata, expectedTeamId, path.basename(appPath));
+    await assertExactElectronEntitlements(appPath, run);
+    for (const helper of await listNestedApplications(path.join(appPath, 'Contents/Frameworks'))) await assertExactElectronEntitlements(helper, run);
+    return metadata;
+  });
+  // One file at a time: the packaging checkout lock records the single child process it tracks.
+  const runtime = await timer.group('signed runtime files', (child) => verifySignedRuntimeFiles(path.join(appPath, 'Contents/Resources/bin'), expectedTeamId, { run, timer: child }));
+  return { signature, runtime };
+}
+
+async function assertExactElectronEntitlements(target, run) {
+  const result = await run('/usr/bin/codesign', ['-d', '--entitlements', ':-', target]);
+  const output = `${result.stdout}\n${result.stderr}`;
+  const start = output.indexOf('<?xml');
+  const fallback = output.indexOf('<plist');
+  const document = plist.parse(output.slice(start >= 0 ? start : fallback));
+  if (JSON.stringify(document) !== JSON.stringify({ 'com.apple.security.cs.allow-jit': true })) throw new Error(`Signed Electron code has unexpected entitlements: ${target}.`);
+}
+
+async function listNestedApplications(root) {
+  const result = [];
+  const visit = async (directory) => {
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const absolute = path.join(directory, entry.name);
+      if (entry.name.endsWith('.app')) result.push(absolute); else await visit(absolute);
+    }
+  };
+  await visit(root);
+  return result.sort();
+}
+
+/** Gatekeeper source that `spctl --assess --type open` reports for a notarized Developer ID DMG. */
+export const NOTARIZED_DEVELOPER_ID_SOURCE = 'Notarized Developer ID';
+
+/**
+ * Developer ID and Gatekeeper gate for the notarized, stapled DMG: `codesign --verify --strict`, the
+ * Team and timestamped Developer ID signature, and `spctl --assess --type open` on the DMG's primary
+ * signature, which must exit zero and report `source=Notarized Developer ID`. `stapler validate` runs
+ * unless `stapleValidated` says the caller validated these exact bytes right after stapling. The
+ * spctl output and source are returned for the log.
+ */
+export async function verifyDeveloperIdDiskImage(dmgPath, expectedTeamId, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
+  if (!dependencies.stapleValidated) await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', dmgPath]));
+  await timer.time('codesign --verify --strict', () => run('/usr/bin/codesign', ['--verify', '--strict', dmgPath]));
+  const signature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', dmgPath])).stderr);
+  if (signature.teamId !== expectedTeamId || !signature.authorities.some((value) => value.startsWith('Developer ID Application:'))
+    || !signature.secureTimestamp) throw new Error('DMG does not have the expected timestamped Developer ID Application signature.');
+  const assessment = await timer.time('spctl --assess open', () => run('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '-vv', dmgPath]));
+  // spctl names the assessed file; only its basename is kept so the evidence holds no local path.
+  const output = `${assessment.stdout ?? ''}${assessment.stderr ?? ''}`.split(dmgPath).join(path.basename(dmgPath)).trim();
+  const source = output.split(/\r?\n/u).find((line) => line.startsWith('source='))?.slice('source='.length) ?? null;
+  if (source !== NOTARIZED_DEVELOPER_ID_SOURCE) throw new Error(`DMG Gatekeeper source is ${source ?? 'missing'}, not ${NOTARIZED_DEVELOPER_ID_SOURCE}.`);
+  return { signature, gatekeeper: { source, output } };
+}
+
+/**
+ * Notarizes and staples one signed artifact, `kind` `app` or `dmg`. An App is zipped with `ditto`
+ * for upload; a DMG is uploaded as itself. The submission ID is saved with the exact upload identity
+ * before waiting, so an interrupted run resumes the same submission and never resubmits blindly.
+ * The receipt records the upload, the Apple log and the stapled artifact identity.
+ */
+export async function notarizeAndStaple({ kind, artifactPath, credentials, evidenceDirectory }, dependencies = {}) {
+  if (!['app', 'dmg'].includes(kind)) throw new Error(`Unsupported notarization kind ${kind}.`);
+  const baseRun = dependencies.run ?? runCaptured;
+  const run = (command, args) => baseRun(command, args, { signal: dependencies.signal,
+    processTracker: dependencies.processTracker, processTrackers: dependencies.processTrackers });
+  const timer = dependencies.timer ?? noStageTimer;
+  await mkdir(evidenceDirectory, { recursive: true });
+  const completedPath = path.join(evidenceDirectory, `${kind}-completed.json`);
+  const completed = await readOptionalJson(completedPath);
+  if (completed?.schemaVersion === 1 && completed.kind === kind && completed.teamId === credentials.teamId
+    && completed.status === 'Accepted' && completed.issues === 0 && /^[0-9a-f-]{36}$/iu.test(completed.submissionId ?? '')
+    && /^[0-9a-f]{64}$/u.test(completed.logSha256 ?? '') && validNonEmptyFileIdentity(completed.submitted)
+    && sameFileIdentity(completed.stapled, await describeArtifact(artifactPath))) {
+    await timer.time('stapler validate (completed receipt)', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
+    const resumed = { ...completed, stapleValidated: true };
+    await writeJsonAtomic(completedPath, resumed);
+    return resumed;
+  }
+  const resumable = await timer.time('resume check for an earlier Accepted submission',
+    () => resumeStapledOperation({ kind, artifactPath, credentials, evidenceDirectory, completedPath, run }, dependencies));
+  if (resumable) return resumable;
+  const uploadPath = kind === 'app'
+    ? await timer.time('ZIP App for upload (ditto)', () => preparePersistentAppUpload(artifactPath, evidenceDirectory, run))
+    : artifactPath;
+  const auth = ['--key', credentials.apiKeyPath, '--key-id', credentials.keyId, '--issuer', credentials.issuer];
+  const submittedIdentity = await timer.time('hash upload', async (stage) => {
+    const identity = await describeFile(uploadPath);
+    stage.bytes = identity.bytes;
+    return identity;
+  });
+  const receiptPath = path.join(evidenceDirectory, `${kind}-${submittedIdentity.sha256}-submission.json`);
+  const prior = await readOptionalJson(receiptPath);
+  let submissionId;
+  if (prior) {
+    if (prior.schemaVersion !== 1 || prior.kind !== kind || prior.teamId !== credentials.teamId
+      || !sameFileIdentity(prior.submitted, submittedIdentity) || typeof prior.submissionId !== 'string') {
+      throw new Error(`Existing ${kind} notarization receipt does not match this Team and exact upload bytes.`);
+    }
+    if (prior.status === 'Accepted' && !prior.signedCodeIdentity) throw new Error(`Existing Accepted ${kind} receipt failed full log validation and cannot be resumed.`);
+    submissionId = prior.submissionId;
+  } else {
+    const submitted = parseJsonOutput(await timer.time('notarytool submit', () => run('/usr/bin/xcrun', ['notarytool', 'submit', uploadPath, ...auth, '--output-format', 'json']),
+      { bytes: submittedIdentity.bytes }), 'notarytool submit');
+    if (typeof submitted.id !== 'string' || !/^[0-9a-f-]{36}$/iu.test(submitted.id)) throw new Error('notarytool submit did not return a valid submission ID; the result is ambiguous and will not be resubmitted automatically.');
+    submissionId = submitted.id;
+    await writeJsonAtomic(receiptPath, {
+      schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: submitted.status ?? 'Submitted', submitted: submittedIdentity,
+    });
+  }
+  const waited = parseJsonOutput(await timer.time('notarytool wait', () => run('/usr/bin/xcrun', ['notarytool', 'wait', submissionId, ...auth, '--timeout', '30m', '--output-format', 'json'])), 'notarytool wait');
+  const logPath = path.join(evidenceDirectory, `${kind}-${submissionId}-notary-log.json`);
+  await timer.time('notarytool log', () => run('/usr/bin/xcrun', ['notarytool', 'log', submissionId, ...auth, logPath]));
+  const log = await readJson(logPath);
+  const logIdentity = await describeFile(logPath);
+  const issueCount = log.issues === null ? 0 : (Array.isArray(log.issues) ? log.issues.length : null);
+  await writeJsonAtomic(receiptPath, {
+    schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: waited.status ?? log.status ?? 'Unknown',
+    submitted: submittedIdentity, logSha256: logIdentity.sha256, issues: issueCount,
+  });
+  if (waited.id !== submissionId || waited.status !== 'Accepted' || log.jobId?.toLowerCase() !== submissionId.toLowerCase()
+    || log.status !== 'Accepted' || log.sha256?.toLowerCase() !== submittedIdentity.sha256 || issueCount !== 0) {
+    throw new Error(`${kind} notarization did not produce an Accepted, issue-free log for submission ${submissionId}.`);
+  }
+  const signedCodeIdentity = await (dependencies.describeStableCodeIdentity ?? describeStableCodeIdentity)(artifactPath, credentials.teamId, run);
+  await writeJsonAtomic(receiptPath, {
+    schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: 'Accepted', submitted: submittedIdentity,
+    logSha256: logIdentity.sha256, issues: 0, signedCodeIdentity,
+  });
+  await timer.time('stapler staple', () => run('/usr/bin/xcrun', ['stapler', 'staple', '-v', artifactPath]));
+  if (dependencies.afterStaple) await dependencies.afterStaple();
+  const finalReceipt = {
+    schemaVersion: 1, kind, teamId: credentials.teamId, submissionId, status: 'Accepted', issues: 0,
+    logSha256: logIdentity.sha256, submitted: submittedIdentity, signedCodeIdentity,
+    stapled: await timer.time(`hash stapled ${kind === 'app' ? 'App' : 'DMG'}`, () => describeArtifact(artifactPath)), stapleValidated: false,
+  };
+  await writeJsonAtomic(completedPath, finalReceipt);
+  await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', artifactPath]));
+  const validated = { ...finalReceipt, stapleValidated: true };
+  await writeJsonAtomic(completedPath, validated);
+  return validated;
+}
+
+async function resumeStapledOperation(input, dependencies) {
+  const names = await readdir(input.evidenceDirectory);
+  const receipts = [];
+  for (const name of names.filter((value) => value.startsWith(`${input.kind}-`) && value.endsWith('-submission.json'))) {
+    const receipt = await readOptionalJson(path.join(input.evidenceDirectory, name));
+    if (receipt?.schemaVersion === 1 && receipt.kind === input.kind && receipt.teamId === input.credentials.teamId
+      && receipt.status === 'Accepted' && receipt.issues === 0 && /^[0-9a-f-]{36}$/iu.test(receipt.submissionId ?? '')
+      && /^[0-9a-f]{64}$/u.test(receipt.logSha256 ?? '') && validNonEmptyFileIdentity(receipt.submitted)
+      && receipt.signedCodeIdentity) receipts.push(receipt);
+  }
+  if (receipts.length === 0) return null;
+  const current = await (dependencies.describeStableCodeIdentity ?? describeStableCodeIdentity)(input.artifactPath, input.credentials.teamId, input.run);
+  const matching = receipts.filter((receipt) => JSON.stringify(receipt.signedCodeIdentity) === JSON.stringify(current));
+  if (matching.length > 1) throw new Error(`Ambiguous Accepted ${input.kind} notarization operations match the current signed artifact.`);
+  if (matching.length === 0) return null;
+  try { await input.run('/usr/bin/xcrun', ['stapler', 'validate', '-v', input.artifactPath]); }
+  catch { return null; }
+  const receipt = { ...matching[0], stapled: await describeArtifact(input.artifactPath), stapleValidated: true };
+  await writeJsonAtomic(input.completedPath, receipt);
+  return receipt;
+}
+
+async function describeStableCodeIdentity(target, expectedTeamId, run) {
+  const signature = parseCodeSignature((await run('/usr/bin/codesign', ['-dv', '--verbose=4', target])).stderr);
+  if (signature.teamId !== expectedTeamId || !/^[0-9a-f]{40}$/iu.test(signature.cdHash ?? '')) throw new Error('Notarization artifact lacks the expected stable signed CodeDirectory identity.');
+  return { teamId: signature.teamId, cdHash: signature.cdHash.toLowerCase(), identifier: signature.identifier };
+}
+
+/**
+ * Notarization and Gatekeeper gate for one stapled App: `stapler validate`, `syspolicy_check
+ * distribution` and `spctl --assess --type execute`. `stapleValidated` skips `stapler validate`
+ * when the caller validated these exact bytes right after stapling.
+ */
+export async function validateNotarizedApplication(appPath, dependencies = {}) {
+  const run = dependencies.run ?? runCaptured;
+  const timer = dependencies.timer ?? noStageTimer;
+  if (!dependencies.stapleValidated) await timer.time('stapler validate', () => run('/usr/bin/xcrun', ['stapler', 'validate', '-v', appPath]));
+  await timer.time('syspolicy_check distribution', () => run('/usr/bin/syspolicy_check', ['distribution', appPath]));
+  await timer.time('spctl --assess execute', () => run('/usr/sbin/spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath]));
+}
+
+export function parseCodeSignature(output) {
+  const value = (key) => output.split(/\r?\n/u).find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1) ?? null;
+  const authorities = output.split(/\r?\n/u).filter((line) => line.startsWith('Authority=')).map((line) => line.slice('Authority='.length));
+  const flags = value('CodeDirectory') ?? output.split(/\r?\n/u).find((line) => line.includes(' flags=')) ?? '';
+  return {
+    teamId: value('TeamIdentifier'),
+    cdHash: value('CDHash'),
+    identifier: value('Identifier'),
+    authorities,
+    hardenedRuntime: flags.includes('runtime') || value('Runtime Version') !== null,
+    secureTimestamp: value('Timestamp') !== null,
+  };
+}
+
+function assertDeveloperIdSignature(metadata, expectedTeamId, label) {
+  if (metadata.teamId !== expectedTeamId || !metadata.authorities.some((authority) => authority.startsWith('Developer ID Application:'))
+    || !metadata.hardenedRuntime || !metadata.secureTimestamp) {
+    throw new Error(`${label} is not signed by the expected Developer ID Team with hardened runtime and a secure timestamp.`);
+  }
+}
+
+function parseTrueEntitlements(output) {
+  return [...output.matchAll(/<key>([^<]+)<\/key>\s*<true\s*\/>/gu)].map((match) => match[1]).sort();
+}
+function assertDenoEntitlements(actual) {
+  if (JSON.stringify(actual) !== JSON.stringify([...DENO_ENTITLEMENTS].sort())) throw new Error('Deno vendor entitlements do not match the pinned five-key policy.');
+}
+
+async function withKeychainSearchLock(work, dependencies = {}) {
+  const lockPath = dependencies.keychainSearchLock ?? KEYCHAIN_SEARCH_LOCK;
+  const inspect = dependencies.processIdentity ?? inspectSigningProcess;
+  const identity = await signingOwnerIdentity(dependencies);
+  return withOwnedDirectoryLock(lockPath, (processTracker) => work(processTracker), {
+    ownerIdentity: async () => identity,
+    inspectOwner: inspect,
+    inspectUnsafeTree: dependencies.inspectProcessTree ?? inspectOwnedProcessTree,
+    ownerGraceMs: dependencies.keychainOwnerGraceMs,
+    waitForBusy: true,
+    maxBusyAttempts: 300,
+    retryDelayMs: 100,
+    busyMessage: 'Timed out waiting for the shared macOS keychain search-list lock.',
+    holderDescription: 'Developer ID signing or identity check on this Mac',
+    randomToken: dependencies.randomLockToken,
+  });
+}
+
+async function repairPythonFramework(framework) {
+  const version = '3.14';
+  const versions = path.join(framework, 'Versions');
+  const versionDirectory = path.join(versions, version);
+  await stat(path.join(versionDirectory, 'Python'));
+  await stat(path.join(versionDirectory, 'Resources/Info.plist'));
+  await rm(path.join(framework, 'Python'), { recursive: true, force: true });
+  await rm(path.join(framework, 'Resources'), { recursive: true, force: true });
+  await rm(path.join(versions, 'Current'), { recursive: true, force: true });
+  await symlink(version, path.join(versions, 'Current'));
+  await symlink('Versions/Current/Python', path.join(framework, 'Python'));
+  await symlink('Versions/Current/Resources', path.join(framework, 'Resources'));
+}
+
+async function listMachOFiles(root) {
+  const files = await walk(root);
+  const result = [];
+  for (const file of files) {
+    const info = await lstat(file);
+    if (!info.isFile()) continue;
+    const handle = await open(file, 'r');
+    try {
+      const header = Buffer.alloc(8);
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      if (isMachO(header.subarray(0, bytesRead))) result.push(file);
+    } finally { await handle.close(); }
+  }
+  return result;
+}
+
+function isMachO(buffer) {
+  if (buffer.length < 4) return false;
+  const little = buffer.readUInt32LE(0);
+  const big = buffer.readUInt32BE(0);
+  return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe].includes(little)
+    || [0xcafebabe, 0xcafebabf, 0xbebafeca, 0xbfbafeca].includes(big);
+}
+
+async function inventoryTree(root) {
+  const entries = [];
+  for (const absolute of await walk(root, true)) {
+    const relative = path.relative(root, absolute);
+    if (!relative) continue;
+    const info = await lstat(absolute);
+    if (info.isSymbolicLink()) entries.push({ path: relative, type: 'symlink', target: await readlink(absolute) });
+    else if (info.isFile()) entries.push({ path: relative, type: 'file', mode: info.mode & 0o777, ...await describeFile(absolute) });
+  }
+  return entries.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function walk(root, includeSymlinks = false) {
+  const result = [];
+  const visit = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) await visit(absolute);
+      else if (entry.isFile() || (includeSymlinks && entry.isSymbolicLink())) result.push(absolute);
+    }
+  };
+  await visit(root);
+  return result;
+}
+
+/**
+ * Runs `worker` over `items` with at most `limit` calls in flight and returns the results in item
+ * order. After the first failure no further item starts; the calls already running settle before
+ * that first error is thrown.
+ */
+export async function mapConcurrent(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  let failure = null;
+  const lane = async () => {
+    while (failure === null && next < items.length) {
+      const index = next++;
+      try { results[index] = await worker(items[index], index); }
+      catch (error) { failure ??= { error }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  if (failure) throw failure.error;
+  return results;
+}
+
+function deepestFirst(left, right) { return right.split(path.sep).length - left.split(path.sep).length || left.localeCompare(right); }
+
+async function resolveProtectedCredential(root, relative, name, dependencies) {
+  if (path.isAbsolute(relative) || relative.split(/[\\/]/u).includes('..')) throw new Error(`${name} must be a path relative to --mac-signing-root.`);
+  const resolved = await dependencies.real(path.resolve(root, relative));
+  assertInside(root, resolved, name);
+  assertProtectedFile(await dependencies.inspect(resolved), name);
+  return resolved;
+}
+
+function assertInside(root, target, label) {
+  const relative = path.relative(root, target);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${label} must remain inside --mac-signing-root.`);
+}
+
+function assertProtectedFile(info, label) {
+  if (!info.isFile() || (info.mode & 0o077) !== 0) throw new Error(`${label} must be a regular file readable only by its owner.`);
+}
+
+function decodeEnvironmentValue(value, line) {
+  if (!value) return '';
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    if (value.at(-1) !== quote) throw new Error(`Signing environment line ${line} has an unterminated quoted value.`);
+    const body = value.slice(1, -1);
+    return quote === '"' ? body.replaceAll('\\n', '\n').replaceAll('\\"', '"').replaceAll('\\\\', '\\') : body;
+  }
+  if (/\s#/u.test(value)) return value.slice(0, value.indexOf(' #')).trimEnd();
+  return value;
+}
+
+function parseJsonOutput(result, label) {
+  try { return JSON.parse(result.stdout.trim()); } catch (error) { throw new Error(`${label} did not return valid JSON.`, { cause: error }); }
+}
+
+async function readJson(file) { return JSON.parse(await readFile(file, 'utf8')); }
+async function readOptionalJson(file) { try { return await readJson(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } }
+async function writeJsonAtomic(file, value) {
+  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    await rename(temporary, file);
+  } finally { await rm(temporary, { force: true }); }
+}
+function sameFileIdentity(left, right) { return left?.bytes === right?.bytes && left?.sha256 === right?.sha256; }
+function validNonEmptyFileIdentity(value) { return Number.isSafeInteger(value?.bytes) && value.bytes > 0 && /^[0-9a-f]{64}$/u.test(value.sha256 ?? ''); }
+async function describeFile(file) { const info = await stat(file); return { bytes: info.size, sha256: await sha256(file) }; }
+export async function describeArtifact(target) {
+  const info = await lstat(target);
+  if (info.isFile()) return describeFile(target);
+  if (!info.isDirectory()) throw new Error(`Cannot describe notarized artifact ${target}.`);
+  const inventory = await inventoryTree(target);
+  return {
+    bytes: inventory.reduce((total, entry) => total + (entry.type === 'file' ? entry.bytes : 0), 0),
+    sha256: createHash('sha256').update(JSON.stringify(inventory)).digest('hex'),
+  };
+}
+async function preparePersistentAppUpload(appPath, evidenceDirectory, run) {
+  const bundleIdentity = await describeArtifact(appPath);
+  const destination = path.join(evidenceDirectory, `app-${bundleIdentity.sha256}-upload.zip`);
+  const identityFile = `${destination}.json`;
+  try {
+    const info = await lstat(destination);
+    if (!info.isFile()) throw new Error(`Persisted notarization upload is not a file: ${destination}.`);
+    const recorded = await readOptionalJson(identityFile);
+    if (recorded && sameFileIdentity(recorded.bundle, bundleIdentity) && sameFileIdentity(recorded.upload, await describeFile(destination))) return destination;
+    if (recorded) throw new Error('Persisted App notarization upload no longer matches its exact bundle and upload identities.');
+    await rm(destination, { force: true });
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const staging = `${destination}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, staging]);
+    await rename(staging, destination);
+    await writeJsonAtomic(identityFile, { schemaVersion: 1, bundle: bundleIdentity, upload: await describeFile(destination) });
+    return destination;
+  } finally { await rm(staging, { force: true }); }
+}
+async function sha256(file) { const hash = createHash('sha256'); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest('hex'); }
+
+export function runCaptured(command, args, options = {}) {
+  return runOwnedProcess(command, args, {
+    cwd: options.cwd,
+    environment: options.environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    signal: options.signal,
+    processTracker: options.processTracker,
+    processTrackers: options.processTrackers,
+  });
+}

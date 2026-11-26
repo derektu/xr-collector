@@ -1,6 +1,6 @@
 extends: ./electron-builder.yml
 forceCodeSigning: true
-afterPack: ./scripts/mac-signing-hook.mjs
+afterPack: ./scripts/package/mac-signing-hook.mjs
 mac:
   identity: null
   hardenedRuntime: true

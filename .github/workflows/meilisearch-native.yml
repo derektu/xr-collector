@@ -4,26 +4,22 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - scripts/prepare-meilisearch.mjs
+      - scripts/runtime/**
+      - scripts/lib/**
+      - scripts/ci/meilisearch-api-smoke.mjs
       - src/domain/search/meilisearch-runtime-pins.json
       - src/domain/search/meilisearch-process.ts
-      - scripts/meilisearch-api-smoke.mjs
-      - scripts/physical-host.mjs
-      - scripts/runtime-dependencies.mjs
-      - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
       - .github/actions/pinned-runtimes/action.yml
       - package.json
   push:
     branches: [main]
     paths:
-      - scripts/prepare-meilisearch.mjs
+      - scripts/runtime/**
+      - scripts/lib/**
+      - scripts/ci/meilisearch-api-smoke.mjs
       - src/domain/search/meilisearch-runtime-pins.json
       - src/domain/search/meilisearch-process.ts
-      - scripts/meilisearch-api-smoke.mjs
-      - scripts/physical-host.mjs
-      - scripts/runtime-dependencies.mjs
-      - scripts/runtime-dependency-pins.json
       - .github/workflows/meilisearch-native.yml
       - .github/actions/pinned-runtimes/action.yml
       - package.json
@@ -57,5 +53,5 @@ jobs:
           prepare: npm run prepare:meilisearch -- --target ${{ matrix.target }} --require-native
       - name: Place the pinned Visual C++ runtime beside Meilisearch
         if: runner.os == 'Windows'
-        run: node scripts/prepare-windows-crt.mjs
-      - run: node scripts/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
+        run: node scripts/runtime/prepare-windows-crt.mjs
+      - run: node scripts/ci/meilisearch-api-smoke.mjs --binary ${{ matrix.binary }} --require-native
