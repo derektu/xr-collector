@@ -27,6 +27,7 @@ import type { SubscriptionSettings, WorkStatus } from '../../shared/subscription
 import type { Pacing, PacingEvent } from '../pacing/index.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
+import { systemTimers, type Timers } from '../../shared/lib/time.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore } from './job-store.js';
 import type { SubscriptionPort } from './subscription-port.js';
@@ -68,7 +69,7 @@ export interface JobManagerOptions {
   retry?: Partial<RetryPolicy>;
   now?: () => Date;
   createId?: () => string;
-  setTimer?: (callback: () => void, ms: number) => () => void;
+  timers?: Timers;
   pacing?: readonly Pacing[];
   recentTarget?: (type: string, url: string) => SubscriptionTarget | undefined;
   pause?: CollectionPause;
@@ -143,10 +144,7 @@ export class JobManager {
     this.createId = options.createId ?? (() => randomUUID());
     this.waits = new JobWaits({
       now: this.now,
-      setTimer: options.setTimer ?? ((callback, ms) => {
-        const timer = setTimeout(callback, ms);
-        return () => clearTimeout(timer);
-      }),
+      timers: options.timers ?? systemTimers,
       gates: this.gates,
       groupOf: (job) => this.groupOf(job),
       held: () => this.held,

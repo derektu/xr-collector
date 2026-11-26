@@ -2,6 +2,7 @@ import { readJsonFile, writeJsonFile } from '../../shared/lib/json-file.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { PacingStatus } from '../../shared/jobs/job-types.js';
 import type { PacingDeclaration } from '../../shared/sources/source-contract.js';
+import { backgroundTimers, type Timers } from '../../shared/lib/time.js';
 
 export type GatePriority = 'interactive' | 'background';
 
@@ -34,7 +35,7 @@ export interface PacingGateOptions {
   statePath?: string | null;
   now?: () => Date;
   random?: () => number;
-  setTimer?: (callback: () => void, ms: number) => () => void;
+  timers?: Timers;
 }
 
 interface StoredPacing {
@@ -80,7 +81,7 @@ export class PacingGate implements Pacing {
   private readonly statePath: string | null;
   private readonly now: () => Date;
   private readonly random: () => number;
-  private readonly setTimer: (callback: () => void, ms: number) => () => void;
+  private readonly timers: Timers;
   private readonly queue: Waiter[] = [];
   private readonly listeners = new Set<(event: PacingEvent) => void>();
   private active = false;
@@ -99,11 +100,7 @@ export class PacingGate implements Pacing {
     this.statePath = this.cooldown ? options.statePath ?? null : null;
     this.now = options.now ?? (() => new Date());
     this.random = options.random ?? Math.random;
-    this.setTimer = options.setTimer ?? ((callback, ms) => {
-      const timer = setTimeout(callback, ms);
-      timer.unref?.();
-      return () => clearTimeout(timer);
-    });
+    this.timers = options.timers ?? backgroundTimers;
   }
 
   static async open(declaration: PacingDeclaration, options: PacingGateOptions = {}): Promise<PacingGate> {
@@ -195,10 +192,10 @@ export class PacingGate implements Pacing {
     const delay = this.lastEndedAt === null ? 0 : this.lastEndedAt + this.nextGapMs - this.now().getTime();
     if (delay > 0) {
       if (!this.cancelWaitTimer) {
-        this.cancelWaitTimer = this.setTimer(() => {
+        this.cancelWaitTimer = this.timers.after(delay, () => {
           this.cancelWaitTimer = null;
           this.pump();
-        }, delay);
+        });
       }
       return;
     }
@@ -267,7 +264,7 @@ export class PacingGate implements Pacing {
       this.emit({ type: 'cooldown_ended' });
       this.pump();
     };
-    this.cancelCooldownTimer = this.setTimer(end, remaining);
+    this.cancelCooldownTimer = this.timers.after(remaining, end);
   }
 
   private dropExpiredCooldown(): void {

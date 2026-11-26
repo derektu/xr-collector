@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { sleep as delay } from './lib/wait.mjs';
 
 // Mutual exclusion rests on one atomic step: creating the lock directory succeeds for exactly one
 // process while the directory exists, and that process holds the lock. The only code that removes a
@@ -255,4 +256,3 @@ function sameProcess(left, right) {
     && left.pid === right.pid && left.uid === right.uid && left.startedAt === right.startedAt;
 }
 function sameOwner(left, right) { return sameProcess(left, right) && left.token === right.token; }
-function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }

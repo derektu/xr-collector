@@ -29,6 +29,7 @@ import { HeldCaptures } from '../../support/held-captures.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { timersAfter } from '../../support/timers.js';
 
 const VAULT = '/vaults/a';
 const VAULT_ID = 'vault-id';
@@ -433,7 +434,7 @@ describe('JobStore', () => {
     const flushTimers: Array<() => void> = [];
     let appends = 0;
     const records = await openJobRecords(directory, PRODUCT_SOURCES, {
-      setTimer: (callback, ms) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; },
+      timers: timersAfter((ms, callback) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; }),
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
     const store = records.jobs;

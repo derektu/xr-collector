@@ -4,6 +4,7 @@
 // only a browser shows that the screens read again from it, stay quiet while nothing changes, and
 // follow a reconnected or restarted server.
 import { idle } from '../scripts/lib/seed.mjs';
+import { observeFor } from '../scripts/lib/wait.mjs';
 import { agentClient } from './lib/requests.mjs';
 
 export const name = 'live-updates';
@@ -138,7 +139,7 @@ export async function run({ instance, page, record, waitFor }) {
         const requests = [];
         const listen = (request) => { if (read(request)) requests.push(new URL(request.url()).pathname); };
         page.on('request', listen);
-        await page.waitForTimeout(IDLE_MS);
+        await observeFor(IDLE_MS);
         page.off('request', listen);
         expect(requests.length === 0, `${nav} 閒置 ${IDLE_MS / 1000} 秒沒有請求`, { id: `live.idle.${nav}`, expected: [], actual: requests });
       }

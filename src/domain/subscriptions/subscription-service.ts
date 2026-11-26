@@ -6,6 +6,7 @@ import type { SourceDeclarations, SourceRegistry } from '../../shared/sources/so
 import type { FailureClass, SourceDefinition, SubscriptionDeclaration, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import { AUTO_PAUSE_AFTER_MS, AUTO_PAUSE_FAILURES, MAX_CHECK_ATTEMPTS } from '../../shared/subscriptions/subscription-limits.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
+import { deadline } from '../../shared/lib/time.js';
 import type { ChannelJobTrigger, JobView, JobError, JobSubmission, SkipReason } from '../../shared/jobs/job-types.js';
 import type { DocumentMetadata } from '../../shared/documents/document-types.js';
 import type {
@@ -499,18 +500,12 @@ function addMinutes(date: Date, minutes: number): Date {
 }
 
 function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, message: string, cancel?: AbortSignal): Promise<T> {
-  const abort = new AbortController();
+  const signal = AbortSignal.any([deadline(timeoutMs, new CollectorError('network_error', message)), ...(cancel ? [cancel] : [])]);
   const stopped = new Promise<never>((_, reject) => {
-    abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true });
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   });
-  const timer = setTimeout(() => abort.abort(new CollectorError('network_error', message)), timeoutMs);
-  const cancelled = () => abort.abort(cancel?.reason);
-  if (cancel?.aborted) cancelled();
-  else cancel?.addEventListener('abort', cancelled, { once: true });
-  return Promise.race([work(abort.signal), stopped]).finally(() => {
-    clearTimeout(timer);
-    cancel?.removeEventListener('abort', cancelled);
-  });
+  return Promise.race([work(signal), stopped]);
 }
 
 export class SubscriptionServices implements SubscriptionPort {

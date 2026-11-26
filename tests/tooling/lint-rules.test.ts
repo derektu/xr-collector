@@ -37,15 +37,15 @@ describe('timer rules', () => {
     const findings = await lintFixture('timers.ts', 'src/domain/jobs/poll.ts');
     expect(located(findings)).toEqual([`${TIMERS}:1`, `${TIMERS}:2`, `${TIMERS}:4`, `${TIMERS}:5`, `${TIMERS}:6`, `${TIMERS}:7`]);
     expect(findings.every((finding) => finding.message.includes('Wait on a state, not on time'))).toBe(true);
-    expect(findings[0]?.message).toContain('takes its timer from the caller');
+    expect(findings[0]?.message).toContain('takes `Timers` from its caller');
     expect(findings.every((finding) => finding.message.includes('docs/code-guidelines.md, section 時間與非同步'))).toBe(true);
   });
 
-  it('report AbortSignal.timeout, also through globalThis, pointing at an AbortController the caller owns, and Playwright waitForTimeout', async () => {
+  it('report AbortSignal.timeout, also through globalThis, pointing at deadline, and Playwright waitForTimeout', async () => {
     const findings = await lintFixture('deadlines.ts', 'tests/transport/web/flow.test.ts');
     expect(located(findings)).toEqual([`${TIMERS}:3`, `${TIMERS}:4`, `${TIMERS}:5`]);
-    expect(findings[0]?.message).toContain('AbortController the caller owns');
-    expect(findings[1]?.message).toContain('AbortController the caller owns');
+    expect(findings[0]?.message).toContain('`deadline`');
+    expect(findings[1]?.message).toContain('`deadline`');
     expect(findings[2]?.message).toContain('Wait on a state, not on time');
   });
 
@@ -59,8 +59,8 @@ describe('timer rules', () => {
     expect(await lintFixture('timer-type.ts', 'src/domain/jobs/poll.ts')).toEqual([]);
   });
 
-  it('leave the time module, the UI infra folder, the test helpers and the verify wait helper alone', async () => {
-    for (const lintedAs of ['src/shared/lib/time.ts', 'src/transport/web/infra/use-timeout.ts', 'tests/support/wait.ts', '.claude/skills/verify/scripts/lib/wait.mjs', 'vite.config.ts']) {
+  it('leave the time module, the UI infra folder, the test helpers and the two wait helpers alone', async () => {
+    for (const lintedAs of ['src/shared/lib/time.ts', 'src/transport/web/infra/use-timeout.ts', 'tests/support/wait.ts', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs', 'vite.config.ts']) {
       expect(await lintFixture('timers.ts', lintedAs), lintedAs).toEqual([]);
       expect(await lintFixture('deadlines.ts', lintedAs), lintedAs).toEqual([]);
     }

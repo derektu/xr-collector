@@ -3,6 +3,7 @@ import type { DocumentMetadata, DocumentStatus, DocumentStatusCounts, SavedDocum
 import type { SearchHit, SearchQuery, SearchResponse } from '../../shared/api/search-types.js';
 import { NO_PUBLISHER_ID } from '../../shared/documents/document-vault.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
+import { waitUntil } from '../../shared/lib/time.js';
 import type { SearchBackend } from './managed-transcript-search.js';
 import { ContiguousFragmentIndex, type NormalizedMatchPosition } from './contiguous-fragment-index.js';
 import { planFragmentQuery } from './fragment-query.js';
@@ -362,16 +363,13 @@ export class MeilisearchBackend implements SearchBackend {
   }
 
   private async waitForTask(taskUid: number, timeoutMs = TASK_TIMEOUT_MS): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    await waitUntil(async () => {
       const task = await this.request<TaskResult>(`/tasks/${taskUid}`);
-      if (task.status === 'succeeded') return;
       if (task.status === 'failed' || task.status === 'canceled') {
         throw new Error(task.error?.message ?? `Meilisearch task ${taskUid} ${task.status}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error(`Meilisearch task ${taskUid} timed out`);
+      return task.status === 'succeeded';
+    }, { interval: 25, timeout: timeoutMs, label: `Meilisearch task ${taskUid}` });
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

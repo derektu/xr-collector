@@ -7,9 +7,9 @@ const TIMER_MODULES = new Set(['timers', 'node:timers', 'timers/promises', 'node
 
 const MESSAGES = {
   timer:
-    'Wait on a state, not on time. Product code that needs time takes its timer from the caller, as the `setTimer` option of activity-log.ts, pacing-gate.ts and job-manager.ts does, so a test drives it. Screens wait on the user through useTimeout or useDebouncedValue (src/transport/web/infra/timing.ts). Tests await the promise the product resolves or wait through `eventually` (tests/support/wait.ts); verify skill scripts wait through .claude/skills/verify/scripts/lib/wait.mjs. See docs/code-guidelines.md, section 時間與非同步.',
+    'Wait on a state, not on time. Product code that needs time takes `Timers` from its caller and defaults to `systemTimers`, and polls an outside state through `waitUntil` (src/shared/lib/time.ts), so a test drives it. Screens wait on the user through useTimeout or useDebouncedValue (src/transport/web/infra/timing.ts). Tests await the promise the product resolves or wait through `eventually` (tests/support/wait.ts); scripts wait through scripts/lib/wait.mjs, verify skill scripts through .claude/skills/verify/scripts/lib/wait.mjs. See docs/code-guidelines.md, section 時間與非同步.',
   deadline:
-    'AbortSignal.timeout is a timer. Abort an AbortController the caller owns and passes in, so a test aborts it itself instead of waiting. See docs/code-guidelines.md, section 時間與非同步.',
+    'AbortSignal.timeout is a timer. Bound an outside operation with `deadline` (src/shared/lib/time.ts; scripts/lib/wait.mjs in scripts), or abort an AbortController the caller owns and passes in, so a test aborts it itself instead of waiting. See docs/code-guidelines.md, section 時間與非同步.',
 } as const;
 
 function propertyName(node: MemberExpression): string | null {

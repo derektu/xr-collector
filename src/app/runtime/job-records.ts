@@ -10,7 +10,7 @@ export interface JobRecords {
   close(): Promise<void>;
 }
 
-export interface JobRecordsOptions extends Pick<ActivityLogOptions, 'setTimer' | 'append'> {
+export interface JobRecordsOptions extends Pick<ActivityLogOptions, 'timers' | 'append'> {
   now?: () => Date;
   noteChange?: NoteChange;
 }

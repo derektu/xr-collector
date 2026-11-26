@@ -30,10 +30,8 @@ function makeRun(pid: number) {
 /** Resolves once `ps` shows the process with its own command line, not the one inherited before exec. */
 const started = async (pid: number, text: string) => {
   const { commandOf } = await import('../scripts/lib/platform.mjs');
-  for (let tries = 0; !commandOf(pid).includes(text); tries += 1) {
-    if (tries > 100) throw new Error(`PID ${pid} never showed ${text}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  const { waitFor } = await import('../scripts/lib/wait.mjs');
+  await waitFor(() => commandOf(pid).includes(text), `PID ${pid} to show ${text}`, { timeout: 5_000, interval: 50 });
 };
 
 describe.skipIf(process.platform === 'win32')('stop with real processes', () => {

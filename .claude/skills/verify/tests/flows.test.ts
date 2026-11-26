@@ -9,6 +9,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { recorder } from '../scripts/lib/drive.mjs';
 import { runPool, startable, writeProvisioningFailure } from '../scripts/lib/flows.mjs';
+import { waitFor } from '../scripts/lib/wait.mjs';
 
 let evidence: string;
 afterEach(async () => { if (evidence) await rm(evidence, { recursive: true, force: true }); });
@@ -70,14 +71,21 @@ describe('parallel flow runs', () => {
     const flows = ['a', 'b', 'c', 'd', 'e'].map(web);
     let running = 0;
     let peak = 0;
-    const outcomes = await runPool(flows, 3, async (flow: Flow) => {
+    const holds = new Map<string, () => void>();
+    const pool = runPool(flows, 3, async (flow: Flow) => {
       running += 1;
       peak = Math.max(peak, running);
-      await new Promise((resolve) => setTimeout(resolve, flow.name === 'b' ? 30 : 5));
+      await new Promise<void>((resolve) => { holds.set(flow.name, resolve); });
       running -= 1;
       if (flow.name === 'c') throw new Error('driver crashed');
       return { name: flow.name, passed: flow.name !== 'a' };
     });
+    const finish = async (name: string) => {
+      await waitFor(() => holds.has(name), `flow ${name} started`, { timeout: 5_000, interval: 5 });
+      holds.get(name)!();
+    };
+    for (const name of ['a', 'c', 'd', 'e', 'b']) await finish(name);
+    const outcomes = await pool;
     expect(peak).toBe(3);
     expect(outcomes).toEqual([
       { name: 'a', passed: false }, { name: 'b', passed: true }, { name: 'c', passed: false, error: 'driver crashed' },

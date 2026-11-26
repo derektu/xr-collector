@@ -13,7 +13,7 @@ import { launchWeb } from './instance.mjs';
 import { checkoutRoot, claimEvidence, commitOf } from './paths.mjs';
 import { VERIFY_POOL } from './slots.mjs';
 import { apiState } from './state.mjs';
-import { sleep, waitFor } from './wait.mjs';
+import { observeFor, waitFor } from './wait.mjs';
 
 export const FLOWS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'flows');
 
@@ -168,7 +168,7 @@ async function runOne(flow, options) {
   try {
     const page = await open('/');
     record = recorder(instance, page);
-    await flow.run({ instance, page, openPage: open, record, waitFor, sleep });
+    await flow.run({ instance, page, openPage: open, record, waitFor, observeFor });
   } catch (caught) {
     error = caught;
     console.log(`  flow ${flow.name} stopped: ${caught.message}`);
@@ -205,7 +205,7 @@ async function runDesktop(flow, { issue, label, evidence, checkout, visible = fa
   const record = recorder(instance, () => instance.window);
   let error;
   try {
-    await flow.run({ instance, page: instance.window, record, waitFor, sleep, visible });
+    await flow.run({ instance, page: instance.window, record, waitFor, observeFor, visible });
   } catch (caught) {
     error = caught;
     console.log(`  flow ${flow.name} stopped: ${caught.message}`);

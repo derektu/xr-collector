@@ -30,6 +30,7 @@ import { bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.j
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { subscriptionCollection } from '../../support/subscription-collection.js';
+import { deadline } from '../../../src/shared/lib/time.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -194,7 +195,7 @@ describe('Agent authenticated HTTP access', () => {
       const response = await fetch(`${current.url}${route}`, {
         headers: { Authorization: `Bearer ${current.token}` },
         redirect: 'error',
-        signal: AbortSignal.timeout(15_000),
+        signal: deadline(15_000),
       });
       expect(response.status).toBe(200);
       const body = await response.text();

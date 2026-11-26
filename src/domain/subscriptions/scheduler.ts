@@ -2,6 +2,7 @@ import type { StartRunRequest } from './subscription-service.js';
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { PAUSE_MESSAGES, type CollectionPause } from '../../shared/jobs/collection-pause.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
+import { systemTimers } from '../../shared/lib/time.js';
 import type { CollectionSchedule, ScheduledCheck, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import type { JobSubmission } from '../../shared/jobs/job-types.js';
 
@@ -184,8 +185,7 @@ export class CollectionScheduler {
 }
 
 function intervalTimer(poll: () => Promise<void>, ms: number): () => void {
-  const timer = setInterval(() => { void poll(); }, ms);
-  return () => clearInterval(timer);
+  return systemTimers.every(ms, () => { void poll(); });
 }
 
 function reportScheduleError(error: unknown): void {

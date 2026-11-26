@@ -29,6 +29,7 @@ import { productSourcesWith } from '../../support/product-sources.js';
 import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '../../support/exchange-fixtures.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
+import { timersAfter } from '../../support/timers.js';
 
 // The core collects, subscribes, paces, deletes and resumes for source types it never names: two
 // fake types in separate pacing groups run through the same job manager, subscription services,
@@ -67,15 +68,15 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
   const timers: Timer[] = [];
-  const setTimer = (run: () => void, ms: number) => {
+  const manualTimers = timersAfter((ms, run) => {
     const timer: Timer = { ms, run, cancelled: false };
     timers.push(timer);
     return () => { timer.cancelled = true; };
-  };
+  });
   const sources = { fake: new FakeSource('fake'), fake2: new FakeSource('fake2') };
   const gates = {
-    fake: await PacingGate.open(FAKE.pacing!, { now, setTimer, statePath: null }),
-    fake2: await PacingGate.open(FAKE2.pacing!, { now, setTimer, statePath: null }),
+    fake: await PacingGate.open(FAKE.pacing!, { now, timers: manualTimers, statePath: null }),
+    fake2: await PacingGate.open(FAKE2.pacing!, { now, timers: manualTimers, statePath: null }),
   };
   const plugins = [createFakePlugin(FAKE, sources.fake, gates.fake), createFakePlugin(FAKE2, sources.fake2, gates.fake2)];
   const indexed = new Set<string>();
@@ -93,7 +94,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     let services!: Record<'fake' | 'fake2', SubscriptionService>;
     const jobs: JobManager = new JobManager({
       sources: SOURCES,
-      vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, setTimer,
+      vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, timers: manualTimers,
       pacing: [gates.fake, gates.fake2],
       limits: { discovery: 1, capture: options.capture ?? 2 },
       retry: options.retry ?? { maxAttempts: 1, delaysMs: [MINUTE] },

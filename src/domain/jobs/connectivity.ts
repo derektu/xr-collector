@@ -1,5 +1,6 @@
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { ConnectivityState, ConnectivityStatus } from '../../shared/api/device-types.js';
+import { deadline, systemTimers } from '../../shared/lib/time.js';
 
 export type ConnectivityProbe = (signal: AbortSignal) => Promise<boolean>;
 
@@ -24,7 +25,7 @@ export function connectivityProbe(addresses: readonly ProbeAddress[], request: t
     const done = new AbortController();
     const answers = addresses.map(async ({ url, accepts }) => {
       const response = await request(url, {
-        redirect: 'manual', cache: 'no-store', signal: AbortSignal.any([signal, done.signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]),
+        redirect: 'manual', cache: 'no-store', signal: AbortSignal.any([signal, done.signal, deadline(PROBE_TIMEOUT_MS)]),
       });
       const accepted = await accepts(response);
       await response.body?.cancel().catch(() => undefined);
@@ -58,7 +59,7 @@ export class Connectivity {
   private state: ConnectivityState = 'online';
   private checkedAt: Date | null = null;
   private checking: Promise<ConnectivityState> | null = null;
-  private recheck: ReturnType<typeof setTimeout> | null = null;
+  private cancelRecheck: (() => void) | null = null;
   private readonly abort = new AbortController();
   private readonly unsubscribePause: () => void;
   private closed = false;
@@ -96,8 +97,7 @@ export class Connectivity {
     this.closed = true;
     this.abort.abort();
     this.unsubscribePause();
-    if (this.recheck) clearTimeout(this.recheck);
-    this.recheck = null;
+    this.stopRecheck();
   }
 
   private async probeOnce(): Promise<ConnectivityState> {
@@ -105,23 +105,24 @@ export class Connectivity {
     if (this.closed) return this.state;
     this.state = online ? 'online' : 'offline';
     this.checkedAt = this.now();
-    if (online) {
-      if (this.recheck) clearTimeout(this.recheck);
-      this.recheck = null;
-    } else {
-      this.scheduleRecheck();
-    }
+    if (online) this.stopRecheck();
+    else this.scheduleRecheck();
     this.options.pause.set('offline', !online);
     return this.state;
   }
 
   private scheduleRecheck(): void {
-    if (this.recheck) clearTimeout(this.recheck);
-    this.recheck = setTimeout(() => {
-      this.recheck = null;
+    this.stopRecheck();
+    this.cancelRecheck = systemTimers.after(this.options.offlineRecheckMs ?? OFFLINE_RECHECK_MS, () => {
+      this.cancelRecheck = null;
       if (this.options.pause.has('sleep')) this.scheduleRecheck();
       else void this.check();
-    }, this.options.offlineRecheckMs ?? OFFLINE_RECHECK_MS);
+    });
+  }
+
+  private stopRecheck(): void {
+    this.cancelRecheck?.();
+    this.cancelRecheck = null;
   }
 
   private now(): Date {

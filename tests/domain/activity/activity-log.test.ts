@@ -9,6 +9,7 @@ import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { JobEvent } from '../../../src/shared/activity/activity-types.js';
 import { localDayStart } from '../../../src/transport/web/activity-presentation.js';
 import { readEventFiles } from '../../support/event-files.js';
+import { stoppedTimers, timersAfter } from '../../support/timers.js';
 import { eventually } from '../../support/wait.js';
 
 // The device activity log: day files written once a second with a 30-day retention, newest-first
@@ -34,13 +35,13 @@ class Clock {
 }
 
 /** Timers that run only when the test fires them. */
-class Timers {
+class ManualTimers {
   readonly waiting: Array<{ callback: () => void; ms: number }> = [];
-  set = (callback: () => void, ms: number) => {
+  readonly timers = timersAfter((ms, callback) => {
     const entry = { callback, ms };
     this.waiting.push(entry);
     return () => { const index = this.waiting.indexOf(entry); if (index >= 0) this.waiting.splice(index, 1); };
-  };
+  });
   fire(ms: number): void {
     for (const entry of this.waiting.filter((candidate) => candidate.ms === ms)) {
       this.waiting.splice(this.waiting.indexOf(entry), 1);
@@ -87,10 +88,10 @@ describe('activity log files (A-T1)', () => {
 
   it('writes the events recorded within a second in one append, and answers with them before', async () => {
     const directory = await tempDirectory();
-    const timers = new Timers();
+    const timers = new ManualTimers();
     let appends = 0;
     const log = await ActivityLog.open(directory, {
-      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: timers.set,
+      now: () => new Date('2026-10-15T06:00:00.000Z'), timers: timers.timers,
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
     for (let index = 0; index < 5; index += 1) log.record(event('2026-10-15T05:00:00.000Z', { message: `第 ${index} 筆` }));
@@ -135,7 +136,7 @@ describe('retention (A-T2)', () => {
   it('removes expired day files at start and every hour', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    const timers = new Timers();
+    const timers = new ManualTimers();
     const segments = path.join(directory, 'events');
     await mkdir(segments, { recursive: true });
     const daysAgo = (days: number, hour = 6) => new Date(Date.UTC(2026, 9, 15 - days, hour)).toISOString();
@@ -144,7 +145,7 @@ describe('retention (A-T2)', () => {
     await writeFile(path.join(segments, `${daysAgo(30).slice(0, 10)}.jsonl`), lines([event(daysAgo(30, 5), { message: '邊界前' }), event(daysAgo(30, 7), { message: '邊界後' })]));
     await writeFile(path.join(segments, `${daysAgo(29).slice(0, 10)}.jsonl`), lines([event(daysAgo(29), { message: '29 天前' })]));
 
-    const log = await ActivityLog.open(directory, { now: () => clock.now, setTimer: timers.set });
+    const log = await ActivityLog.open(directory, { now: () => clock.now, timers: timers.timers });
     expect((await readdir(segments)).sort()).toEqual([`${daysAgo(30).slice(0, 10)}.jsonl`, `${daysAgo(29).slice(0, 10)}.jsonl`]);
     let messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['29 天前', '邊界後']);
@@ -314,7 +315,7 @@ describe('write failures (A-T7)', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let failing = true;
     const log = await ActivityLog.open(directory, {
-      now: () => clock.now, setTimer: () => () => undefined,
+      now: () => clock.now, timers: stoppedTimers,
       append: async (file, data) => {
         if (failing) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
         await appendFile(file, data);
@@ -343,7 +344,7 @@ describe('write failures (A-T7)', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let partial = true;
     const log = await ActivityLog.open(directory, {
-      now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined,
+      now: () => new Date('2026-10-15T06:00:00.000Z'), timers: stoppedTimers,
       append: async (file, data) => {
         if (partial) {
           partial = false;
@@ -361,7 +362,7 @@ describe('write failures (A-T7)', () => {
 
     const lines = (await readFile(path.join(directory, 'events', '2026-10-15.jsonl'), 'utf8')).split('\n').filter(Boolean);
     expect(lines).toHaveLength(2);
-    const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), setTimer: () => () => undefined });
+    const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), timers: stoppedTimers });
     expect((await new ActivityViews(reopened).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆']);
     expect(reopened.health().skippedLines).toBe(1);
     await reopened.close();

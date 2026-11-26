@@ -22,6 +22,7 @@ import { SyntheticYouTube } from '../../../support/synthetic-youtube.js';
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
+import { stoppedTimers } from '../../../support/timers.js';
 
 // The subscription and collection routes every source type shares (B-T1 to B-T3): one Vault holds
 // YouTube (synthetic channels) and the fake test type, and each route runs once per type through
@@ -62,10 +63,9 @@ async function world(connectivity?: ConnectivityAccess) {
   const now = () => clock.now;
   const youtube = new SyntheticYouTube();
   const fake = new FakeSource('fake');
-  const setTimer = () => () => undefined;
   const gates = [
-    await PacingGate.open(YOUTUBE_PACING, { now, setTimer, statePath: null }),
-    await PacingGate.open(FAKE.pacing!, { now, setTimer, statePath: null }),
+    await PacingGate.open(YOUTUBE_PACING, { now, timers: stoppedTimers, statePath: null }),
+    await PacingGate.open(FAKE.pacing!, { now, timers: stoppedTimers, statePath: null }),
   ];
   const plugins = [youtubePlugin(youtube), createFakePlugin(FAKE, fake, gates[1])];
   const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));

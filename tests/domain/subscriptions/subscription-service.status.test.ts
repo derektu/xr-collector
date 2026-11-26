@@ -21,6 +21,7 @@ import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { stoppedTimers } from '../../support/timers.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -65,7 +66,7 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
     subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },
-    setTimer: () => () => undefined,
+    timers: stoppedTimers,
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
     sources: PRODUCT_SOURCES,

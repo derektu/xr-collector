@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { probePhysicalHost } from './physical-host.mjs';
 import { expectedManifest, fileSha256, inspectExecutable, readRuntimePins } from './prepare-meilisearch.mjs';
+import { deadline, raceWithTimeout, waitFor, WaitTimeout } from './lib/wait.mjs';
 
 const options = parseArguments(process.argv.slice(2));
 if (!options.binary) throw new Error('Usage: node scripts/meilisearch-api-smoke.mjs --binary <path> [--manifest <path>] [--require-native]');
@@ -97,39 +98,41 @@ async function start(executable, databasePath, portNumber, apiKey) {
   });
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-8192); });
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
+  const healthy = async () => {
     if (child.exitCode !== null) throw new Error(`Meilisearch exited during smoke: ${stderr}`);
-    try { if ((await fetch(`http://127.0.0.1:${portNumber}/health`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(1000) })).ok) return child; } catch { /* starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    try { return (await fetch(`http://127.0.0.1:${portNumber}/health`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: deadline(1000) })).ok; } catch { return false; }
+  };
+  try {
+    await waitFor(healthy, 'Meilisearch health', { timeout: 20_000, interval: 50 });
+  } catch (error) {
+    if (!(error instanceof WaitTimeout)) throw error;
+    child.kill('SIGKILL');
+    throw new Error(`Meilisearch health timeout: ${stderr}`);
   }
-  child.kill('SIGKILL');
-  throw new Error(`Meilisearch health timeout: ${stderr}`);
+  return child;
 }
 
 async function stop(child) {
   if (child.exitCode !== null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
   child.kill('SIGTERM');
-  await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Meilisearch smoke stop timeout')), 10_000))]);
+  const timedOut = Symbol('timed out');
+  if (await raceWithTimeout([exited], 10_000, timedOut) === timedOut) throw new Error('Meilisearch smoke stop timeout');
 }
 
 async function request(baseUrl, apiKey, endpoint, init = {}) {
-  const response = await fetch(`${baseUrl}${endpoint}`, { ...init, headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(`${baseUrl}${endpoint}`, { ...init, headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, signal: deadline(30_000) });
   const text = await response.text();
   if (!response.ok) throw new Error(`${endpoint} returned ${response.status}: ${text}`);
   return JSON.parse(text);
 }
 
 async function task(baseUrl, apiKey, uid) {
-  const deadline = Date.now() + 300_000;
-  while (Date.now() < deadline) {
+  await waitFor(async () => {
     const result = await request(baseUrl, apiKey, `/tasks/${uid}`);
-    if (result.status === 'succeeded') return;
     if (result.status === 'failed' || result.status === 'canceled') throw new Error(`Task ${uid} ${result.status}: ${result.error?.message ?? ''}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Task ${uid} timed out.`);
+    return result.status === 'succeeded';
+  }, `task ${uid}`, { timeout: 300_000, interval: 25 });
 }
 
 async function availablePort() {

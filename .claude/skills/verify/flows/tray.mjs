@@ -60,7 +60,7 @@ async function serveFeed(port) {
   };
 }
 
-export async function run({ instance, record, waitFor, sleep, visible }) {
+export async function run({ instance, record, waitFor, observeFor, visible }) {
   const feed = await serveFeed(instance.ports.feeds);
   const documentsTotal = async () => (await instance.api('/api/documents?limit=1')).total;
   const idle = async () => {
@@ -167,7 +167,7 @@ export async function run({ instance, record, waitFor, sleep, visible }) {
       const drawn = () => trayShown(instance.app);
       // The reads the previous scenario's changes started end first; the idle period starts after them.
       const before = await waitFor(async () => { const shown = await drawn(); return shown.reading ? null : shown; }, 'the tray finished reading');
-      await sleep(IDLE_MS);
+      await observeFor(IDLE_MS);
       const after = await drawn();
       note('idleReads', { before: before.reads, after: after.reads });
       expect(Number.isInteger(before.reads) && after.reads === before.reads, `閒置 ${IDLE_MS / 1000} 秒，選單沒有讀取狀態`, { before: before.reads, after: after.reads });

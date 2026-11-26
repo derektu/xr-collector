@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { protectSecret } from '../../shared/lib/redact.js';
+import { systemTimers, waitUntil } from '../../shared/lib/time.js';
 import runtimePins from './meilisearch-runtime-pins.json' with { type: 'json' };
 
 const run = promisify(execFile);
@@ -140,19 +141,15 @@ async function executableName(pid: number): Promise<string | null> {
   }
 }
 
+const STOP_WAIT = { interval: 50, timeout: 5_000 };
+
 async function stopProcess(pid: number): Promise<void> {
-  const exited = async (timeoutMs: number) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (!isAlive(pid)) return true;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    return !isAlive(pid);
-  };
+  const exited = () => !isAlive(pid);
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
-  if (await exited(5_000)) return;
+  const stopped = await waitUntil(exited, { ...STOP_WAIT, label: `process ${pid} to exit after SIGTERM` }).catch(() => false);
+  if (stopped) return;
   try { process.kill(pid, 'SIGKILL'); } catch { return; }
-  if (!await exited(5_000)) throw new Error(`Process ${pid} did not exit after SIGKILL.`);
+  await waitUntil(exited, { ...STOP_WAIT, label: `process ${pid} to exit after SIGKILL` });
 }
 
 async function removePidFile(pidFile: string, pid: number | undefined): Promise<void> {
@@ -180,6 +177,8 @@ async function availableLoopbackPort(): Promise<number> {
   });
 }
 
+class NotReady extends Error {}
+
 async function waitUntilHealthy(
   child: ChildProcess,
   url: string,
@@ -187,25 +186,17 @@ async function waitUntilHealthy(
   getProcessError: () => Error | null,
   getStderr: () => string,
 ): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
+  const answers = async () => {
     const processError = getProcessError();
     if (processError) throw processError;
     if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(
-        `Meilisearch exited before becoming ready.${formatStderr(getStderr())}`,
-      );
+      throw new Error(`Meilisearch exited before becoming ready.${formatStderr(getStderr())}`);
     }
-    try {
-      const response = await fetch(`${url}/health`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
-      if (response.ok) return;
-    } catch {
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`Meilisearch did not become ready in time.${formatStderr(getStderr())}`);
+    const response = await fetch(`${url}/health`, { headers: { Authorization: `Bearer ${apiKey}` } }).catch(() => null);
+    if (!response?.ok) throw new NotReady(`Meilisearch did not become ready in time.${formatStderr(getStderr())}`);
+    return true;
+  };
+  await waitUntil(answers, { interval: 50, timeout: 15_000, label: 'Meilisearch to become ready', retryOn: (error) => error instanceof NotReady });
 }
 
 async function stopChild(child: ChildProcess): Promise<void> {
@@ -215,15 +206,11 @@ async function stopChild(child: ChildProcess): Promise<void> {
     child.once('error', () => resolve());
   });
   child.kill('SIGTERM');
-  let timer: NodeJS.Timeout | undefined;
-  const stopped = await Promise.race([
-    exited.then(() => true),
-    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 5_000); }),
-  ]).finally(() => clearTimeout(timer));
-  if (!stopped && child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL');
-    await exited;
-  }
+  const cancelKill = systemTimers.after(STOP_WAIT.timeout, () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  });
+  await exited;
+  cancelKill();
 }
 
 function formatStderr(stderr: string): string {

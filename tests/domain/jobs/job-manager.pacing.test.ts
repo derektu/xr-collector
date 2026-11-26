@@ -34,6 +34,7 @@ import { HeldCaptures } from '../../support/held-captures.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { timersAfter } from '../../support/timers.js';
 
 // Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
 // through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
@@ -136,11 +137,11 @@ async function world(options: { waitMs?: number } = {}) {
   let now = T0;
   const timers: Timer[] = [];
   const clock = () => new Date(now);
-  const setTimer = (callback: () => void, ms: number) => {
+  const manualTimers = timersAfter((ms, callback) => {
     const timer = { at: now + ms, callback, cancelled: false };
     timers.push(timer);
     return () => { timer.cancelled = true; };
-  };
+  });
   const advance = async (ms: number) => {
     const target = now + ms;
     for (;;) {
@@ -163,14 +164,14 @@ async function world(options: { waitMs?: number } = {}) {
 
   /** One process: a gate read from its state file, a job store on disk and a manager. */
   const boot = async () => {
-    const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, setTimer, waitRangeMs: { min: wait, max: wait } });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, timers: manualTimers, waitRangeMs: { min: wait, max: wait } });
     const records = await openJobRecords(jobsPath, PRODUCT_SOURCES, { now: clock });
     const store = records.jobs;
     const source = new GatedSource(gate);
     const manager = new JobManager({
       sources: PRODUCT_SOURCES,
       vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
-      now: clock, setTimer, createId: () => `job-${++sequence}`, pacing: [gate],
+      now: clock, timers: manualTimers, createId: () => `job-${++sequence}`, pacing: [gate],
     });
     subs.attach(manager);
     processes.push({ gate, store, records, manager });

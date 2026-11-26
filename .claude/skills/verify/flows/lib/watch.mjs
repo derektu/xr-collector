@@ -1,11 +1,11 @@
-// Sampling what a page shows while a flow runs. A MutationObserver plus a 50 ms timer inside the
-// page call `collect()`, which returns { key: value } for what is on screen now, and keep every
-// change of each key with its time. The log lives in the page, so it covers changes between the
-// flow's own steps.
+// Sampling what a page shows while a flow runs. A MutationObserver inside the page calls `collect()`,
+// which returns { key: value } for what is on screen now, and keeps every change of each key with its
+// time. `collect()` reads only the DOM, so every change it can see comes with a mutation. The log
+// lives in the page, so it covers changes between the flow's own steps.
 
 /**
- * Starts sampling on `page` under `name`. `collect` runs inside the page and must be
- * self-contained (no closure over flow variables).
+ * Starts sampling on `page` under `name`. `collect` runs inside the page, must be self-contained
+ * (no closure over flow variables) and must read only the DOM.
  */
 export async function watch(page, name, collect) {
   await page.evaluate(({ name, source }) => {
@@ -21,7 +21,6 @@ export async function watch(page, name, collect) {
     };
     sample();
     new MutationObserver(sample).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
-    setInterval(sample, 50);
   }, { name, source: collect.toString() });
 }
 

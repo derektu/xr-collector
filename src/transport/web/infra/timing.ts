@@ -1,11 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react';
-
-export type StartTimer = (run: () => void, ms: number) => () => void;
-
-const startBrowserTimer: StartTimer = (run, ms) => {
-  const timer = setTimeout(run, ms);
-  return () => clearTimeout(timer);
-};
+import { systemTimers, type Timers } from '../../../shared/lib/time.js';
 
 const UNARMED = Symbol('unarmed');
 
@@ -14,7 +8,7 @@ export class Countdown {
   private armed: { ms: number; key: unknown } | typeof UNARMED = UNARMED;
   private run: () => void = () => undefined;
 
-  constructor(private readonly start: StartTimer = startBrowserTimer) {}
+  constructor(private readonly timers: Timers = systemTimers) {}
 
   sync(ms: number | null, key: unknown, run: () => void): void {
     this.run = run;
@@ -22,10 +16,10 @@ export class Countdown {
     if (this.armed !== UNARMED && this.armed.ms === ms && Object.is(this.armed.key, key)) return;
     this.stop?.();
     this.armed = { ms, key };
-    this.stop = this.start(() => {
+    this.stop = this.timers.after(ms, () => {
       this.stop = null;
       this.run();
-    }, ms);
+    });
   }
 
   dispose(): void {

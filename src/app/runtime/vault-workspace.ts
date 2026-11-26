@@ -22,6 +22,7 @@ import { forwardingPort, JobManager, JobStore, type JobLimits, type RetryPolicy,
 import type { Pacing } from '../../domain/pacing/index.js';
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { SourcePlugin } from '../../shared/sources/source-contract.js';
+import type { Timers } from '../../shared/lib/time.js';
 import { ActivityLog } from '../../domain/activity/index.js';
 import { startSearchRuntime, type SearchRuntime } from '../../domain/search/index.js';
 
@@ -53,7 +54,7 @@ export interface WorkspaceOptions {
   pause?: CollectionPause;
   connectivity?: Connectivity;
   jobRetry?: Partial<RetryPolicy>;
-  jobTimer?: (callback: () => void, ms: number) => () => void;
+  jobTimers?: Timers;
   scheduleTimer?: SchedulerOptions['setTimer'];
   fixedLocation?: boolean;
   noteChange?: NoteChange;
@@ -208,7 +209,7 @@ export class VaultWorkspace {
       subscriptions: forwardingPort(() => bundle.subscriptions),
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
-      ...(this.options.jobTimer ? { setTimer: this.options.jobTimer } : {}),
+      ...(this.options.jobTimers ? { timers: this.options.jobTimers } : {}),
       ...(this.options.pacing ? { pacing: this.options.pacing } : {}),
       ...(this.options.pause ? { pause: this.options.pause } : {}),
       ...(this.options.connectivity ? { connectivity: this.options.connectivity } : {}),

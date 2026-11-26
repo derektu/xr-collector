@@ -30,6 +30,7 @@ import { HeldCaptures } from '../../support/held-captures.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_DECLARATIONS, PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { timersAfter } from '../../support/timers.js';
 
 // Manual retry, job summary and the job fields activity events carry, over the real job manager.
 
@@ -128,7 +129,7 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
     sources: PRODUCT_SOURCES,
     vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions,
     now: clock, createId: () => `job-${++sequence}`, limits,
-    setTimer: (callback) => { timers.push(callback); return () => undefined; },
+    timers: timersAfter((_ms, callback) => { timers.push(callback); return () => undefined; }),
   });
   const runTimers = () => { for (const callback of timers.splice(0)) callback(); };
   /** Runs the timers once the manager has set one. */

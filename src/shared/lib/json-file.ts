@@ -1,10 +1,10 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { waitUntil } from './time.js';
 
 // External: On Windows, renaming over a target that another process holds open without delete sharing fails
 // with EPERM; antivirus and indexing scans open a file just written this way for a short time.
-const REPLACE_RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 320, 640];
+const REPLACE_RETRY = { interval: 50, timeout: 1_270 };
 
 /** The parsed JSON of a file, or undefined when the file does not exist. */
 export async function readJsonFile(filePath: string): Promise<unknown> {
@@ -30,16 +30,10 @@ export async function writeJsonFile(filePath: string, value: unknown): Promise<v
   }
 }
 
-/** Renames a finished temporary file over its target, retrying a bounded number of times on EPERM. */
+/** Renames a finished temporary file over its target, retrying on EPERM for a bounded time and then throwing that EPERM. */
 export async function replaceFile(temporaryPath: string, filePath: string): Promise<void> {
-  for (const delay of REPLACE_RETRY_DELAYS_MS) {
-    try {
-      await rename(temporaryPath, filePath);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
-    }
-    await sleep(delay);
-  }
-  await rename(temporaryPath, filePath);
+  await waitUntil(async () => {
+    await rename(temporaryPath, filePath);
+    return true;
+  }, { ...REPLACE_RETRY, label: `${filePath} to be replaceable`, retryOn: (error) => (error as NodeJS.ErrnoException).code === 'EPERM' });
 }

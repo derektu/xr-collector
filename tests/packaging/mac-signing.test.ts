@@ -672,6 +672,8 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
   let signsInFlight = 0;
   let maxSignsInFlight = 0;
   let leavesFinishedBeforeFramework = -1;
+  let releaseSigns!: () => void;
+  const signsReleased = new Promise<void>((resolve) => { releaseSigns = resolve; });
   const reconstructRuntimeDependencies = async ({ outputDir }: { outputDir: string }) => {
     for (const [relative, bytes] of runtimeFiles) {
       await mkdir(path.dirname(path.join(outputDir, relative)), { recursive: true });
@@ -685,7 +687,7 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
       if (args.at(-1)!.endsWith('Python.framework')) leavesFinishedBeforeFramework = finishedSigns.length;
       signsInFlight += 1;
       maxSignsInFlight = Math.max(maxSignsInFlight, signsInFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await signsReleased;
       signsInFlight -= 1;
       finishedSigns.push(args.at(-1)!);
     }
@@ -695,7 +697,10 @@ it.skipIf(process.platform === 'win32')('repairs the embedded Python framework a
       ? `Authority=Developer ID Application: Example (${team})\nTeamIdentifier=${team}\nCodeDirectory=v=20500 flags=0x10000(runtime)\nTimestamp=Oct 28, 2026\n`
       : '' };
   });
-  const signed = await signStagedMacRuntimes({ appPath: path.join(root, 'XR.app'), sourceBin, identitySha1: 'A'.repeat(40), expectedTeamId: 'ABCDE12345', keychain: '/tmp/keychain' }, { run, prepareRuntimeDependencies: reconstructRuntimeDependencies });
+  const signing = signStagedMacRuntimes({ appPath: path.join(root, 'XR.app'), sourceBin, identitySha1: 'A'.repeat(40), expectedTeamId: 'ABCDE12345', keychain: '/tmp/keychain' }, { run, prepareRuntimeDependencies: reconstructRuntimeDependencies });
+  await eventually(() => expect(signsInFlight).toBe(3));
+  releaseSigns();
+  const signed = await signing;
   expect(signCalls.at(-1)).toBe(path.join(appBin, 'yt-dlp/_internal/Python.framework'));
   // Leaf files are signed concurrently; the framework starts only after every leaf has finished.
   expect(maxSignsInFlight).toBe(3);
@@ -729,20 +734,30 @@ it('bounds concurrent work, keeps results in item order and stops starting work 
   let maxInFlight = 0;
   const started: number[] = [];
   const items = Array.from({ length: 20 }, (_, index) => index);
+  let release!: () => void;
+  let released = Promise.resolve();
+  const holdWork = () => { released = new Promise<void>((resolve) => { release = resolve; }); };
   const worker = async (item: number) => {
     started.push(item);
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await released;
     inFlight -= 1;
     if (item === 2) throw new Error('codesign failed for item 2');
     return item * 2;
   };
   expect(RUNTIME_SIGNING_CONCURRENCY).toBe(8);
-  await expect(mapConcurrent([0, 1, 3, 4, 5, 6, 7, 8, 9, 10], RUNTIME_SIGNING_CONCURRENCY, worker)).resolves.toEqual([0, 2, 6, 8, 10, 12, 14, 16, 18, 20]);
+  holdWork();
+  const doubled = mapConcurrent([0, 1, 3, 4, 5, 6, 7, 8, 9, 10], RUNTIME_SIGNING_CONCURRENCY, worker);
+  expect(inFlight).toBe(8);
+  release();
+  await expect(doubled).resolves.toEqual([0, 2, 6, 8, 10, 12, 14, 16, 18, 20]);
   expect(maxInFlight).toBe(8);
   started.length = 0;
-  await expect(mapConcurrent(items, RUNTIME_SIGNING_CONCURRENCY, worker)).rejects.toThrow(/item 2/u);
+  holdWork();
+  const failing = mapConcurrent(items, RUNTIME_SIGNING_CONCURRENCY, worker);
+  release();
+  await expect(failing).rejects.toThrow(/item 2/u);
   expect(inFlight).toBe(0);
   expect(started.length).toBeLessThan(items.length);
   await expect(mapConcurrent([], RUNTIME_SIGNING_CONCURRENCY, worker)).resolves.toEqual([]);

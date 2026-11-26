@@ -1,13 +1,14 @@
 // Which process an engine record lets startup stop on macOS: the recorded process, only while it
 // runs the engine's executable. A wrong reading ends someone else's process whose number was reused,
 // or leaves an engine running on the database the new engine needs. The record is always cleared, so
-// a stale or broken record never blocks search. A stand-in Node process plays the engine by naming
+// a stale or broken record never blocks search, and an engine that ignores SIGTERM is killed once the
+// stop wait runs out, so startup never hangs on it. A stand-in Node process plays the engine by naming
 // Node's executable as the engine binary, so these cases need no engine.
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { pidFilePath, stopLeftoverMeilisearchProcess } from '../../../src/domain/search/meilisearch-process.js';
 import { eventually } from '../../support/wait.js';
 
@@ -49,4 +50,28 @@ it.skipIf(process.platform === 'win32').each([
   await eventually(() => expect(alive(pid)).toBe(standInAlive));
   await expect(readFile(pidFilePath(databasePath))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readFile(path.join(databasePath, 'sentinel.txt'), 'utf8')).toBe('keep');
+});
+
+it.skipIf(process.platform === 'win32')('kills a recorded engine that ignores SIGTERM once the stop wait runs out', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'xr-collector-meili-process-'));
+  cleanups.push(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const databasePath = path.join(root, 'search-data');
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => console.log('term')); console.log('ready'); setTimeout(() => {}, 60_000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
+  cleanups.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const output = { text: '' };
+  child.stdout.on('data', (chunk: Buffer) => { output.text += chunk.toString(); });
+  await eventually(() => expect(output.text).toContain('ready'));
+  await writeFile(pidFilePath(databasePath), `${child.pid}\n`);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  cleanups.push(async () => { vi.useRealTimers(); });
+
+  let stopped = false;
+  const stopping = stopLeftoverMeilisearchProcess({ binaryPath: process.execPath, databasePath });
+  await eventually(() => expect(output.text).toContain('term'));
+  expect(child.signalCode).toBeNull();
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  await eventually(() => expect(child.signalCode).toBe('SIGKILL'));
+  void stopping.then(() => { stopped = true; });
+  await eventually(() => expect(stopped).toBe(true));
 });
