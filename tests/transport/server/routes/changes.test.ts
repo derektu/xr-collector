@@ -47,7 +47,7 @@ async function openEvents(base: string, headers: Record<string, string> = {}) {
             if (event) events.push({ event, data: JSON.parse(field('data')!) });
           }
         }
-      } catch { return; }
+      } catch {}
     })();
   }
   const changes = () => events.filter((event) => event.event === 'change').flatMap((event) => event.data.changes!);

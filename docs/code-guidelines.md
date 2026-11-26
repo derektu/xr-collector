@@ -71,11 +71,12 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 公開檔案是 `src/shared` 的檔案、模組入口（`src/<層>/<模組>/` 下的入口檔，定義在 `tooling/source-structure.ts`，見 [架構](architecture.md#執行與業務邊界)），以及入口以 `export … from` 轉出的檔案（轉出的檔案再轉出的也算） | lint |
 | 程式碼之前的 `SPDX-License-Identifier:` 授權聲明、`/// <reference`、`prettier-ignore` 不受限制 | lint |
 
-測試檔（`tests/`）同樣適用，另有兩處不同：
+測試檔（`tests/`）同樣適用，另有下列不同：
 
 | 規則 | 強制 |
 |---|---|
-| 程式碼之前可以有一則 `//` 檔頭，寫出測試壞掉時使用者（或開發者）會遇到什麼，見 [開發驗證流程](development-validation.md#3-回歸流程)。案例的理由寫進 `it` 名稱，setup 以 helper 名稱說明 | lint |
+| 程式碼之前可以有 `//` 檔頭，寫出這個測試防什麼，見 [開發驗證流程](development-validation.md#3-回歸流程) | lint |
+| 案例的理由寫進 `it` 名稱，setup 以 helper 名稱說明 | review |
 | `tests/support/` 是測試共用的檔案，視同公開檔案：export 宣告可以有 `/** */` | lint |
 
 `IMPORTANT`、`do not remove`、很長的辯解，都表示那段程式碼該改。
@@ -88,7 +89,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 |---|---|
 | `strict` 開啟 | tsconfig |
 | 不用 `any`；用 `unknown` 加型別判斷，或寫出實際型別。範圍是所有 lint 的檔案 | lint |
-| 不用 `@ts-ignore`、`@ts-expect-error`、`@ts-nocheck` | lint |
+| 不用 `@ts-ignore`、`@ts-expect-error`、`@ts-nocheck`。範圍是 `src/` 與 `tests/` | lint |
 
 ## 既有違規的基準線
 

@@ -15,6 +15,7 @@ import {
 } from '../../../scripts/package/mac-signing.mjs';
 import { UnsafeProcessTreeError } from '../../../scripts/lib/owned-process.mjs';
 import { eventually } from '../../support/wait.js';
+import { itOnPosix } from '../../support/platform.js';
 
 const roots: string[] = [];
 const describeStableCodeIdentity = async () => ({ teamId: 'ABCDE12345', cdHash: 'a'.repeat(40), identifier: 'com.moneydj.xrcollector' });
@@ -26,7 +27,7 @@ async function privateSigningRoot(prefix = 'xr-signing-test-'): Promise<string> 
   return root;
 }
 
-it.skipIf(process.platform === 'win32')('loads only the exact protected credential contract under an explicit root', async () => {
+itOnPosix('loads only the exact protected credential contract under an explicit root', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-config-'));
   roots.push(root);
   await writeFile(path.join(root, 'certificate.p12'), 'p12', { mode: 0o600 });
@@ -45,9 +46,7 @@ it.skipIf(process.platform === 'win32')('loads only the exact protected credenti
   await expect(loadMacSigningConfiguration({ environmentFile, pathRoot: root })).rejects.toThrow(/only by its owner/u);
 });
 
-// External: Windows has no owner-only directory permissions, /bin/ps or POSIX signals, which the
-// temporary signing keychain cases depend on.
-it.skipIf(process.platform === 'win32')('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
+itOnPosix('appends its keychain without reordering existing sessions and removes only its owned keychain', async () => {
   const tempRoot = await privateSigningRoot();
   const calls: string[][] = [];
   const existingKeychains = [path.resolve('fixture/login.keychain-db'), path.resolve('fixture/other-session.keychain-db')];
@@ -128,7 +127,7 @@ async function identityCheck(identities: Identities) {
   };
 }
 
-it.skipIf(process.platform === 'win32')('checks the Developer ID identity in a temporary keychain outside the user search list', async () => {
+itOnPosix('checks the Developer ID identity in a temporary keychain outside the user search list', async () => {
   const cases = [
     { name: 'valid', identities: { valid: [identityLine(1, SHA_A, 'ABCDE12345')] } },
     // External: macOS 26 lists an identity with a missing intermediate under Matching identities with no reason.
@@ -162,7 +161,7 @@ it.skipIf(process.platform === 'win32')('checks the Developer ID identity in a t
   }
 });
 
-it.skipIf(process.platform === 'win32')('leaves a stale signing keychain and its search-list entry for the next signing run', async () => {
+itOnPosix('leaves a stale signing keychain and its search-list entry for the next signing run', async () => {
   const tempRoot = await privateSigningRoot();
   const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
   await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'old' }));
@@ -179,7 +178,7 @@ it.skipIf(process.platform === 'win32')('leaves a stale signing keychain and its
   await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
 });
 
-it.skipIf(process.platform === 'win32')('names the missing intermediate certificate when packaging finds only an untrusted identity', async () => {
+itOnPosix('names the missing intermediate certificate when packaging finds only an untrusted identity', async () => {
   const tempRoot = await privateSigningRoot();
   const keychains: string[] = [];
   const { run } = fakeSecurity({ valid: [], matching: [identityLine(1, SHA_A, 'ABCDE12345')] }, keychains);
@@ -193,7 +192,7 @@ it.skipIf(process.platform === 'win32')('names the missing intermediate certific
   expect(keychains).toEqual([]);
 });
 
-it.skipIf(process.platform === 'win32')('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
+itOnPosix('recovers a SIGKILL-stale signing keychain without touching a live session', async () => {
   const universe = await privateSigningRoot('xr-mac-signing-scope-');
   const tempRoot = path.join(universe, 'chosen-root');
   await mkdir(tempRoot, { mode: 0o700 });
@@ -233,7 +232,7 @@ it.skipIf(process.platform === 'win32')('recovers a SIGKILL-stale signing keycha
   expect(keychains).toEqual([path.join(live, 'signing.keychain-db'), path.join(external, 'signing.keychain-db')]);
 });
 
-it.skipIf(process.platform === 'win32')('fails closed when a stale-session process identity cannot be inspected', async () => {
+itOnPosix('fails closed when a stale-session process identity cannot be inspected', async () => {
   const tempRoot = await privateSigningRoot();
   const stale = await mkdtemp(path.join(tempRoot, 'xr-mac-signing-'));
   await writeFile(path.join(stale, 'owner.json'), JSON.stringify({ pid: 41, uid: process.getuid?.(), startedAt: 'unknown' }));
@@ -246,7 +245,7 @@ it.skipIf(process.platform === 'win32')('fails closed when a stale-session proce
   await expect(stat(path.join(stale, 'signing.keychain-db'))).resolves.toBeDefined();
 });
 
-it.skipIf(process.platform === 'win32')('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
+itOnPosix('deletes its temporary keychain when the terminal sends SIGTERM', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-'));
   roots.push(root);
   const signalTarget = new EventEmitter();
@@ -269,7 +268,7 @@ it.skipIf(process.platform === 'win32')('deletes its temporary keychain when the
   expect(deleted).toBe(owned);
 });
 
-it.skipIf(process.platform === 'win32')('preserves its signing session and shared lock when cleanup cannot confirm process-tree termination', async () => {
+itOnPosix('preserves its signing session and shared lock when cleanup cannot confirm process-tree termination', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-unsafe-cleanup-'));
   roots.push(root);
   const session = path.join(root, 'xr-mac-signing-session');
@@ -294,7 +293,7 @@ it.skipIf(process.platform === 'win32')('preserves its signing session and share
   expect(JSON.parse(await readFile(path.join(sharedLock, sharedOwner!), 'utf8'))).toMatchObject({ unsafeProcessTree: tree });
 });
 
-it.skipIf(process.platform === 'win32')('a real packaging subprocess aborts its security child before append and removes keychain plus lock on SIGTERM', async () => {
+itOnPosix('a real packaging subprocess aborts its security child before append and removes keychain plus lock on SIGTERM', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-signing-signal-process-'));
   roots.push(root);
   const session = path.join(root, 'xr-mac-signing-session');
@@ -350,7 +349,7 @@ it.skipIf(process.platform === 'win32')('a real packaging subprocess aborts its 
   await expect(stat(appended)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it.skipIf(process.platform === 'win32')('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
+itOnPosix('uses one canonical owned keychain path when macOS rewrites /var as /private/var', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-keychain-alias-test-'));
   roots.push(root);
   const requestedDirectory = '/var/folders/fixture/xr-mac-signing-alias';
@@ -378,7 +377,7 @@ it.skipIf(process.platform === 'win32')('uses one canonical owned keychain path 
   expect(keychains).toEqual(['/Users/example/Library/Keychains/login.keychain-db']);
 });
 
-it.skipIf(process.platform === 'win32')('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
+itOnPosix('preserves concurrent keychains and aggregates the work and owned-keychain deletion failures', async () => {
   const tempRoot = await privateSigningRoot();
   const existing = path.resolve('fixture/login.keychain-db');
   const concurrent = path.resolve('fixture/concurrent-session.keychain-db');
@@ -410,7 +409,7 @@ it.skipIf(process.platform === 'win32')('preserves concurrent keychains and aggr
   expect(run.mock.calls.filter(([, args]) => args[0] === 'list-keychains' && args[3] === '-s')).toHaveLength(2);
 });
 
-it.skipIf(process.platform === 'win32')('reports a shared keychain-list lock left by an ended owner or never recorded, and leaves it in place', async () => {
+itOnPosix('reports a shared keychain-list lock left by an ended owner or never recorded, and leaves it in place', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-stale-keychain-lock-'));
   roots.push(root);
   const uid = process.getuid?.() ?? 501;
@@ -627,7 +626,7 @@ it('resumes the same notarization receipt after stapling when validation was int
   expect(calls).toEqual(['stapler validate']);
 });
 
-it.skipIf(process.platform === 'win32')('repairs the embedded Python framework and signs staged runtime code inside-out without changing raw sources', async () => {
+itOnPosix('repairs the embedded Python framework and signs staged runtime code inside-out without changing raw sources', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-runtime-sign-'));
   roots.push(root);
   const sourceBin = path.join(root, 'source');
