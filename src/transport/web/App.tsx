@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { DeviceUpdateStatus } from '../../shared/api/update-types.js';
 import type { SourceTypeInfo } from '../../shared/sources/source-info-types.js';
 import type { VaultSetupResult, VaultSetupStatus } from '../../shared/vault/vault-types.js';
@@ -27,31 +27,26 @@ import { displayUrl, parseSourceListState, sourceListSearch, sourcePath, sourceR
 import { Sources } from './Sources.js';
 import { trackSubscriptionRequests } from './subscription-requests.js';
 import { targetNoun } from './subscription-presentation.js';
-import { useChangeStream, useLiveRead } from './use-changes.js';
+import { useLocation, useMediaQuery, writeHistory } from './infra/browser-state.js';
+import { useDesktopNavigation, useFocusAfterChange, useWindowEvent } from './infra/lifecycle.js';
+import { useTimeout } from './infra/timing.js';
+import { useChangeStream, useLiveRead } from './infra/use-changes.js';
+import { useRead } from './infra/use-read.js';
+import { keepInView } from './keep-in-view.js';
 import { useCollectionStatus } from './use-collection-status.js';
 import { VaultOnboarding } from './VaultOnboarding.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 const NOTICE_MS = 5000;
-
-const darkSchemeQuery = '(prefers-color-scheme: dark)';
-function useSystemDark(): boolean {
-  const [dark, setDark] = useState(() => window.matchMedia(darkSchemeQuery).matches);
-  useEffect(() => {
-    const media = window.matchMedia(darkSchemeQuery);
-    const update = () => setDark(media.matches);
-    update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, []);
-  return dark;
-}
+const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
+const UPDATE_PANEL_ID = 'software-update';
+const NO_SOURCE_TYPES: SourceTypeInfo[] = [];
 
 export default function App() {
   const declarations = useSourceDeclarations();
 
   const today = new Date();
-  const [location, setLocation] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }));
+  const location = useLocation();
   const page = routeForPath(location.pathname);
   const readerId = page === 'documents' ? readerIdForPath(location.pathname) : null;
   const sourceRoute = page === 'sources' ? sourceRouteForPath(location.pathname) : null;
@@ -62,28 +57,48 @@ export default function App() {
     const persisted = bridge ? createElectronThemeStore(bridge) : desktop ? null : createBrowserThemeStore(window.localStorage);
     return persisted && serializeThemeWrites(persisted);
   }, [bridge, desktop]);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(defaultThemePreference);
-  const [themeReady, setThemeReady] = useState(!bridge);
-  const systemDark = useSystemDark();
-  const [vault, setVault] = useState<VaultSetupStatus | null>(null);
-  const [vaultLoadError, setVaultLoadError] = useState<string>();
+  const storedTheme = useRead(async () => {
+    if (!store) {
+      console.warn('Theme preference bridge is unavailable');
+      return defaultThemePreference;
+    }
+    try {
+      return await store.read();
+    } catch (error) {
+      console.warn('Unable to read theme preference', error);
+      return defaultThemePreference;
+    }
+  }, [store]);
+  const [chosenTheme, setThemePreference] = useState<ThemePreference | null>(null);
+  const themePreference = chosenTheme ?? storedTheme.value ?? defaultThemePreference;
+  const themeReady = !bridge || storedTheme.value !== null;
+  const systemDark = useMediaQuery(DARK_SCHEME_QUERY);
+  const [vaultAttempt, setVaultAttempt] = useState(0);
+  const vaultRead = useRead((signal) => api.getVaultSetup(signal), [vaultAttempt]);
+  const [chosenVault, setVault] = useState<VaultSetupStatus | null>(null);
+  const vault = chosenVault ?? vaultRead.value;
+  const vaultLoadError = vaultRead.error && !vaultRead.pending
+    ? (vaultRead.error instanceof Error ? vaultRead.error.message : '無法連線到 Collector 服務。') : undefined;
   const [adding, setAdding] = useState<AddMode | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string; key: number } | null>(null);
-  const [sourceTypes, setSourceTypes] = useState<SourceTypeInfo[]>([]);
   const [update, setUpdate] = useState<DeviceUpdateStatus | null>(null);
-  const [updateNavigation, setUpdateNavigation] = useState(0);
-  const handledUpdateNavigation = useRef(0);
-  const handledUpdatePanel = useRef<HTMLElement | null>(null);
-  const stopUpdateNavigationTracking = useRef<(() => void) | null>(null);
+  const stopRevealingUpdate = useRef<(() => void) | null>(null);
   const ready = vault?.state === 'ready';
+  const sourceTypes = useRead(() => api.sourceTypes(), [], { enabled: ready }).value ?? NO_SOURCE_TYPES;
+  const [subscriptions] = useState(trackSubscriptionRequests);
   useChangeStream();
-  const status = useCollectionStatus(ready);
+  const status = useCollectionStatus(ready, (active) => {
+    void subscriptions.activeListRead(active, (id) => api.getJob(id),
+      (job) => announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(declarations, job.source.type)}失敗。`}`, 'error'));
+  });
   const updateRead = useLiveRead(['update'], (signal) => api.updateStatus(signal), []);
+  const [readUpdate, setReadUpdate] = useState(updateRead.value);
+  if (readUpdate !== updateRead.value) {
+    setReadUpdate(updateRead.value);
+    if (updateRead.value) setUpdate(updateRead.value);
+  }
 
-  useEffect(() => { let active = true; if (!store) { console.warn('Theme preference bridge is unavailable'); setThemeReady(true); return () => { active = false; }; } void store.read().then((stored) => { if (active) setThemePreference(stored); }).catch((error: unknown) => { console.warn('Unable to read theme preference', error); }).finally(() => { if (active) setThemeReady(true); }); return () => { active = false; }; }, [store]);
-  useEffect(() => { const onPopState = () => setLocation({ pathname: window.location.pathname, search: window.location.search }); window.addEventListener('popstate', onPopState); return () => window.removeEventListener('popstate', onPopState); }, []);
-  useEffect(() => { void loadVault(); }, []);
-  useEffect(() => { const desktopBridge = window.xrCollectorDesktop; desktopBridge?.onNavigate((next) => {
+  useDesktopNavigation((next) => {
     if (next === 'update') { openUpdate(); return; }
     if (next === 'settings') { navigate('settings'); return; }
     handleDesktopNavigation(next, {
@@ -91,83 +106,21 @@ export default function App() {
       openSource,
       announce: (message) => announce(message, 'error'),
     });
-  }); desktopBridge?.navigationReady(); }, []);
-  useEffect(() => { if (ready) api.sourceTypes().then(setSourceTypes).catch(() => undefined); }, [ready]);
-  useEffect(() => { if (updateRead.value) setUpdate(updateRead.value); }, [updateRead.value]);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[data-page-heading], .reader-title')?.focus({ preventScroll: true }));
-    return () => cancelAnimationFrame(frame);
-  }, [location.pathname, vault?.state]);
-  useEffect(() => {
-    if (!notice) return undefined;
-    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
-    return () => clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => {
-    if (!updateNavigation) return undefined;
-    if (page !== 'settings') {
-      handledUpdateNavigation.current = updateNavigation;
-      handledUpdatePanel.current = null;
-      return undefined;
-    }
-    const currentPanel = document.getElementById('software-update');
-    const panelUnchanged = handledUpdatePanel.current === null || currentPanel === handledUpdatePanel.current;
-    if (updateNavigation <= handledUpdateNavigation.current && panelUnchanged) return undefined;
-    const root = content.current ?? document.body;
-    const reveal = () => {
-      const panel = document.getElementById('software-update');
-      if (!panel) return false;
-      const bounds = panel.getBoundingClientRect();
-      if (bounds.top < 0 || bounds.bottom > window.innerHeight) panel.scrollIntoView({ block: 'center' });
-      handledUpdateNavigation.current = updateNavigation;
-      handledUpdatePanel.current = panel;
-      return true;
-    };
-    const layout = new ResizeObserver(() => { reveal(); });
-    const observeLayout = () => {
-      const panel = document.getElementById('software-update');
-      const container = panel?.closest<HTMLElement>('.settings-sections, .onboarding-card');
-      if (!container || !reveal()) return false;
-      layout.observe(container);
-      return true;
-    };
-    const mount = new MutationObserver(() => { if (observeLayout()) mount.disconnect(); });
-    if (!observeLayout()) mount.observe(root, { childList: true, subtree: true });
-    let stopped = false;
-    const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
-    const stop = () => {
-      if (stopped) return;
-      stopped = true;
-      mount.disconnect(); layout.disconnect();
-      root.removeEventListener('wheel', stop);
-      root.removeEventListener('touchstart', stop);
-      root.removeEventListener('pointerdown', pointer);
-      root.removeEventListener('keydown', keyboard);
-      if (stopUpdateNavigationTracking.current === stop) stopUpdateNavigationTracking.current = null;
-    };
-    const pointer = (event: PointerEvent) => { if (event.target === root) stop(); };
-    const keyboard = (event: KeyboardEvent) => { if (scrollKeys.has(event.key)) stop(); };
-    root.addEventListener('wheel', stop, { passive: true });
-    root.addEventListener('touchstart', stop, { passive: true });
-    root.addEventListener('pointerdown', pointer);
-    root.addEventListener('keydown', keyboard);
-    stopUpdateNavigationTracking.current = stop;
-    return stop;
-  }, [page, updateNavigation, vault?.state]);
+  });
+  useWindowEvent('popstate', stopRevealing);
+  useFocusAfterChange(`${location.pathname} ${vault?.state ?? ''}`,
+    () => content.current?.querySelector<HTMLElement>('[data-page-heading], .reader-title'));
+  useTimeout(() => setNotice(null), notice ? NOTICE_MS : null, notice?.key);
 
-  const [subscriptions] = useState(trackSubscriptionRequests);
-  useEffect(() => {
-    if (!status.active) return;
-    void subscriptions.activeListRead(status.active, (id) => api.getJob(id),
-      (job) => announce(`無法訂閱「${displayUrl(job.source.url)}」：${job.error?.message ?? `解析${targetNoun(declarations, job.source.type)}失敗。`}`, 'error'));
-  }, [status.active]);
-
-  async function loadVault(): Promise<void> { setVaultLoadError(undefined); try { setVault(await api.getVaultSetup()); } catch (error: unknown) { setVaultLoadError(error instanceof Error ? error.message : '無法連線到 Collector 服務。'); } }
   function enterVault(result: VaultSetupResult): void { setVault(result.vault); navigate(result.documentCount > 0 ? 'documents' : 'sources'); }
+  function stopRevealing(): void {
+    stopRevealingUpdate.current?.();
+    stopRevealingUpdate.current = null;
+  }
   function go(pathname: string, search = '', state: AppHistoryState = {}, replace = false): void {
-    if (replace) window.history.replaceState(state, '', pathname + search);
-    else if (window.location.pathname + window.location.search !== pathname + search) window.history.pushState(state, '', pathname + search);
-    setLocation({ pathname, search });
+    stopRevealing();
+    if (replace) writeHistory('replace', state, pathname + search);
+    else if (window.location.pathname + window.location.search !== pathname + search) writeHistory('push', state, pathname + search);
     content.current?.scrollTo({ top: 0 });
   }
   function back(fallback: string, replace = false): void {
@@ -175,29 +128,29 @@ export default function App() {
     if (target.kind === 'history') window.history.back();
     else go(target.path, '', {}, target.replace);
   }
-  function navigate(next: ShellPage): void { if (next === 'settings') stopUpdateNavigationTracking.current?.(); go(pathForRoute(next)); }
-  function openUpdate(): void { navigate('settings'); setUpdateNavigation((value) => value + 1); }
+  function navigate(next: ShellPage): void { go(pathForRoute(next)); }
+  function openUpdate(): void {
+    navigate('settings');
+    stopRevealingUpdate.current = keepInView(UPDATE_PANEL_ID, content.current ?? document.body);
+  }
   const scroller = useCallback(() => content.current, []);
   const listState = parseListState(location.search);
   const onListState = useCallback((next: DocumentListState) => {
     const current = parseListState(window.location.search);
     const search = listStateSearch(next);
-    window.history.replaceState(window.history.state, '', `/documents${search}`);
-    setLocation({ pathname: '/documents', search });
+    writeHistory('replace', window.history.state, `/documents${search}`);
     if (next.page !== current.page || !sameSource(next.source, current.source) || next.query !== current.query) content.current?.scrollTo({ top: 0 });
   }, []);
   const sourceListState = parseSourceListState(location.search);
   const onSourceListState = useCallback((next: SourceListState) => {
     const search = sourceListSearch(next);
-    window.history.replaceState(window.history.state, '', `/${search}`);
-    setLocation({ pathname: '/', search });
+    writeHistory('replace', window.history.state, `/${search}`);
   }, []);
   function openDocument(id: string, from?: AppHistoryState['from']): void { go(readerPath(id), '', { returnable: true, ...(from ? { from } : {}) }); }
   function openSource(type: string, id: string): void { go(sourcePath(type, id), '', { returnable: true }); }
   const onActivityState = useCallback((next: ActivityViewState) => {
     const search = activityStateSearch(next);
-    window.history.replaceState(window.history.state, '', `/activity${search}`);
-    setLocation({ pathname: '/activity', search });
+    writeHistory('replace', window.history.state, `/activity${search}`);
   }, []);
   function announce(text: string, tone: 'ok' | 'error' = 'ok'): void {
     setNotice({ tone, text, key: Date.now() });
@@ -212,7 +165,7 @@ export default function App() {
   }
 
   const themeName = resolveTheme(themePreference, systemDark) === 'light' ? 'silverblue' : 'duskblue';
-  if (!themeReady || !vault) return <div className="app-loading" data-theme={themeName}>{vaultLoadError ? <div className="app-load-error" role="alert"><p>{vaultLoadError}</p><button type="button" onClick={() => void loadVault()}>重試</button></div> : <p className="loading" role="status">正在載入…</p>}</div>;
+  if (!themeReady || !vault) return <div className="app-loading" data-theme={themeName}>{vaultLoadError ? <div className="app-load-error" role="alert"><p>{vaultLoadError}</p><button type="button" onClick={() => setVaultAttempt((value) => value + 1)}>重試</button></div> : <p className="loading" role="status">正在載入…</p>}</div>;
   if (vault.state === 'not_ready') return <div data-theme={themeName}>{page === 'settings'
     ? <div className="onboarding-screen" data-testid="device-settings-without-vault">
       <header className="onboarding-header"><div className="onboarding-brand"><span className="brand-mark" aria-hidden="true">XR</span><span>XR Collector</span></div>

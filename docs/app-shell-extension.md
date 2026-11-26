@@ -17,7 +17,7 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 每一項有 `label`、開啟的對話框標題 `dialogTitle` 與 `mode`。`mode` 是 `url` 或 `<類型>-<種類>`，由 `src/transport/web/AddContent.tsx` 顯示成對應的對話框，標題取自 `addDialogTitles(declarations)`。`mode` 為 null 的項目標為「尚未支援」，點選後開啟只有「目前還不支援＿＿。」的小對話框。
 
-`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape、Tab、點選單外面或選了項目都會關閉選單；以鍵盤關閉時焦點回到按鈕。「尚未支援」的對話框以按鈕或 Escape 關閉後，焦點同樣回到選單按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。開啟的選單以 `src/transport/web/floating-menu.ts` 固定在視窗座標、貼著按鈕，外層可捲動或會裁切的容器不會切掉它；任何容器捲動或視窗縮放時選單跟著按鈕移動。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
+`src/transport/web/AddMenu.tsx` 顯示按鈕與選單（`role=menu`，在按鈕正下方，不分組）。在按鈕上按 ↓ 開啟選單並停在第一項；方向鍵在項目間移動並循環，Home、End 跳到頭尾；Escape、Tab、在選單外面按下指標或選了項目都會關閉選單；以鍵盤關閉時焦點回到按鈕。「尚未支援」的對話框以按鈕或 Escape 關閉後，焦點同樣回到選單按鈕。各頁空狀態的按鈕也是同一個 `AddMenu`。開啟的選單以 `src/transport/web/infra/floating-position.ts` 固定在視窗座標、貼著按鈕，外層可捲動或會裁切的容器不會切掉它；任何容器捲動或視窗縮放時選單跟著按鈕移動。`addMismatch(declarations, mode, recognition)` 依辨識結果的 `kind` 判斷貼上的網址是否屬於另一個對話框，所以來源冷卻使頻道預覽 `unavailable` 時仍提供切換；`unsupported` 的辨識結果（類型認得網址，但找不到該種類的對象，例如不存在的頻道、沒有 feed 的網頁）不提供切換。
 
 ## 頁面
 
@@ -42,7 +42,7 @@ App Shell 負責側欄的頂層頁面（訂閱、文件、工作、記錄，設�
 
 ## 畫面與變動串流
 
-視窗以一條 `/api/events` 事件連線接收變動。每個畫面以 `src/transport/web/use-changes.ts` 的 `useChanges` 宣告哪些變動會讓它的資料過時；過時後的重讀距離上一次至少 `READ_GAP_MS`，期間來的變動合併成一次重讀。讀取進行中來的變動不取消它，等它回來後再讀一次（`change-read.ts`），所以變動來得比讀取快時，畫面仍能顯示一次完整的結果；畫面要的資料改變（例如換頁或換篩選）時才取消進行中的讀取。
+視窗以一條 `/api/events` 事件連線接收變動。每個畫面以 `src/transport/web/infra/use-changes.ts` 的 `useChanges` 宣告哪些變動會讓它的資料過時；過時後的重讀距離上一次至少 `READ_GAP_MS`，期間來的變動合併成一次重讀。讀取進行中來的變動不取消它，等它回來後再讀一次（`change-read.ts`），所以變動來得比讀取快時，畫面仍能顯示一次完整的結果；畫面要的資料改變（例如換頁或換篩選）時才取消進行中的讀取。
 
 事件連線斷了再接上（伺服器重啟、睡眠喚醒、網路中斷），或瀏覽器回報網路恢復時，開著的畫面全部重新讀取資料，不補收期間的個別變動；重新讀取經各畫面自己的讀取，不重新載入頁面，所以輸入到一半的內容保留。斷線期間失敗的讀取由這次重新讀取補上，讀取失敗本身不會觸發重試。
 

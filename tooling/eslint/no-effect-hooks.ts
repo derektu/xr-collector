@@ -8,7 +8,7 @@ export const noEffectHooks: Rule.RuleModule = {
     docs: { description: 'Disallow useEffect and useLayoutEffect outside the UI infra folder' },
     messages: {
       effect:
-        'Screens do not use useEffect or useLayoutEffect. Handle what the user does in event handlers, compute what the screen shows while rendering, and read external state through useSyncExternalStore. See docs/code-guidelines.md, section React.',
+        'Screens do not use useEffect or useLayoutEffect. Handle what the user does in event handlers, compute what the screen shows while rendering, and read external state through useSyncExternalStore. To stay in sync with something outside React, use a hook from src/transport/web/infra/: useRead or useLiveRead to read, useTimeout or useDebouncedValue to wait, useDismiss and useFloatingPosition for menus, useMediaQuery, useLocation and useWindowEvent for browser state, showModalOnMount as a dialog ref. See docs/code-guidelines.md, section React.',
     },
     schema: [],
   },

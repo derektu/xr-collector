@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { SavedDocument } from '../../shared/documents/document-types.js';
 import { api } from './api-client.js';
 import { ApiError } from './api-error.js';
@@ -8,7 +8,8 @@ import { Icon } from './icons.js';
 import { MarkdownBody } from './MarkdownBody.js';
 import { sourcePath } from './source-presentation.js';
 import { readUntil } from './read-until.js';
-import { changeHub, useChangeRead, useChanges } from './use-changes.js';
+import { useUnmountSignal } from './infra/lifecycle.js';
+import { changeHub, useChangeRead, useChanges } from './infra/use-changes.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 type ReaderState =
@@ -35,6 +36,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
   const [deleting, setDeleting] = useState(false);
   const [recollect, setRecollect] = useState<Recollect>({ kind: 'idle' });
   const [statusChange, setStatusChange] = useState<StatusChange>({ kind: 'idle' });
+  const untilUnmount = useUnmountSignal();
   const subscriptionChanges = useChanges(['documents'], (change) => change.kind === 'subscription');
   const documentChanges = useChanges(['documents'], (change) => change.kind === 'document' && change.id === id);
 
@@ -50,24 +52,22 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
     else setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這份文件。' });
   });
 
-  useEffect(() => {
-    if (recollect.kind !== 'running') return undefined;
-    let active = true;
-    const following = new AbortController();
+  function recollectDocument(): void {
+    setRecollect({ kind: 'running' });
+    const unmounted = untilUnmount();
+    const finish = (next: Recollect) => { if (!unmounted.aborted) setRecollect(next); };
     const url = sourceUrlOfDocumentId(declarations, id);
     const type = id.slice(0, Math.max(0, id.indexOf(':')));
     const item = declarations.get(type)?.item;
-    const finish = (next: Recollect) => { if (active) setRecollect(next); };
     const awaitRecollectOutcome = (jobId: string) => readUntil(changeHub, () => api.getJob(jobId), (job) => job.state !== 'queued' && job.state !== 'running',
-      (change) => change.kind === 'job' && change.id === jobId, following.signal).then((job) => {
+      (change) => change.kind === 'job' && change.id === jobId, unmounted).then((job) => {
       if (job.state === 'completed' && (job.result?.outcome === 'created' || job.result?.outcome === 'existing')) finish({ kind: 'idle' });
       else finish({ kind: 'failed', message: job.error?.message ?? `這${item?.measureWord ?? '份'}${item?.noun ?? '文件'}沒有收集回來，請到記錄頁查看原因。` });
     });
     if (!url) finish({ kind: 'failed', message: '無法辨識這份文件的網址。' });
     else api.collect(url).then((submission) => awaitRecollectOutcome(submission.job.id))
       .catch((error: unknown) => finish({ kind: 'failed', message: error instanceof Error ? error.message : '無法重新收集，請稍後再試。' }));
-    return () => { active = false; following.abort(); };
-  }, [recollect.kind, id]);
+  }
 
   function changeStatus(document: SavedDocument): void {
     setStatusChange({ kind: 'running' });
@@ -100,7 +100,7 @@ export function Reader({ id, backLabel, onBack, onOpenSource, onDeleted }: {
       {state.kind === 'deleted' ? <section className="reader-missing" data-testid="reader-deleted">
         <h1 className="reader-title">這份文件已刪除</h1>
         {recollect.kind === 'failed' ? <p className="add-problem" role="alert">{recollect.message}</p> : null}
-        {sourceUrlOfDocumentId(declarations, id) ? <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={() => setRecollect({ kind: 'running' })}
+        {sourceUrlOfDocumentId(declarations, id) ? <button type="button" className="button primary" disabled={recollect.kind === 'running'} onClick={recollectDocument}
           data-testid="reader-recollect">{recollect.kind === 'running' ? '收集中…' : '重新收集'}</button> : null}
       </section> : null}
       {state.kind === 'error' ? <p className="documents-error" role="alert">{state.message}</p> : null}

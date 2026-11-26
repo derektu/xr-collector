@@ -27,7 +27,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 不直接用 `setTimeout`、`setInterval`（含經 `globalThis`、`window`、`global`、`self`）、`timers` 模組或 Playwright 的 `waitForTimeout`。範圍是 `src`、`tests`、`scripts` 與 `.claude/skills/verify` | lint（`xr-collector/no-timers`） |
 | 產品程式需要時間時，由呼叫端傳入計時器，例如 `activity-log.ts`、`pacing-gate.ts`、`job-manager.ts` 的 `setTimer` 選項，測試傳入自己控制的計時器 | lint 擋下直接計時；共用的時間模組尚未提供 |
 | `AbortSignal.timeout` 也是計時器，同樣禁用；外部操作的期限由呼叫端持有並傳入的 `AbortController` 中止，測試自己 abort | lint |
-| 畫面等使用者的計時（停止打字後再查、通知自動消失、hover 延遲關閉） | lint 擋下直接計時；`src/transport/web/infra/` 的共用 hook 尚未提供 |
+| 畫面等使用者的計時（停止打字後再查、通知自動消失、hover 延遲關閉）用 `src/transport/web/infra/timing.ts` 的 `useDebouncedValue`、`useTimeout` | lint 擋下直接計時 |
 | 測試的等待方式見 [專案驗證設定](project-validation.md#自動檢查) | lint 擋下睡眠；`tests/tooling/test-waits.test.ts` 擋下直接輪詢與個別上限 |
 | verify skill 的腳本經 `.claude/skills/verify/scripts/lib/wait.mjs` 等待 | lint |
 
@@ -41,7 +41,20 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 |---|---|
 | 不用 `useEffect`、`useLayoutEffect`（從 `react` named import，或 `React.useEffect` 這類屬性存取）。只有 `src/transport/web/infra/` 可以用，並受 `eslint-plugin-react-hooks` 的 `rules-of-hooks` 與 `exhaustive-deps` 檢查 | lint（`xr-collector/no-effect-hooks`） |
 | 使用者觸發的事在 event handler 裡處理；畫面顯示的值在 render 時算出 | review |
-| 跟外部狀態同步用 `useSyncExternalStore` | review；infra 的共用 hook 尚未提供 |
+| 跟外部狀態同步用 `useSyncExternalStore`；媒體查詢與網址用 `infra/browser-state.ts` 的 `useMediaQuery`、`useLocation`，改網址經同檔的 `writeHistory` | review |
+| 跟著輸入或網址變的草稿，在 render 時比對上一次的輸入，不同就重設 state（記下上一次的值，不用 `key` 重掛元件）；從讀取結果算得出的值在 render 時算 | review |
+| 對話框以 `infra/dialog.ts` 的 `showModalOnMount` 當 ref，在掛上 DOM 時 `showModal()`；開啟時焦點落在標了 `data-initial-focus` 的元素，沒有標的落在第一個可聚焦的元素。受控的對話框只在開啟時 render | review |
+
+畫面需要跟外部同步時，用 `src/transport/web/infra/` 提供的 hook：
+
+| hook | 用途 |
+|---|---|
+| `useLiveRead`、`useChangeRead`、`useChanges`、`useChangeStream`（`use-changes.ts`） | 讀取會隨 `/api/events` 變動而過時的資料 |
+| `useRead`（`use-read.ts`） | 依參數讀一次；參數改變或卸載時中止，過期的回應丟棄；回傳 `value`、`error`、`pending` |
+| `useDebouncedValue`、`useTimeout`（`timing.ts`） | 停止輸入後才用的值；延遲執行，`ms` 為 `null` 時不計時，`restartKey` 改變時重新計時 |
+| `useDismiss`（`dismiss.ts`） | 開啟中的選單或說明卡在外面按下指標或按 Esc 時關閉 |
+| `useFloatingPosition`、`menuPlace`（`floating-position.ts`） | 以視窗座標放置浮動元素，捲動或縮放視窗時跟著錨點移動 |
+| `useWindowEvent`、`useDesktopNavigation`、`useUnmountSignal`、`useFocusAfterChange`（`lifecycle.ts`） | 視窗事件、桌面端導覽通知、卸載時中止 event handler 啟動的工作、換頁後移動焦點 |
 
 ## Comment
 

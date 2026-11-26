@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useRef, useState, type MouseEvent } from 'react';
 import { DOCUMENT_ADD_ITEMS, type AddMode } from './add-menu.js';
 import { AddMenu } from './AddMenu.js';
 import { ConfirmDeleteDocument } from './ConfirmDeleteDocument.js';
@@ -28,8 +28,10 @@ import {
   type DocumentListState,
 } from './document-presentation.js';
 import { isAppHistoryState, type AppHistoryState } from './history-navigation.js';
-import { useChangeRead, useChanges } from './use-changes.js';
-import { useFloatingMenu } from './floating-menu.js';
+import { useDismiss } from './infra/dismiss.js';
+import { menuPlace, useFloatingPosition } from './infra/floating-position.js';
+import { useTimeout } from './infra/timing.js';
+import { useChangeRead, useChanges } from './infra/use-changes.js';
 import { Icon } from './icons.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
@@ -79,19 +81,20 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
   const sourceKey = sourceParam(state.source);
   const restoreScroll = useRef<number | null>(isListHistoryState(window.history.state) ? window.history.state.documentsScroll ?? null : null);
 
-  useEffect(() => { setDraft((current) => draftForQuery(current, state.query)); }, [state.query]);
+  const [draftQuery, setDraftQuery] = useState(state.query);
+  if (draftQuery !== state.query) {
+    setDraftQuery(state.query);
+    setDraft(draftForQuery(draft, state.query));
+  }
 
   useChangeRead(sourceChanges, [edits], (signal) => api.documentSources(signal), (outcome) => {
     if ('value' in outcome) setSources(outcome.value);
     else setLoadError(outcome.error instanceof Error ? outcome.error.message : '無法讀取頻道清單。');
   });
 
-  useEffect(() => {
-    const query = trimSearchQueryWhitespace(draft);
-    if (query === state.query) return undefined;
-    const timer = setTimeout(() => onState({ query, source: parseSourceParam(sourceKey), status: state.status, page: 1 }), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [draft, state.query, sourceKey, state.status, onState]);
+  const typedQuery = trimSearchQueryWhitespace(draft);
+  useTimeout(() => onState({ query: typedQuery, source: parseSourceParam(sourceKey), status: state.status, page: 1 }),
+    typedQuery === state.query ? null : SEARCH_DEBOUNCE_MS, typedQuery);
 
   useChangeRead(listChanges, [state.query, sourceKey, state.status, state.page, edits], async (signal) => {
     const filter = { ...sourceFilter(parseSourceParam(sourceKey)), ...(state.status ? { status: state.status } : {}) };
@@ -123,18 +126,19 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
     const { rows, total } = outcome.value.results;
     const page = pageWithRows(state.page, rows.length, total);
     if (page !== state.page) { onState({ ...state, page }); return; }
+    if (rows.length === 0) restoreScroll.current = null;
     setResults(outcome.value.results);
     setSearchProblem(outcome.value.problem);
     setLoadError(null);
     setLoading(false);
   });
 
-  useLayoutEffect(() => {
-    if (!results || restoreScroll.current === null) return;
+  const restoreScrollOnList = useCallback((list: HTMLOListElement | null) => {
+    if (!list || restoreScroll.current === null) return;
     const element = scroller();
     if (element) element.scrollTop = restoreScroll.current;
     restoreScroll.current = null;
-  }, [results, scroller]);
+  }, [scroller]);
 
   function open(event: MouseEvent<HTMLAnchorElement>, id: string): void {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
@@ -222,7 +226,7 @@ export function Documents({ state, offline, scroller, onState, onOpen, onNavigat
         : <h3>這個頻道目前沒有文件</h3>}
     </section> : null}
 
-    {results && results.rows.length > 0 ? <ol className="document-list" data-testid="document-list">
+    {results && results.rows.length > 0 ? <ol ref={restoreScrollOnList} className="document-list" data-testid="document-list">
       {results.rows.map(({ document, excerpt, snippet }) => <li key={document.id} className="document-item">
         <a className="document-row" href={readerPath(document.id)} onClick={(event) => open(event, document.id)}>
           <span className="document-main">
@@ -287,21 +291,13 @@ function DocumentActions({ document: item, onDeleted, onStatusChanged, onFailed 
   const menu = useRef<HTMLDivElement>(null);
   const moreButton = useRef<HTMLButtonElement>(null);
   const menuList = useRef<HTMLDivElement>(null);
-  useFloatingMenu(menuOpen, moreButton, menuList);
+  useFloatingPosition(menuOpen, moreButton, menuList, menuPlace());
+  useDismiss(menuOpen, menu, () => setMenuOpen(false));
 
   function changeStatus(): void {
     api.setDocumentStatus(item.id, item.status === 'draft' ? 'published' : 'draft')
       .then(onStatusChanged, (error: unknown) => onFailed(error instanceof Error ? error.message : '無法變更文件狀態。'));
   }
-
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-    const close = (event: Event) => { if (!menu.current?.contains(event.target as Node)) setMenuOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
-  }, [menuOpen]);
 
   return <div className="document-actions">
     <div className="menu-anchor" ref={menu}>

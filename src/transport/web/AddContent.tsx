@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { settingsErrors } from '../../shared/sources/collection-settings.js';
 import { settingsFor, subscribeWaitsForSettings, type ChosenSettings } from './add-content.js';
 import type { RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../../shared/sources/source-info-types.js';
@@ -6,19 +6,15 @@ import type { SubscriptionSettings } from '../../shared/subscriptions/subscripti
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
 import { api } from './api-client.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
-import { createLatestRequest } from './latest-request.js';
+import { showModalOnMount } from './infra/dialog.js';
+import { useDebouncedValue } from './infra/timing.js';
+import { useRead } from './infra/use-read.js';
 import { Icon, SourceTypeBadge } from './icons.js';
 import { currentRecognition, initials } from './source-presentation.js';
 import { resumeSummary, subscribeSummary, targetNoun } from './subscription-presentation.js';
 import { useSourceDeclarations } from './source-declarations.js';
 
 const RECOGNIZE_DELAY_MS = 500;
-
-type Recognition =
-  | { state: 'idle' }
-  | { state: 'recognizing' }
-  | { state: 'done'; input: string; recognition: UrlRecognition }
-  | { state: 'error'; message: string };
 
 export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, onOpenSource }: {
   mode: AddMode;
@@ -28,36 +24,17 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   onOpenSource: (type: string, id: string) => void;
 }) {
   const declarations = useSourceDeclarations();
-  const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState(initialMode);
   const [url, setUrl] = useState('');
-  const [recognition, setRecognition] = useState<Recognition>({ state: 'idle' });
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ChosenSettings | null>(null);
-  const [recognitions] = useState(createLatestRequest);
-
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-    input.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const trimmed = url.trim();
-    setFailure(null);
-    if (!trimmed) { setRecognition({ state: 'idle' }); return undefined; }
-    setRecognition({ state: 'recognizing' });
-    const timer = setTimeout(() => {
-      recognitions.run((signal) => api.recognizeUrl(trimmed, signal)).then((answer) => {
-        if (answer.current) setRecognition({ state: 'done', input: trimmed, recognition: answer.value });
-      }, (error: unknown) => {
-        setRecognition({ state: 'error', message: error instanceof Error ? error.message : '無法辨識這個網址。' });
-      });
-    }, RECOGNIZE_DELAY_MS);
-    return () => { clearTimeout(timer); recognitions.cancel(); };
-  }, [url, recognitions]);
+  const typed = url.trim();
+  const settled = useDebouncedValue(typed, RECOGNIZE_DELAY_MS);
+  const read = useRead(async (signal) => ({ input: settled, recognition: await api.recognizeUrl(settled, signal) }), [settled], { enabled: settled !== '' });
+  const recognizing = typed !== '' && (typed !== settled || read.pending);
+  const recognitionError = typed !== '' && !recognizing && read.error ? (read.error instanceof Error ? read.error.message : '無法辨識這個網址。') : null;
 
   async function perform(action: RecognitionAction, found: UrlRecognition): Promise<void> {
     setBusy(true);
@@ -78,7 +55,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     input.current?.focus();
   }
 
-  const answer = currentRecognition(recognition.state === 'done' ? recognition : null, url);
+  const answer = recognizing || recognitionError ? null : currentRecognition(read.value, url);
   const found = answer?.recognition ?? null;
   const mismatch = found ? addMismatch(declarations, mode, found) : null;
   const unsupported = found !== null && !mismatch && isUnsupportedUrl(found);
@@ -93,9 +70,9 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     if (primary && found && !busy && !invalidSettings) void perform(primary, found);
   }
 
-  return <dialog ref={dialog} className="add-dialog" aria-labelledby="add-dialog-title" data-testid="add-dialog"
+  return <dialog ref={showModalOnMount} className="add-dialog" aria-labelledby="add-dialog-title" data-testid="add-dialog"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
-    onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
+    onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <form className="add-body" onSubmit={submit}>
       <div className="dialog-titlebar">
         <h2 id="add-dialog-title" data-testid="add-dialog-title">{addDialogTitles(declarations)[mode]}</h2>
@@ -103,10 +80,10 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
       </div>
       <label className="field-label" htmlFor="add-url">網址</label>
       <input ref={input} id="add-url" className="url-input" type="text" inputMode="url" value={url} autoComplete="off" spellCheck={false}
-        placeholder={addPlaceholder(declarations, mode)} onChange={(event) => setUrl(event.target.value)} data-testid="add-url" />
+        placeholder={addPlaceholder(declarations, mode)} onChange={(event) => { setUrl(event.target.value); setFailure(null); }} data-testid="add-url" data-initial-focus />
 
-      {recognition.state === 'recognizing' ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
-      {recognition.state === 'error' ? <p className="add-problem" role="alert">{recognition.message}</p> : null}
+      {recognizing ? <p className="add-status" role="status"><span className="spinner" aria-hidden="true" />正在辨識網址…</p> : null}
+      {recognitionError ? <p className="add-problem" role="alert">{recognitionError}</p> : null}
       {mismatch ? <div className="add-mismatch" role="alert" data-testid="add-mismatch">
         <p>{mismatch.message}</p>
         <button type="button" className="button small" onClick={() => switchMode(mismatch.switchTo)} data-testid="add-switch">{mismatch.action}</button>

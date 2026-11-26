@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useImperativeHandle, useRef, useState, type Ref } from 'react';
+import { flushSync } from 'react-dom';
 import type { TransferStatus } from '../../shared/vault/vault-types.js';
 import { api } from './api-client.js';
-import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress } from './VaultExchange.js';
-import { useLiveRead } from './use-changes.js';
+import { errorText, ExchangeActions, followTransfer, Modal, PathField, Progress, useTransferProgress, type ChosenPathWork } from './VaultExchange.js';
+import { useLiveRead } from './infra/use-changes.js';
+import { useRead } from './infra/use-read.js';
 import { fileName, relocationPhase, revealLabel, switchesVault, transferRunning } from './transfer-presentation.js';
 import { failureNotInPreview, NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 
@@ -17,6 +19,7 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
   const [open, setOpen] = useState<Open | null>(null);
   const { value: status } = useLiveRead(['transfer'], (signal) => api.vaultTransferStatus(signal), [], { enabled: !open });
   const [problem, setProblem] = useState<string | null>(null);
+  const chosenVault = useRef<ChosenPathWork>(null);
   const current = status?.vaultPath ?? vaultPath;
   const unavailable = status?.relocationUnavailable ?? null;
   const running = switchesVault(status) && transferRunning(status);
@@ -31,7 +34,10 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
     if (!desktop) { setOpen({ kind: 'open' }); return; }
     try {
       const source = await desktop.chooseVault((await api.getVaultSetup()).newVault.location);
-      if (source) setOpen({ kind: 'open', source });
+      if (source) {
+        flushSync(() => setOpen({ kind: 'open', source }));
+        chosenVault.current?.start();
+      }
     } catch (error) {
       setProblem(`無法開啟資料夾選擇視窗：${errorText(error, '請稍後再試。')}`);
     }
@@ -62,7 +68,7 @@ export function VaultLocationSection({ vaultPath, counts, onNotice }: {
     {running && !open && status ? <p className="transfer-progress vault-switching" role="status" data-testid="vault-switching">
       <span className="spinner" aria-hidden="true" />{status.message}</p> : null}
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
-    {open?.kind === 'open' && current ? <OpenOtherDialog {...(open.source ? { source: open.source } : {})} onClose={close} /> : null}
+    {open?.kind === 'open' && current ? <OpenOtherDialog ref={chosenVault} {...(open.source ? { source: open.source } : {})} onClose={close} /> : null}
     {open?.kind === 'create' && current ? <CreateDialog onClose={close} /> : null}
   </section>;
 }
@@ -105,17 +111,17 @@ type NewVaultForm = { loaded: false } | { loaded: true; name: string; location: 
 
 function CreateDialog({ onClose }: { onClose: (switched: boolean) => void }) {
   const desktop = window.xrCollectorDesktop;
-  const [form, setForm] = useState<NewVaultForm>({ loaded: false });
+  const defaults = useRead((signal) => api.getVaultSetup(signal), []);
+  const [edited, setForm] = useState<{ name: string; location: string } | null>(null);
+  const form: NewVaultForm = edited ? { loaded: true, ...edited }
+    : defaults.value ? { loaded: true, name: defaults.value.newVault.name, location: defaults.value.newVault.location } : { loaded: false };
   const { check, checking } = useNewVaultCheck(form.loaded ? form.location : '', form.loaded ? form.name : '', form.loaded);
-  const { phase, outcome, failure, progress, start, setFailure } = useRelocation();
+  const relocation = useRelocation();
+  const { phase, outcome, progress, start, setFailure } = relocation;
+  const failure = relocation.failure ?? (defaults.error ? errorText(defaults.error, '無法讀取預設位置。') : null);
 
-  useEffect(() => {
-    api.getVaultSetup().then((setup) => setForm({ loaded: true, name: setup.newVault.name, location: setup.newVault.location }))
-      .catch((error: unknown) => setFailure(errorText(error, '無法讀取預設位置。')));
-  }, []);
-
-  const setName = (name: string) => { setFailure(null); setForm((current) => (current.loaded ? { ...current, name } : current)); };
-  const setLocation = (location: string) => { setFailure(null); setForm((current) => (current.loaded ? { ...current, location } : current)); };
+  const setName = (name: string) => { setFailure(null); if (form.loaded) setForm({ name, location: form.location }); };
+  const setLocation = (location: string) => { setFailure(null); if (form.loaded) setForm({ name: form.name, location }); };
 
   async function chooseLocation(): Promise<void> {
     try {
@@ -147,7 +153,7 @@ function CreateDialog({ onClose }: { onClose: (switched: boolean) => void }) {
   </Modal>;
 }
 
-function OpenOtherDialog({ source: chosen, onClose }: { source?: string; onClose: (switched: boolean) => void }) {
+function OpenOtherDialog({ source: chosen, onClose, ref }: { source?: string; onClose: (switched: boolean) => void; ref: Ref<ChosenPathWork> }) {
   const [source, setSource] = useState(chosen ?? '');
   const [looking, setLooking] = useState(false);
   const { phase, outcome, failure, progress, start, setFailure } = useRelocation();
@@ -166,9 +172,7 @@ function OpenOtherDialog({ source: chosen, onClose }: { source?: string; onClose
     }
   }
 
-  useEffect(() => {
-    if (chosen) void open(chosen);
-  }, [chosen]);
+  useImperativeHandle(ref, () => ({ start: () => { if (chosen) void open(chosen); } }));
 
   const typing = phase === 'input' && !chosen;
   return <Modal title="開啟既有知識庫" {...(typing ? { width: 'form' as const } : {})} busy={phase === 'running'} onDismiss={() => onClose(phase === 'done')} testId="open-vault-dialog">

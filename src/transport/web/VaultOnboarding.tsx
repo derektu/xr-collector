@@ -1,9 +1,9 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { PackageDescription, VaultSetupRequest, VaultSetupResult, VaultSetupStatus } from '../../shared/vault/vault-types.js';
 import { BuildInfoCard } from './BuildInfoCard.js';
 import { api } from './api-client.js';
 import { ApiError } from './api-error.js';
-import { useLiveRead } from './use-changes.js';
+import { useChangeRead, useChanges } from './infra/use-changes.js';
 import { failureNotInPreview, NewVaultFields, useNewVaultCheck } from './NewVaultFields.js';
 import { OnboardingHome, OnboardingStep, PackageRow } from './Onboarding.js';
 
@@ -26,10 +26,10 @@ export function VaultOnboarding({ status, onStatus, onReady }: {
   const desktop = window.xrCollectorDesktop;
   const pathEntry = desktop ? 'dialog' : 'manual';
 
-  const { value: setup } = useLiveRead(['vaultSetup'], (signal) => api.getVaultSetup(signal), [], { enabled: !busy });
-  useEffect(() => {
-    if (!busy && setup?.state === 'ready') onStatus(setup);
-  }, [setup, busy, onStatus]);
+  const setupChanges = useChanges(['vaultSetup']);
+  useChangeRead(setupChanges, [], (signal) => api.getVaultSetup(signal), (outcome) => {
+    if ('value' in outcome && outcome.value.state === 'ready') onStatus(outcome.value);
+  }, !busy);
 
   async function run(request: VaultSetupRequest): Promise<void> {
     setBusy(true);

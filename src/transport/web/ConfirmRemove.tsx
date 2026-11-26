@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { SubscriptionEntry } from '../../shared/subscriptions/subscription-types.js';
 import { api } from './api-client.js';
+import { showModalOnMount } from './infra/dialog.js';
 import { asksAboutDocuments, removeChoices, removedMessage } from './subscription-presentation.js';
 
 export function ConfirmRemove({ source, onCancel, onRemoved }: {
@@ -8,15 +9,9 @@ export function ConfirmRemove({ source, onCancel, onRemoved }: {
   onCancel: () => void;
   onRemoved: (message: string) => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [documents, setDocuments] = useState<'keep' | 'delete'>('keep');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-  }, []);
 
   async function remove(): Promise<void> {
     setBusy(true);
@@ -30,7 +25,7 @@ export function ConfirmRemove({ source, onCancel, onRemoved }: {
     }
   }
 
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="confirm-remove-title" data-testid="confirm-remove" data-documents={source.documentCount}
+  return <dialog ref={showModalOnMount} className="confirm-dialog" aria-labelledby="confirm-remove-title" data-testid="confirm-remove" data-documents={source.documentCount}
     onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}>
     <h2 id="confirm-remove-title">移除「{source.title}」？</h2>
     {asksAboutDocuments(source) ? <fieldset className="choice-list" disabled={busy}>

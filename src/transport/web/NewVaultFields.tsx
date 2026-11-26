@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { NewVaultCheck } from '../../shared/vault/vault-types.js';
 import { api } from './api-client.js';
+import { useDebouncedValue } from './infra/timing.js';
+import { useRead } from './infra/use-read.js';
 
 const CHECK_DELAY_MS = 250;
 
@@ -9,23 +11,12 @@ function errorText(error: unknown): string {
 }
 
 export function useNewVaultCheck(location: string, name: string, enabled = true): { check: NewVaultCheck | null; checking: boolean } {
-  const [check, setCheck] = useState<NewVaultCheck | null>(null);
-  const [checking, setChecking] = useState(true);
-  useEffect(() => {
-    setChecking(true);
-    if (!enabled) return undefined;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      api.checkNewVault(location, name, controller.signal)
-        .then((result) => { setCheck(result); setChecking(false); })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted) return;
-          setCheck({ path: null, problem: errorText(error) });
-          setChecking(false);
-        });
-    }, CHECK_DELAY_MS);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [location, name, enabled]);
+  const checkedLocation = useDebouncedValue(location, CHECK_DELAY_MS);
+  const checkedName = useDebouncedValue(name, CHECK_DELAY_MS);
+  const settled = location === checkedLocation && name === checkedName;
+  const read = useRead((signal) => api.checkNewVault(checkedLocation, checkedName, signal), [checkedLocation, checkedName], { enabled: enabled && settled });
+  const check = read.error ? { path: null, problem: errorText(read.error) } : read.value;
+  const checking = !enabled || !settled || read.pending;
   return { check, checking };
 }
 

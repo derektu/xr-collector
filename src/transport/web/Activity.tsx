@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useState, type MouseEvent, type ReactNode } from 'react';
 import type {
   ActivityGroupPage,
   ActivityLogHealth,
@@ -32,7 +32,8 @@ import {
 import { api } from './api-client.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import { Icon } from './icons.js';
-import { useChangeRead, useChanges } from './use-changes.js';
+import { useChangeRead, useChanges } from './infra/use-changes.js';
+import { useRead } from './infra/use-read.js';
 import { ActivityGroupPages, type GroupPagesState } from './activity-group-pages.js';
 import { readerPath } from './document-presentation.js';
 import { jobTitle } from './job-presentation.js';
@@ -64,63 +65,48 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
   const filter = activityStateSearch({ ...state, mode: effectiveMode });
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [log, setLog] = useState<LogState | null>(null);
-  const [logError, setLogError] = useState<string | null>(null);
-  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [loadedLogError, setLogError] = useState<{ filter: string; message: string } | null>(null);
+  const [loadingOlderFilter, setLoadingOlder] = useState<string | null>(null);
+  const [logFilter, setLogFilter] = useState(filter);
+  if (logFilter !== filter) {
+    setLogFilter(filter);
+    setLog(null);
+    setLogError(null);
+  }
   const [filteredJob, setFilteredJob] = useState<JobView | null>(null);
-  const logGeneration = useRef(0);
   const subscriptionChanges = useChanges(['subscriptions']);
   const logChanges = useChanges(['activity']);
   const jobChanges = useChanges(['jobs']);
-  const logFlight = useRef<{ filter: string; again: boolean } | null>(null);
+  const logError = loadedLogError?.filter === filter ? loadedLogError.message : null;
+  const loadingOlder = loadingOlderFilter === filter;
 
   useChangeRead(subscriptionChanges, [], (signal) => api.listSubscriptions(signal), (outcome) => {
     if ('value' in outcome) setSubscriptions(outcome.value.subscriptions);
   });
 
-  const currentFilter = useRef(filter);
-  currentFilter.current = filter;
-  useEffect(() => {
-    logGeneration.current += 1;
-    logFlight.current = null;
-    setLog(null);
+  useChangeRead(logChanges, [filter], async (signal) => {
+    const query = activityQuery(state, new Date());
+    const page = effectiveMode === 'summary'
+      ? await api.activitySummary({ ...query, limit: LOG_PAGE }, signal)
+      : await api.activity({ ...query, limit: LOG_PAGE }, signal);
+    return { filter, page };
+  }, (outcome) => {
+    if (!('value' in outcome)) {
+      setLogError({ filter, message: outcome.error instanceof Error ? outcome.error.message : '無法讀取記錄。' });
+      return;
+    }
+    const { filter: requested, page } = outcome.value;
+    setLog((previous) => {
+      const loaded = previous?.filter === requested ? previous : null;
+      if (page.view === 'raw') {
+        return loaded ? { ...loaded, events: mergeNewest(loaded.events, page.events), health: page.log }
+          : { filter: requested, events: page.events, entries: [], nextCursor: page.nextCursor, health: page.log };
+      }
+      const merged = loaded ? mergeSummary(loaded, page) : page;
+      return { filter: requested, events: [], entries: merged.entries, nextCursor: merged.nextCursor, health: page.log };
+    });
     setLogError(null);
-    setLoadingOlder(false);
-  }, [filter]);
-
-  useEffect(() => {
-    const requested = filter;
-    if (logFlight.current?.filter === requested) { logFlight.current.again = true; return; }
-    const load = (): void => {
-      const flight = { filter: requested, again: false };
-      logFlight.current = flight;
-      void read().then(() => {
-        if (logFlight.current !== flight) return;
-        logFlight.current = null;
-        if (flight.again) load();
-      });
-    };
-    const read = () => {
-      const query = activityQuery(state, new Date());
-      return (effectiveMode === 'summary'
-        ? api.activitySummary({ ...query, limit: LOG_PAGE })
-        : api.activity({ ...query, limit: LOG_PAGE })).then((page) => {
-        if (currentFilter.current !== requested) return;
-        setLog((previous) => {
-          const loaded = previous?.filter === requested ? previous : null;
-          if (page.view === 'raw') {
-            return loaded ? { ...loaded, events: mergeNewest(loaded.events, page.events), health: page.log }
-              : { filter: requested, events: page.events, entries: [], nextCursor: page.nextCursor, health: page.log };
-          }
-          const merged = loaded ? mergeSummary(loaded, page) : page;
-          return { filter: requested, events: [], entries: merged.entries, nextCursor: merged.nextCursor, health: page.log };
-        });
-        setLogError(null);
-      }, (error: unknown) => {
-        if (currentFilter.current === requested) setLogError(error instanceof Error ? error.message : '無法讀取記錄。');
-      });
-    };
-    load();
-  }, [filter, logChanges, effectiveMode]);
+  });
 
   const jobId = state.jobId;
   useChangeRead(jobChanges, [jobId], (signal) => (jobId ? api.getJob(jobId, signal) : Promise.resolve(null)), (outcome) => {
@@ -135,26 +121,22 @@ export function Activity({ search, onState, onOpenDocument, onOpenSource, onNoti
     if (!log?.nextCursor) return;
     const requestedFilter = filter;
     const requestedCursor = log.nextCursor;
-    const requestedGeneration = logGeneration.current;
-    setLoadingOlder(true);
+    setLoadingOlder(requestedFilter);
     try {
       const query = activityQuery(state, new Date());
       const page = effectiveMode === 'summary'
         ? await api.activitySummary({ ...query, limit: LOG_PAGE, cursor: requestedCursor })
         : await api.activity({ ...query, limit: LOG_PAGE, cursor: requestedCursor });
-      setLog((previous) => requestedGeneration === logGeneration.current
-        && previous?.filter === requestedFilter && previous.nextCursor === requestedCursor
+      setLog((previous) => previous?.filter === requestedFilter && previous.nextCursor === requestedCursor
         ? { ...previous,
           events: [...previous.events, ...(page.view === 'raw' ? page.events : [])],
           entries: [...previous.entries, ...(page.view === 'summary' ? page.entries : [])],
           nextCursor: page.nextCursor, health: page.log }
         : previous);
     } catch (error) {
-      if (requestedGeneration === logGeneration.current && currentFilter.current === requestedFilter) {
-        setLogError(error instanceof Error ? error.message : '無法讀取更早的記錄。');
-      }
+      setLogError({ filter: requestedFilter, message: error instanceof Error ? error.message : '無法讀取更早的記錄。' });
     } finally {
-      if (requestedGeneration === logGeneration.current && currentFilter.current === requestedFilter) setLoadingOlder(false);
+      setLoadingOlder((current) => (current === requestedFilter ? null : current));
     }
   }
 
@@ -361,9 +343,9 @@ function checkResultTitle(declarations: SourceDeclarations, check: ActivityGroup
 function useActivityGroupPages(groupId: string, minLevel: ActivityMinLevel): GroupPagesState & { older: () => Promise<void> } {
   const [state, setState] = useState<GroupPagesState>({ page: null, error: null, loading: false });
   const [pages] = useState(() => new ActivityGroupPages((id, query) => api.activityGroup(id, query), setState));
-  useEffect(() => {
-    void pages.show(groupId, [...severityAtLeast(minLevel)]);
-    return () => pages.close();
+  useRead((signal) => {
+    signal.addEventListener('abort', () => pages.close());
+    return pages.show(groupId, [...severityAtLeast(minLevel)]);
   }, [groupId, minLevel]);
   return { ...state, older: () => pages.older() };
 }

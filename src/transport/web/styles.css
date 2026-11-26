@@ -207,7 +207,7 @@ dialog::backdrop { background:var(--overlay); }
 .agent-connection .setting-path { margin-top:7px; color:var(--text-muted); }
 .agent-help { position:relative; display:inline-flex; }
 .agent-help-button { width:20px; height:20px; padding:0; border:1px solid var(--control-border); border-radius:50%; color:var(--secondary); background:var(--control); font-size:12px; font-weight:700; }
-.agent-help-card { z-index:30; box-sizing:border-box; padding:14px 16px; border:1px solid var(--control-border); border-radius:10px; color:var(--primary); background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); font-size:13px; line-height:1.55; }
+.agent-help-card { position:fixed; top:0; left:0; z-index:30; box-sizing:border-box; width:min(360px, calc(100vw - 24px)); max-height:calc(100vh - 24px); overflow-y:auto; padding:14px 16px; border:1px solid var(--control-border); border-radius:10px; color:var(--primary); background:var(--frame); box-shadow:0 12px 30px rgba(0,0,0,.28); font-size:13px; line-height:1.55; }
 .agent-help-card strong,.agent-help-card span { display:block; }
 .agent-help-card ol { margin:8px 0; padding-left:20px; }
 .agent-help-note { color:var(--text-muted); font-size:12px; }

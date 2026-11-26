@@ -1,7 +1,7 @@
 // Where a dropdown menu opens next to its button: below and aligned to the requested edge, above
 // when only that fits, and always inside the window.
 import { describe, expect, it } from 'vitest';
-import { menuPosition } from '../../../src/transport/web/floating-menu.js';
+import { menuPosition } from '../../../../src/transport/web/infra/floating-position.js';
 
 const viewport = { width: 1000, height: 700 };
 const menu = { width: 150, height: 120 };

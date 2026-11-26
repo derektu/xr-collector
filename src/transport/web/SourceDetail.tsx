@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useRef, useState, type MouseEvent } from 'react';
 import { settingsErrors } from '../../shared/sources/collection-settings.js';
 import type {
   CollectionSchedule,
@@ -8,7 +8,7 @@ import type {
 import type { SourceTypeInfo } from '../../shared/sources/source-info-types.js';
 import { api } from './api-client.js';
 import { ApiError } from './api-error.js';
-import { useLiveRead } from './use-changes.js';
+import { useLiveRead } from './infra/use-changes.js';
 import { CollectionSettingsFields } from './CollectionSettingsFields.js';
 import { ConfirmApplySettings } from './ConfirmApplySettings.js';
 import { ConfirmRemove } from './ConfirmRemove.js';
@@ -27,6 +27,12 @@ import { useSourceDeclarations } from './source-declarations.js';
 import { editSettingsForm, openSettingsForm, takeUnsent, type SettingsForm } from './settings-form.js';
 
 type State = { kind: 'loading' } | { kind: 'ready'; detail: Detail } | { kind: 'missing' } | { kind: 'error'; message: string };
+
+function readState({ value, error }: { value: Detail | null; error: unknown }): State {
+  if (error instanceof ApiError && error.code === 'subscription_not_found') return { kind: 'missing' };
+  if (error) return { kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' };
+  return value ? { kind: 'ready', detail: value } : { kind: 'loading' };
+}
 type Saving = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string };
 
 export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDocument, onNotice, onRemoved }: {
@@ -41,7 +47,6 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
 }) {
   const declarations = useSourceDeclarations();
   const today = new Date();
-  const [state, setState] = useState<State>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -51,18 +56,10 @@ export function SourceDetail({ type, id, sourceTypes, schedule, onBack, onOpenDo
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
   const read = useLiveRead(['subscriptions'], (signal) => api.subscriptionDetail(type, id, signal), [type, id, reload]);
-  useEffect(() => {
-    const error = read.error;
-    if (error instanceof ApiError && error.code === 'subscription_not_found') { setState({ kind: 'missing' }); return; }
-    if (error) {
-      setState({ kind: 'error', message: error instanceof Error ? error.message : '無法讀取這個訂閱。' });
-      return;
-    }
-    if (!read.value) return;
-    const detail = read.value;
-    setState({ kind: 'ready', detail });
-    setForm((current) => current?.subscriptionId === detail.subscription.id ? current : openSettingsForm(detail.subscription.id, detail.subscription.settings));
-  }, [read.value, read.error]);
+  const state = readState(read);
+  if (state.kind === 'ready' && form?.subscriptionId !== state.detail.subscription.id) {
+    setForm(openSettingsForm(state.detail.subscription.id, state.detail.subscription.settings));
+  }
 
   const back = <button type="button" className="back-link" onClick={onBack}><Icon name="back" size={15} />訂閱</button>;
   if (state.kind === 'loading') return <>{back}<p className="loading" role="status">正在讀取…</p></>;

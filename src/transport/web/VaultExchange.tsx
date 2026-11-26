@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
+import { flushSync } from 'react-dom';
 import type { ExportSuggestion, ImportMode, ImportPreview, TransferResult, TransferStatus } from '../../shared/vault/vault-types.js';
 import { api } from './api-client.js';
 import { ApiError } from './api-error.js';
 import { readUntil } from './read-until.js';
-import { changeHub, useLiveRead } from './use-changes.js';
+import { showModalOnMount } from './infra/dialog.js';
+import { changeHub, useLiveRead } from './infra/use-changes.js';
+import { useRead } from './infra/use-read.js';
 import {
   changeText, hasChanges, importApplyOutcome, localNewerText, progressText, revealLabel, sourceText, transferRunning,
   type ImportApplyOutcome,
@@ -13,10 +16,18 @@ export const errorText = (error: unknown, fallback: string) => error instanceof 
 
 type Open = { kind: 'export'; file?: { path: string; overwriteConfirmed: boolean } } | { kind: 'import'; file?: string };
 
+export interface ChosenPathWork { start(): void }
+
 export function ExchangeActions({ onNotice }: { onNotice: (message: string) => void }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const chosenPathWork = useRef<ChosenPathWork>(null);
   const desktop = window.xrCollectorDesktop;
+
+  function openWithFile(next: Open): void {
+    flushSync(() => setOpen(next));
+    chosenPathWork.current?.start();
+  }
 
   async function choose(kind: Open['kind']): Promise<void> {
     setProblem(null);
@@ -24,10 +35,10 @@ export function ExchangeActions({ onNotice }: { onNotice: (message: string) => v
     try {
       if (kind === 'export') {
         const file = await desktop.chooseExportFile();
-        if (file) setOpen({ kind, file });
+        if (file) openWithFile({ kind, file });
       } else {
         const file = await desktop.chooseImportFile();
-        if (file) setOpen({ kind, file });
+        if (file) openWithFile({ kind, file });
       }
     } catch (error) {
       setProblem(`無法開啟檔案選擇視窗：${errorText(error, '請稍後再試。')}`);
@@ -40,8 +51,8 @@ export function ExchangeActions({ onNotice }: { onNotice: (message: string) => v
       <button type="button" className="button" onClick={() => void choose('export')} data-testid="vault-export">匯出…</button>
     </div>
     {problem ? <p className="add-problem" role="alert">{problem}</p> : null}
-    {open?.kind === 'export' ? <ExportDialog file={open.file} onClose={() => setOpen(null)} /> : null}
-    {open?.kind === 'import' ? <ImportDialog file={open.file}
+    {open?.kind === 'export' ? <ExportDialog ref={chosenPathWork} file={open.file} onClose={() => setOpen(null)} /> : null}
+    {open?.kind === 'import' ? <ImportDialog ref={chosenPathWork} file={open.file}
       onClose={(imported) => { setOpen(null); if (imported) onNotice('匯入完成。'); }} /> : null}
   </>;
 }
@@ -49,12 +60,7 @@ export function ExchangeActions({ onNotice }: { onNotice: (message: string) => v
 export function Modal({ title, width, busy, onDismiss, children, testId }: {
   title: string; width?: 'form' | 'wide'; busy: boolean; onDismiss: () => void; children: ReactNode; testId: string;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-  }, []);
-  return <dialog ref={dialog} className={width ? `confirm-dialog transfer-dialog ${width}` : 'confirm-dialog transfer-dialog'}
+  return <dialog ref={showModalOnMount} className={width ? `confirm-dialog transfer-dialog ${width}` : 'confirm-dialog transfer-dialog'}
     aria-labelledby={`${testId}-title`} data-testid={testId}
     onCancel={(event) => { event.preventDefault(); if (!busy) onDismiss(); }}>
     <h2 id={`${testId}-title`}>{title}</h2>
@@ -88,22 +94,21 @@ export function PathField({ label, value, onChange, testId, hint }: {
 type PathInput = { loaded: false } | { loaded: true; path: string };
 
 function useSuggestedPath(given: string | undefined, pick: (suggestion: ExportSuggestion) => string): [PathInput, (path: string) => void] {
-  const [input, setInput] = useState<PathInput>(given === undefined ? { loaded: false } : { loaded: true, path: given });
-  useEffect(() => {
-    if (given !== undefined) return;
-    api.exportSuggestion().then((suggestion) => setInput({ loaded: true, path: pick(suggestion) }))
-      .catch(() => setInput({ loaded: true, path: '' }));
-  }, [given]);
-  return [input, (path) => setInput({ loaded: true, path })];
+  const [typed, setTyped] = useState<string | null>(null);
+  const suggestion = useRead(() => api.exportSuggestion(), [], { enabled: given === undefined });
+  const input: PathInput = typed !== null ? { loaded: true, path: typed }
+    : given !== undefined ? { loaded: true, path: given }
+      : suggestion.value ? { loaded: true, path: pick(suggestion.value) }
+        : suggestion.error ? { loaded: true, path: '' } : { loaded: false };
+  return [input, setTyped];
 }
 
-function ExportDialog({ file, onClose }: { file: { path: string; overwriteConfirmed: boolean } | undefined; onClose: () => void }) {
+function ExportDialog({ file, onClose, ref }: { file: { path: string; overwriteConfirmed: boolean } | undefined; onClose: () => void; ref: Ref<ChosenPathWork> }) {
   const [target, setTarget] = useSuggestedPath(file?.path, (suggestion) => suggestion.path);
   const [phase, setPhase] = useState<'input' | 'running' | 'exists' | 'done' | 'failed'>(file ? 'running' : 'input');
   const [result, setResult] = useState<TransferResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const progress = useTransferProgress(phase === 'running');
-  const started = useRef(false);
   const chosen = useRef('');
   const desktop = window.xrCollectorDesktop;
 
@@ -126,9 +131,7 @@ function ExportDialog({ file, onClose }: { file: { path: string; overwriteConfir
       setPhase(file ? 'failed' : 'input');
     }
   }
-  useEffect(() => {
-    if (file && !started.current) { started.current = true; void run(file.path, file.overwriteConfirmed); }
-  }, [file]);
+  useImperativeHandle(ref, () => ({ start: () => { if (file) void run(file.path, file.overwriteConfirmed); } }));
 
   return <Modal title="匯出知識庫" busy={phase === 'running'} onDismiss={onClose} testId="export-dialog">
     {phase === 'input' && target.loaded ? <>
@@ -180,7 +183,7 @@ async function applyAndFollow(id: string, how: ImportMode): Promise<{ kind: 'imp
 
 type ImportPhase = 'input' | 'comparing' | 'preview' | 'applying' | 'done' | 'partial';
 
-function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (imported: boolean) => void }) {
+function ImportDialog({ file, onClose, ref }: { file: string | undefined; onClose: (imported: boolean) => void; ref: Ref<ChosenPathWork> }) {
   const [source, setSource] = useSuggestedPath(file, (suggestion) => `${suggestion.folder}/`);
   const [phase, setPhase] = useState<ImportPhase>(file ? 'comparing' : 'input');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -189,7 +192,6 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
   const [failure, setFailure] = useState<string | null>(null);
   const [backupPath, setBackupPath] = useState<string | null>(null);
   const progress = useTransferProgress(phase === 'comparing' || phase === 'applying');
-  const started = useRef(false);
   const desktop = window.xrCollectorDesktop;
 
   async function compare(path: string): Promise<void> {
@@ -205,9 +207,7 @@ function ImportDialog({ file, onClose }: { file: string | undefined; onClose: (i
       setPhase('input');
     }
   }
-  useEffect(() => {
-    if (file && !started.current) { started.current = true; void compare(file); }
-  }, [file]);
+  useImperativeHandle(ref, () => ({ start: () => { if (file) void compare(file); } }));
 
   function showFailedApply(failed: FailedApply): void {
     setPreview(null);

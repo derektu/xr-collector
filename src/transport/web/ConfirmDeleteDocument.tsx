@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { DocumentMetadata } from '../../shared/documents/document-types.js';
 import { api } from './api-client.js';
+import { showModalOnMount } from './infra/dialog.js';
 import { ApiError } from './api-error.js';
 
 export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
@@ -8,14 +9,8 @@ export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
   onCancel: () => void;
   onDeleted: (message: string) => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-  }, []);
 
   async function remove(): Promise<void> {
     setBusy(true);
@@ -33,7 +28,7 @@ export function ConfirmDeleteDocument({ document, onCancel, onDeleted }: {
     }
   }
 
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby="confirm-delete-title" data-testid="confirm-delete-document"
+  return <dialog ref={showModalOnMount} className="confirm-dialog" aria-labelledby="confirm-delete-title" data-testid="confirm-delete-document"
     onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}>
     <h2 id="confirm-delete-title">刪除「{document.title}」？</h2>
     {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
