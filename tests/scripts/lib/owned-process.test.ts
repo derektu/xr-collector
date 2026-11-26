@@ -6,7 +6,6 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { runOwnedProcess, terminateOwnedProcessTree } from '../../../scripts/lib/owned-process.mjs';
 import { eventually } from '../../support/wait.js';
 

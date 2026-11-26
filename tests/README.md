@@ -1,6 +1,6 @@
 # 測試入口
 
-`npm run verify` 執行 lint、全部 Vitest 案例、產品程式與測試的 typecheck 與 Node／Web build；CI（`ci.yml`）在 Mac 上先 `npm run download:runtime` 再跑它，真實引擎案例一起執行。`npm test` 只跑測試，`npm run test:watch` 用於開發。測試檔由 `tests/**/*.test.ts` 收集。測試（含 `tests/support`）以 `tsconfig.tests.json` 做 typecheck（`npm run typecheck:tests`，verify 執行它，`build` 不執行），與產品程式同樣嚴格，所以呼叫產品函式漏傳必填參數時 verify 失敗；測試 import 的 `scripts/` 與 verify skill 的 `.mjs` 沒有型別宣告，該 import 標 `@ts-expect-error`。測試沒有全域的來源類型：需要來源類型的測試把 `tests/support/product-sources.ts` 的 `PRODUCT_SOURCES`（產品類型的 registry）傳給受測物件；用假類型的測試以 `productSourcesWith(...)` 或 `sourceRegistry(...)` 建自己的 registry。
+`npm run verify` 執行 lint、全部 Vitest 案例、產品程式與測試的 typecheck 與 Node／Web build；CI（`ci.yml`）在 Mac 上先 `npm run download:runtime` 再跑它，真實引擎案例一起執行。`npm test` 只跑測試，`npm run test:watch` 用於開發。測試檔由 `tests/**/*.test.ts` 收集。測試（含 `tests/support`）以 `tsconfig.tests.json` 做 typecheck（`npm run typecheck:tests`，verify 執行它，`build` 不執行），與產品程式同樣嚴格，所以呼叫產品函式漏傳必填參數時 verify 失敗；測試 import 的 `scripts/` 與 verify skill 的 `.mjs` 以 `allowJs` 從 JavaScript 推斷型別；推斷不出呼叫端需要的型別時（例如有預設值的選項物件），在該函式上以 JSDoc `@param` 寫出型別。測試沒有全域的來源類型：需要來源類型的測試把 `tests/support/product-sources.ts` 的 `PRODUCT_SOURCES`（產品類型的 registry）傳給受測物件；用假類型的測試以 `productSourcesWith(...)` 或 `sourceRegistry(...)` 建自己的 registry。
 
 ## 測試放哪裡
 

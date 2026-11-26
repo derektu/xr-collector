@@ -63,6 +63,10 @@ export function orderedStages(timer) {
     .map(({ startedAt, ...stage }) => ({ ...stage, offsetMs: Math.max(0, startedAt - timer.origin) }));
 }
 
+/**
+ * @param {Array<{ name: string, ms: number, status: string, depth: number, offsetMs: number, count?: number, bytes?: number }>} stages
+ * @param {{ totalMs?: number, title?: string }} [options]
+ */
 export function formatTimingTable(stages, { totalMs, title = 'Stage timings' } = {}) {
   const rows = stages.map((stage) => [
     `${'  '.repeat(stage.depth)}${stage.name}`,
@@ -91,7 +95,7 @@ function formatBytes(bytes) { return bytes < 1024 * 1024 ? `${(bytes / 1024).toF
  * `describe` is called after `work` settles so it can report whatever identity the run had
  * reached. A failure to write the report is printed and never replaces the work's own result.
  */
-export async function runWithTimingReport(timer, describe, work, { log = (text) => process.stderr.write(`${text}\n`) } = {}) {
+export async function runWithTimingReport(timer, describe, work, { log = (text) => { process.stderr.write(`${text}\n`); } } = {}) {
   let failure = null;
   try {
     return await work();

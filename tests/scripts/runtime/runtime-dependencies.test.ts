@@ -6,7 +6,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { prepareRuntimeDependencies } from '../../../scripts/runtime/runtime-dependencies.mjs';
 
 const roots: string[] = [];

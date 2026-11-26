@@ -6,9 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-// @ts-expect-error The build doctor is intentionally executable JavaScript.
 import { assertBuildEnvironment, checkBuildEnvironment, formatResults, hostBuildTarget } from '../../../scripts/package/build-doctor.mjs';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { checkDeveloperIdIdentity, DEVELOPER_ID_INTERMEDIATE_FIX, selectDeveloperIdIdentity } from '../../../scripts/package/mac-signing.mjs';
 
 type Responses = Record<string, string | Error>;
@@ -96,11 +94,11 @@ it('stops packaging before any work with only the missing items', async () => {
     nodeVersion: '24.1.0',
     environment: { npm_execpath: '/npm-cli.js' },
   };
-  const failure = await assertBuildEnvironment({ target: 'darwin-arm64' }, dependencies).catch((error: Error) => error);
-  expect(failure.message).toMatch(/cannot build darwin-arm64 packages yet/u);
-  expect(failure.message).toContain('.nvmrc pins 22.22.3');
-  expect(failure.message).not.toContain('Git');
-  expect(failure.message).toContain('npm run doctor:build');
+  const message = await assertBuildEnvironment({ target: 'darwin-arm64' }, dependencies).then(() => '', (error: Error) => error.message);
+  expect(message).toMatch(/cannot build darwin-arm64 packages yet/u);
+  expect(message).toContain('.nvmrc pins 22.22.3');
+  expect(message).not.toContain('Git');
+  expect(message).toContain('npm run doctor:build');
 });
 
 it('reports the runtime cache and Mac signing state without failing on either', async () => {

@@ -4,7 +4,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { parsePrepareRuntimeArguments, prepareRuntime } from '../../../scripts/runtime/prepare-runtime.mjs';
 
 it('parses the prepare command and fills the cache before installing both runtimes', async () => {

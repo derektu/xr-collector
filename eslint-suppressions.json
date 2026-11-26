@@ -1,0 +1,527 @@
+{
+  "tests/app/plugins/index.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/app/runtime/bundled-resources.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/app/runtime/collector-runtime.secret-masking.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 14
+    }
+  },
+  "tests/app/runtime/collector-runtime.source-registration.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/app/runtime/collector-runtime.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 17
+    }
+  },
+  "tests/app/runtime/fixtures/killed-runtime.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/app/runtime/vault-workspace.open.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/desktop/electron/desktop-dialogs.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/desktop/electron/login-startup.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/desktop/electron/main-window.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 5
+    }
+  },
+  "tests/desktop/electron/system-notifications.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/desktop/electron/tray.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/desktop/electron/update-check-scheduler.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/domain/activity/activity-log.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 13
+    }
+  },
+  "tests/domain/activity/activity-views.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/jobs/connectivity.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/domain/jobs/job-manager.activity.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 14
+    }
+  },
+  "tests/domain/jobs/job-manager.check-end-order.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/jobs/job-manager.pacing.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 9
+    }
+  },
+  "tests/domain/jobs/job-manager.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/domain/jobs/job-queue.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/domain/jobs/job-recovery.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 24
+    }
+  },
+  "tests/domain/pacing/pacing-gate.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 10
+    }
+  },
+  "tests/domain/search/contiguous-fragment-index.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/search/managed-transcript-search.real-engine.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/domain/search/managed-transcript-search.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/search/meilisearch-backend.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/domain/search/meilisearch-process.leftover.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/domain/search/meilisearch-process.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/search/search-lexicon.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/sources/rss/server.collection.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 7
+    }
+  },
+  "tests/domain/sources/youtube/ytdlp-capture.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 5
+    }
+  },
+  "tests/domain/subscriptions/candidates.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/domain/subscriptions/scheduler.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 15
+    }
+  },
+  "tests/domain/subscriptions/subscription-fields.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/domain/subscriptions/subscription-files.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/domain/subscriptions/subscription-service.collection.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 13
+    }
+  },
+  "tests/domain/subscriptions/subscription-service.rules.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 17
+    }
+  },
+  "tests/domain/subscriptions/subscription-service.status.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/domain/updates/update-service.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/domain/vault/collector.deletion.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/domain/vault/document-status-edit.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/domain/vault/new-vault.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/vault/vault-directory.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/domain/vault/vault-operations.exchange.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 17
+    }
+  },
+  "tests/domain/vault/vault-package.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/scripts/lib/owned-directory-lock.race.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/scripts/lib/owned-directory-lock.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/scripts/package/mac-signing.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 10
+    }
+  },
+  "tests/scripts/package/package-app.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 10
+    }
+  },
+  "tests/scripts/package/release-upload.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/scripts/runtime/runtime-dependencies.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/shared/lib/json-file.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/shared/sources/source-contract.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 17
+    }
+  },
+  "tests/shared/subscriptions/upcoming-time.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/support/exchange-fixtures.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/fake-source-plugin.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/package-fixtures.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/real-engine.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/support/require-real-engine.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/subscription-recorder.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/synthetic-youtube.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/support/youtube-sources.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/tooling/agent-skill.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/tooling/api-names.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/tooling/api-route-table.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/tooling/core-type-agnostic.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 7
+    }
+  },
+  "tests/tooling/event-catalog.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/tooling/import-layers.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 20
+    }
+  },
+  "tests/tooling/job-role.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/tooling/lint-rules.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/tooling/presentation-assertions.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 14
+    }
+  },
+  "tests/tooling/shared-type-files.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 9
+    }
+  },
+  "tests/tooling/source-registry-state.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/tooling/subscription-seam.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 5
+    }
+  },
+  "tests/tooling/terminology.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/tooling/test-paths.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 11
+    }
+  },
+  "tests/tooling/test-waits.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/tooling/vault-files-entry.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/tooling/verify-flows.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/tooling/web-bundle-node.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/tooling/web-message-branches.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/transport/server/agent-access.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 8
+    }
+  },
+  "tests/transport/server/app.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/server/app.vault-access.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/server/routes/activity.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/server/routes/changes.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 5
+    }
+  },
+  "tests/transport/server/routes/device.pacing.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/transport/server/routes/documents.status.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 5
+    }
+  },
+  "tests/transport/server/routes/documents.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/transport/server/routes/subscriptions.lifecycle.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/transport/server/routes/subscriptions.recognition.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/server/routes/subscriptions.rss.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/transport/server/routes/subscriptions.sources.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 9
+    }
+  },
+  "tests/transport/server/routes/subscriptions.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 12
+    }
+  },
+  "tests/transport/server/start.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 4
+    }
+  },
+  "tests/transport/web/activity/activity-group-pages.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/web/activity/activity-presentation.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 6
+    }
+  },
+  "tests/transport/web/adding/add-menu.planned.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/transport/web/adding/add-menu.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/transport/web/api/activity-view.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/transport/web/documents/document-presentation.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  },
+  "tests/transport/web/settings/login-startup-control.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 3
+    }
+  },
+  "tests/transport/web/sources/source-presentation.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 2
+    }
+  },
+  "tests/transport/web/sources/subscription-presentation.test.ts": {
+    "xr-collector/comment-policy": {
+      "count": 1
+    }
+  }
+}

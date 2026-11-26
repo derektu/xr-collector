@@ -7,7 +7,6 @@ import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import {
   appendBuilderTimingEvents, createStageTimer, formatTimingTable, noStageTimer, orderedStages, recordBuilderTimings, runWithTimingReport, timerEvents,
-  // @ts-expect-error The script is executable JavaScript without type declarations.
 } from '../../../scripts/lib/stage-timings.mjs';
 
 const roots: string[] = [];
@@ -71,7 +70,7 @@ it('writes the JSON report and prints the table when the work succeeds', async (
     artifacts: [{ path: 'XR-Collector-0.1.0-mac-arm64.zip', bytes: 3, sha256: 'b'.repeat(64) }] }), async () => {
     await timer.time('build', async () => { clock.advance(2_000); });
     return 'handoff';
-  }, { log: (text: string) => output.push(text) });
+  }, { log: (text: string) => { output.push(text); } });
 
   expect(result).toBe('handoff');
   const report = JSON.parse(await readFile(file, 'utf8'));
@@ -103,7 +102,7 @@ it('writes the table and JSON up to the failing stage and rethrows the original 
       await child.time('notarytool wait', async () => { clock.advance(30); throw failure; });
     });
     later = true;
-  }, { log: (text: string) => output.push(text) })).rejects.toBe(failure);
+  }, { log: (text: string) => { output.push(text); } })).rejects.toBe(failure);
 
   expect(later).toBe(false);
   const report = JSON.parse(await readFile(path.join(root, 'report.json'), 'utf8'));
@@ -123,7 +122,7 @@ it('keeps the original failure when the report cannot be written', async () => {
   const output: string[] = [];
   const failure = new Error('build failed');
   await expect(runWithTimingReport(createStageTimer(), () => ({ file: path.join(blocker, 'report.json'), command: 'package' }),
-    async () => { throw failure; }, { log: (text: string) => output.push(text) })).rejects.toBe(failure);
+    async () => { throw failure; }, { log: (text: string) => { output.push(text); } })).rejects.toBe(failure);
   expect(output.at(-1)).toMatch(/^Unable to write the stage timing report/u);
 });
 

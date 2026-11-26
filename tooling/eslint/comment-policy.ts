@@ -15,8 +15,10 @@ const EXTERNAL_PATTERN = /^\s*External:/u;
 const MESSAGES = {
   comment:
     'Code carries no comments. Explain our own code by renaming, extracting a function, adding a type or writing a test; put design reasoning in docs/. A fact about another system (a dependency, platform or protocol) that the code must follow is a `// External:` comment. See docs/code-guidelines.md, section Comment.',
+  testComment:
+    'A test file carries one header comment before the code, saying what breaks for the user (or the developer) when the test fails. Put the reason for a case in its `it` name, explain setup by naming a helper, and put a fact about another system in a `// External:` comment. See docs/code-guidelines.md, section Comment.',
   docComment:
-    'A /** */ doc comment goes only on an exported declaration of a public file, or on a public member of one: a file under src/shared, a module entry (index.ts, declarations.ts, server-entries.ts) or a file an entry re-exports with `export … from`. Not on private members or inside a function. Elsewhere, rename or add a type so the code explains itself, or move the contract to docs/. See docs/code-guidelines.md, section Comment.',
+    'A /** */ doc comment goes only on an exported declaration of a public file, or on a public member of one: a file under src/shared, a module entry (index.ts, declarations.ts, server-entries.ts) or a file an entry re-exports with `export … from`; in tests, a file under tests/support. Not on private members or inside a function. Elsewhere, rename or add a type so the code explains itself, or move the contract to docs/. See docs/code-guidelines.md, section Comment.',
   lintDirective:
     'Lint rules are not configured from code: inline eslint directives have no effect. Fix the code; when a rule needs an exception, add it to eslint.config.ts so every exception is reviewed in one place. See docs/code-guidelines.md, section 規則放在哪一層.',
   tsDirective:
@@ -93,15 +95,23 @@ function publicFiles(root: string): Set<string> {
 }
 
 export function isPublicFile(root: string, file: string): boolean {
-  const relative = path.relative(root, file).split(path.sep).join('/');
+  const relative = repoPath(root, file);
+  if (relative.startsWith('tests/')) return relative.startsWith('tests/support/');
   if (moduleOf(relative) === 'shared') return true;
   return publicFiles(root).has(relative);
 }
 
-function isLicenseHeader(comment: Comment, sourceCode: SourceCode): boolean {
+function isBeforeCode(comment: Comment, sourceCode: SourceCode): boolean {
   const firstToken = sourceCode.ast.tokens[0];
-  const beforeCode = !firstToken || (comment.range?.[1] ?? 0) <= firstToken.range[0];
-  return beforeCode && LICENSE_PATTERN.test(comment.value);
+  return !firstToken || (comment.range?.[1] ?? 0) <= firstToken.range[0];
+}
+
+function isLicenseHeader(comment: Comment, sourceCode: SourceCode): boolean {
+  return isBeforeCode(comment, sourceCode) && LICENSE_PATTERN.test(comment.value);
+}
+
+function repoPath(root: string, file: string): string {
+  return path.relative(root, file).split(path.sep).join('/');
 }
 
 function isDocComment(comment: Comment): boolean {
@@ -155,6 +165,7 @@ export const commentPolicy: Rule.RuleModule = {
   create(context) {
     const sourceCode = context.sourceCode;
     const publicFile = isPublicFile(REPO_ROOT, context.filename);
+    const testFile = repoPath(REPO_ROOT, context.filename).startsWith('tests/');
     const externalRuns = new Set<Comment>();
 
     function violation(comment: Comment, previous: Comment | undefined): MessageId | null {
@@ -172,6 +183,7 @@ export const commentPolicy: Rule.RuleModule = {
         externalRuns.add(comment);
         return null;
       }
+      if (testFile) return comment.type === 'Line' && isBeforeCode(comment, sourceCode) ? null : 'testComment';
       return 'comment';
     }
 

@@ -14,9 +14,7 @@ import {
   DEVELOPER_ID_INTERMEDIATE_FIX, RUNTIME_SIGNING_CONCURRENCY, checkDeveloperIdIdentity, describeArtifact, loadMacSigningConfiguration, mapConcurrent, notarizeAndStaple, parseProtectedEnvironment, parseUserKeychainList,
   selectDeveloperIdIdentity, signStagedMacRuntimes, signedBuilderEnvironment, validateNotarizedApplication,
   verifyDeveloperIdApplication, verifyDeveloperIdDiskImage, verifySignedRuntimeFiles, withTemporarySigningKeychain,
-  // @ts-expect-error The script is executable JavaScript without type declarations.
 } from '../../../scripts/package/mac-signing.mjs';
-// @ts-expect-error The script is executable JavaScript without type declarations.
 import { UnsafeProcessTreeError } from '../../../scripts/lib/owned-process.mjs';
 import { eventually } from '../../support/wait.js';
 
