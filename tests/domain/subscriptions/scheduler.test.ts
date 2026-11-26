@@ -21,6 +21,7 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { eventSpec } from '../../../src/shared/activity/event-catalog.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -47,10 +48,11 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
-  const collector = new Collector(documents);
+  const collector = new Collector(documents, undefined, { log: recordingLog() });
   const jobs: JobManager = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
-    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 2, capture: 4 }, retry: { maxAttempts: 1 }, ...(pause ? { pause } : {}), ...(connectivity ? { connectivity } : {}),
   });
   const scheduleStore = new MemoryScheduleStore(schedule);
@@ -58,10 +60,12 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
   const eventRecords: Array<{ eventType: string; severity: string }> = [];
   let scheduler!: CollectionScheduler;
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     autoCollection: () => scheduler.isEnabled(), resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });
   scheduler = new CollectionScheduler([channels], scheduleStore, {
+    log: recordingLog(),
     now, pollIntervalMs: 24 * 60 * MINUTE, recordEvent: (entry) => { events.push(entry.eventType); eventRecords.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }); }, ...(pause ? { pause } : {}),
   });
   const runs = vi.spyOn(channels, 'startRun');
@@ -330,6 +334,7 @@ describe('system sleep (#97)', () => {
     const entries: Array<Omit<NewJobEvent, 'vaultPath' | 'jobId'>> = [];
     const w = await world({ enabled: true }, pause);
     const scheduler = new CollectionScheduler([w.channels], w.scheduleStore, {
+      log: recordingLog(),
       now: () => w.clock.now, pollIntervalMs: 24 * 60 * MINUTE, pause, recordEvent: (entry) => entries.push(entry),
     });
     await scheduler.start();

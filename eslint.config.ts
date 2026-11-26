@@ -10,6 +10,10 @@ const ANY_MESSAGE =
 const TIMER_FILES = ['src/**', 'tests/**', 'scripts/**', '.claude/skills/verify/**'];
 const TIMER_EXCEPTIONS = ['src/shared/lib/time.ts', 'src/transport/web/infra/**', 'tests/support/**', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs'];
 const UI_INFRA_FILES = ['src/transport/web/infra/**'];
+const LOG_MODULE_FILES = ['src/domain/log/**'];
+const CONSOLE_MESSAGE =
+  'Write through the log, not the console: take a `LogWriter` (src/shared/log/log-types.ts) from the caller and call `write`. The log module (src/domain/log) prints every record to the console and keeps it in <profile>/logs; the web UI writes through `logPageProblem` (src/transport/web/api/page-log.ts). See docs/code-guidelines.md, section Log.';
+const CONSOLE_PROPERTIES = ['globalThis', 'window', 'global', 'self'].map((object) => ({ object, property: 'console', message: CONSOLE_MESSAGE }));
 
 export default [
   {
@@ -35,6 +39,14 @@ export default [
   {
     files: ['src/**', 'tests/**'],
     rules: { 'xr-collector/comment-policy': 'error' },
+  },
+  {
+    files: ['src/**'],
+    ignores: LOG_MODULE_FILES,
+    rules: {
+      'no-restricted-globals': ['error', { name: 'console', message: CONSOLE_MESSAGE }],
+      'no-restricted-properties': ['error', ...CONSOLE_PROPERTIES],
+    },
   },
   {
     files: UI_INFRA_FILES,

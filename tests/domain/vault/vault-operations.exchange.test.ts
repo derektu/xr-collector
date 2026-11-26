@@ -24,6 +24,7 @@ import { channel, cleanUp, fileOf, importFile, machine, open, seed, settings, te
 import { manifestOf, tampered, zipEntries } from '../../support/package-fixtures.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 afterEach(cleanUp);
 
@@ -55,10 +56,10 @@ async function modify(root: string, id: string, text: string, when: string) {
   await writeFile(file, `---\n${stringify(metadata, { lineWidth: 0 }).trimEnd()}\n---\n\n${body!.trim()}\n${text}\n`);
 }
 async function setStatus(root: string, id: string, status: 'draft' | 'published', when: string) {
-  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) })).setStatus(`youtube:${id}`, status);
+  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) }), undefined, { log: recordingLog() }).setStatus(`youtube:${id}`, status);
 }
 async function remove(root: string, id: string, when: string) {
-  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) })).delete(`youtube:${id}`);
+  await new Collector(new MarkdownVault(files(root), { now: () => new Date(when) }), undefined, { log: recordingLog() }).delete(`youtube:${id}`);
 }
 const store = (root: string, when?: string) => new JsonSubscriptionStore(files(root), 'youtube', when ? () => new Date(when) : undefined);
 const pauseCollection = (root: string) => new JsonScheduleStore(files(root)).save({ enabled: false });
@@ -77,7 +78,7 @@ async function exportFrom(at: Machine, name: string): Promise<string> {
   return using(at, async (workspace) => (await workspace.operations.exportTo(path.join(at.exports, `${name}.zip`))).result!.exportPath!);
 }
 
-const createNew = (at: Machine, packageFile: string) => importNewVault({ sources: PRODUCT_SOURCES, packageFile, folder: at.vault, createdBy: 'XR Collector test' });
+const createNew = (at: Machine, packageFile: string) => importNewVault({ log: recordingLog(), sources: PRODUCT_SOURCES, packageFile, folder: at.vault, createdBy: 'XR Collector test' });
 
 let base: { root: string; a: string; b: string };
 beforeAll(async () => {
@@ -546,7 +547,7 @@ describe('creating a Vault from an export file (X77-A15)', () => {
       [good, full, '已經有「Full」'], [good, empty, '已經有「Empty」'], [good, path.join(root, 'missing', 'New'), '找不到新知識庫所在的資料夾'],
       [good, 'relative', '完整路徑'],
     ] as const) {
-      await expect(importNewVault({ sources: PRODUCT_SOURCES, createdBy: 'XR Collector test', packageFile, folder }), `${packageFile} → ${folder}`)
+      await expect(importNewVault({ log: recordingLog(), sources: PRODUCT_SOURCES, createdBy: 'XR Collector test', packageFile, folder }), `${packageFile} → ${folder}`)
         .rejects.toMatchObject({ code: 'invalid_request', message: expect.stringContaining(message) });
     }
     expect(await readdir(empty)).toEqual(['.DS_Store']);

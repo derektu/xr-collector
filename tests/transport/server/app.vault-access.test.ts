@@ -159,7 +159,7 @@ const DEVICE_ROUTES: readonly string[] = [
   'POST /api/device/updates/apply', 'POST /api/device/updates/cancel',
   'GET /api/device/login-startup', 'PUT /api/device/login-startup',
   'GET /api/device/agent', 'GET /api/device/agent/connection', 'PUT /api/device/agent/port',
-  'POST /api/device/agent/key/reset', 'GET /api/device/agent/skill',
+  'POST /api/device/agent/key/reset', 'GET /api/device/agent/skill', 'GET /api/device/logs', 'POST /api/device/log',
   'GET /api/jobs', 'GET /api/jobs/summary', 'GET /api/jobs/overview', 'GET /api/jobs/:id',
   'GET /api/activity', 'GET /api/activity/groups/:groupId',
 ];

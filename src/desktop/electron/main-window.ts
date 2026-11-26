@@ -1,6 +1,7 @@
 import type { BrowserWindow, BrowserWindowConstructorOptions, WebContents } from 'electron';
 import { notificationNavigation, type NotificationTarget } from './notification-navigation.js';
 import { WindowCreationGate } from './window-creation.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export type DesktopTarget = 'jobs' | 'activity' | 'settings' | 'update'
   | { kind: 'source'; type: string; id: string } | { kind: 'message'; message: string };
@@ -15,6 +16,7 @@ export interface MainWindowOptions {
   hidden: boolean;
   size: { width: number; height: number };
   preload: string;
+  log: LogWriter;
   createWindow(options: BrowserWindowConstructorOptions): BrowserWindow;
   focusApp(): void;
   openExternal(url: string): void;
@@ -125,7 +127,7 @@ export class MainWindow {
       return;
     }
     if (!this.window) {
-      if (this.options.runtime() && !this.options.quitting()) void this.create(false).then(() => this.show()).catch((error) => console.error(error));
+      if (this.options.runtime() && !this.options.quitting()) void this.create(false).then(() => this.show()).catch((error: unknown) => this.options.log.write({ level: 'error', source: 'desktop', message: 'Unable to create the main window', error }));
       return;
     }
     this.deliverPendingNavigation();

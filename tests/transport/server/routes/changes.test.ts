@@ -14,6 +14,7 @@ import type { UpdateAccess } from '../../../../src/domain/updates/types.js';
 import { withYouTube } from '../../../support/youtube-sources.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { recordingLog } from '../../../support/log.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -108,6 +109,7 @@ async function start(options: { vault?: boolean } = {}) {
   const updates = new FakeUpdates();
   const listed: DiscoveredYouTubeVideo[] = [video('chgvideo001')];
   const runtime = await startCollectorServer({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     profilePath: root,
     ...(options.vault === false ? {} : { explicitVaultPath: path.join(root, 'vault') }),

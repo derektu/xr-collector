@@ -8,6 +8,7 @@ import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subsc
 import { protectSecret } from '../../../src/shared/lib/redact.js';
 import { NotificationCenter, type SystemNotificationAdapter } from '../../../src/domain/notifications/notification-center.js';
 import { notificationNavigation } from '../../../src/desktop/electron/notification-navigation.js';
+import { recordingLog } from '../../support/log.js';
 
 const record = (at = '2026-10-28T01:00:00.000Z'): SubscriptionRecord => ({
   id: 'channel-a', title: 'Channel A', url: 'https://example.test/a', enabled: false, addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
@@ -26,13 +27,13 @@ describe('auto-pause notification center (#136)', () => {
   it('notifies each auto-pause while on, none while off, sends no backlog, and keeps the switch after reopening', async () => {
     const root = await profile();
     const { show, adapter: system } = adapter();
-    const center = await NotificationCenter.open(root, system);
+    const center = await NotificationCenter.open(root, recordingLog(), system);
     await center.recordAutoPause('vault-a', 'youtube', record());
     expect(show).toHaveBeenCalledTimes(1);
 
     await center.update(false);
     await center.recordAutoPause('vault-a', 'youtube', record('2026-10-28T02:00:00.000Z'));
-    const reopened = await NotificationCenter.open(root, system);
+    const reopened = await NotificationCenter.open(root, recordingLog(), system);
     expect(reopened.view([]).enabled).toBe(false);
     await reopened.update(true);
     expect(show).toHaveBeenCalledTimes(1);
@@ -44,7 +45,7 @@ describe('auto-pause notification center (#136)', () => {
     ['without a desktop adapter', undefined],
     ['where the system cannot show notifications', adapter('unavailable').adapter],
   ])('sends nothing %s', async (_name, system) => {
-    const center = await NotificationCenter.open(await profile(), system);
+    const center = await NotificationCenter.open(await profile(), recordingLog(), system);
     await expect(center.recordAutoPause('vault-a', 'youtube', record())).resolves.toBeUndefined();
     expect(center.view([]).availability).toBe('unavailable');
   });
@@ -56,7 +57,7 @@ describe('auto-pause notification center (#136)', () => {
     const unsafe = record();
     unsafe.title = `Cookie: session=top-secret ${'T'.repeat(200)}`;
     unsafe.checkFailures!.error = { code: 'network_error', message: `agent ${agentToken} Authorization: Bearer abcdefghijklmnop https://example.test/?access_token=very-secret ${'E'.repeat(500)}` };
-    const center = await NotificationCenter.open(await profile(), system);
+    const center = await NotificationCenter.open(await profile(), recordingLog(), system);
     await center.recordAutoPause('vault-a', 'youtube', unsafe);
     const shown = show.mock.calls[0]![0];
     for (const secret of [agentToken, 'top-secret', 'abcdefghijklmnop', 'very-secret']) expect(JSON.stringify(shown)).not.toContain(secret);
@@ -67,7 +68,7 @@ describe('auto-pause notification center (#136)', () => {
   });
 
   it('lists the auto-paused subscriptions of the current Vault as active, and opens one only in its own Vault', async () => {
-    const center = await NotificationCenter.open(await profile(), adapter().adapter);
+    const center = await NotificationCenter.open(await profile(), recordingLog(), adapter().adapter);
     const resumed = { ...record(), enabled: true };
     const { active } = center.view([
       { vaultId: 'current-vault', sourceType: 'rss', subscription: record() },

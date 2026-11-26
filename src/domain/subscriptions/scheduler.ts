@@ -3,6 +3,7 @@ import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { PAUSE_MESSAGES, type CollectionPause } from '../../shared/jobs/collection-pause.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import { systemTimers } from '../../shared/lib/time.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 import type { CollectionSchedule, ScheduledCheck, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import type { JobSubmission } from '../../shared/jobs/job-types.js';
 
@@ -23,6 +24,7 @@ export interface ScheduledRunner {
 }
 
 export interface SchedulerOptions {
+  log: LogWriter;
   now?: () => Date;
   pollIntervalMs?: number;
   setTimer?: (poll: () => Promise<void>, ms: number) => () => void;
@@ -46,7 +48,7 @@ export class CollectionScheduler {
   constructor(
     private readonly runners: readonly ScheduledRunner[],
     private readonly store: ScheduleStore,
-    private readonly options: SchedulerOptions = {},
+    private readonly options: SchedulerOptions,
   ) {
     this.now = options.now ?? (() => new Date());
     this.pollIntervalMs = options.pollIntervalMs ?? 15_000;
@@ -59,12 +61,16 @@ export class CollectionScheduler {
         severity: 'info', eventType: inForce ? 'collection.paused' : 'collection.resumed', pauseReason: reason,
         message: inForce ? PAUSE_MESSAGES[reason].paused : PAUSE_MESSAGES[reason].resumed,
       });
-      if (!paused) void this.checkNow().catch(reportScheduleError);
+      if (!paused) void this.checkNow().catch(this.reportScheduleError);
     }) ?? null;
     this.cancelTimer ??= (this.options.setTimer ?? intervalTimer)(
-      () => this.checkNow().catch(reportScheduleError), this.pollIntervalMs);
-    void this.checkNow().catch(reportScheduleError);
+      () => this.checkNow().catch(this.reportScheduleError), this.pollIntervalMs);
+    void this.checkNow().catch(this.reportScheduleError);
   }
+
+  private readonly reportScheduleError = (error: unknown): void => {
+    this.options.log.write({ level: 'error', source: 'subscriptions', message: 'Scheduled subscription check failed', error });
+  };
 
   async close(): Promise<void> {
     this.cancelTimer?.();
@@ -168,7 +174,7 @@ export class CollectionScheduler {
     });
     for (const { runner, ids } of due) {
       await runner.startRun({ trigger: 'scheduled', subscriptionIds: ids }).catch((error: unknown) => {
-        reportScheduleError(error);
+        this.reportScheduleError(error);
         this.options.recordEvent?.({
           eventType: 'schedule.failed',
           message: error instanceof CollectorError ? `定時檢查無法派工：${error.message}` : '定時檢查無法派工。',
@@ -188,6 +194,3 @@ function intervalTimer(poll: () => Promise<void>, ms: number): () => void {
   return systemTimers.every(ms, () => { void poll(); });
 }
 
-function reportScheduleError(error: unknown): void {
-  console.error('Scheduled subscription check failed', error);
-}

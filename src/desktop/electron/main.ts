@@ -9,6 +9,7 @@ import { DESKTOP_AGENT_PORT, bundledResources } from '../../app/runtime/index.js
 import { loadBuildInfo, UpdateService } from '../../domain/updates/index.js';
 import { startCollectorServer, type CollectorServer } from '../../transport/server/index.js';
 import { backupFolder, exportFolder } from '../../domain/vault/index.js';
+import { openCollectorLog } from '../../domain/log/index.js';
 import { CloseHintRecord, hintStillRunning } from './close-hint.js';
 import { FileThemePreference } from './theme-preference.js';
 import { AppTray } from './tray.js';
@@ -37,6 +38,7 @@ let stopSleepWatch: (() => void) | null = null;
 
 const explicitProfile = process.env.XR_COLLECTOR_PROFILE;
 if (explicitProfile) app.setPath('userData', path.resolve(explicitProfile));
+const log = openCollectorLog({ folder: path.join(app.getPath('userData'), 'logs') });
 const appId = appIdOf(JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')));
 
 const validationHidden = process.env.XR_COLLECTOR_VALIDATION_HIDDEN === '1';
@@ -57,6 +59,7 @@ const mainWindow = new MainWindow({
   hidden: validationHidden,
   size: windowSize(process.env),
   preload: path.join(app.getAppPath(), 'dist', 'node', 'desktop', 'electron', 'preload.cjs'),
+  log,
   createWindow: (options) => new BrowserWindow(options),
   focusApp: () => app.focus({ steal: true }),
   openExternal: (url) => { void shell.openExternal(url); },
@@ -71,6 +74,7 @@ const mainWindow = new MainWindow({
     void hintStillRunning({
       platform: process.platform,
       record: closeHint,
+      log,
       notify: (hint) => {
         new Notification({ title: hint.title, body: hint.content }).show();
         if (validationControl) validationNotifications.push(hint);
@@ -101,7 +105,8 @@ app.whenReady().then(async () => {
   const loginStartup = new DesktopLoginStartup(loginItemAdapter, appId);
   registerPageChannels({
     ipc: ipcMain,
-    theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json')),
+    theme: new FileThemePreference(path.join(app.getPath('userData'), 'appearance.json'), log),
+    log,
     navigationReady: (sender) => mainWindow.navigationReady(sender),
   });
   const exports = exportFolder(app.getPath('documents'));
@@ -121,6 +126,7 @@ app.whenReady().then(async () => {
     profilePath: app.getPath('userData'),
     env: process.env,
     program: resources.program,
+    log,
   });
   const buildInfo = await loadBuildInfo({ packaged: app.isPackaged });
   updater = desktopUpdater({
@@ -146,6 +152,7 @@ app.whenReady().then(async () => {
   });
   runtime = await startCollectorServer({
     buildInfo,
+    log,
     profilePath: app.getPath('userData'),
     sources: sources.registry,
     pause: collectionPause,
@@ -177,7 +184,7 @@ app.whenReady().then(async () => {
   for (const event of startupUpdateEvents) runtime.recordDeviceEvent(event.severity, event.type, event.message, event.code);
   mainWindow.runtimeStarted();
   await mainWindow.open(startedAtLogin);
-  closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'));
+  closeHint = new CloseHintRecord(path.join(app.getPath('userData'), 'tray.json'), log);
   tray = new AppTray({
     serverUrl: runtime.listeners.ui.url,
     changes: runtime.changes,
@@ -185,6 +192,7 @@ app.whenReady().then(async () => {
     show: (page) => mainWindow.show(page),
     quit: () => app.quit(),
     platform: process.platform,
+    log,
   });
   if (validationControl) {
     exposeValidationControl({
@@ -201,15 +209,16 @@ app.whenReady().then(async () => {
       available: () => updateService?.status().installerAvailable === true,
     });
   }
-}).catch(async (error) => {
-  console.error(error);
+}).catch(async (error: unknown) => {
+  log.write({ level: 'error', source: 'desktop', message: 'XR Collector failed to start', error });
   try {
     await updateService?.close();
     await runtime?.close();
     runtime = null;
   } catch (cleanupError) {
-    console.error('Unable to stop the failed startup', cleanupError);
+    log.write({ level: 'error', source: 'desktop', message: 'Unable to stop the failed startup', error: cleanupError });
   }
+  await log.flushed();
   app.quit();
 });
 
@@ -223,11 +232,12 @@ function pauseForSleep(): void {
 
 function continueAfterSleep(): void {
   collectionPause.set('sleep', false);
-  void updateCheckScheduler?.wake().catch((error: unknown) => console.error('Unable to check for updates after wake', error));
+  void updateCheckScheduler?.wake().catch((error: unknown) => log.write({ level: 'error', source: 'desktop', message: 'Unable to check for updates after wake', error }));
 }
 
 async function reopenAfterFailedInstall(error: unknown): Promise<void> {
-  await updateService?.recordInstallFailure(error).catch((error: unknown) => console.error('Unable to record the failed update install', error));
+  await updateService?.recordInstallFailure(error).catch((error: unknown) => log.write({ level: 'error', source: 'desktop', message: 'Unable to record the failed update install', error }));
+  await log.flushed();
   app.relaunch();
   app.exit(0);
 }
@@ -250,12 +260,13 @@ app.on('before-quit', (event) => {
       await updateService?.close();
       await activeRuntime.close();
     } catch (error) {
-      console.error('Unable to safely close before quitting', error);
+      log.write({ level: 'error', source: 'desktop', message: 'Unable to safely close before quitting', error });
       if (installAfterQuit) {
         await reopenAfterFailedInstall(error);
         return;
       }
     }
+    await log.flushed();
     // External: The NSIS installer that quitAndInstall starts ends every process running from the install folder, forcibly after about two seconds.
     // https://github.com/electron-userland/electron-builder/blob/electron-builder%4026.15.3/packages/app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh
     if (installAfterQuit && updater) updater.quitAndInstall();

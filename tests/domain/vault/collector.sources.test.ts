@@ -9,6 +9,7 @@ import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { video } from '../../support/exchange-fixtures.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -23,7 +24,7 @@ describe('document sources', () => {
     clock.now = new Date('2026-10-02T00:00:00.000Z');
     await vault.add(transcriptDocument(video('zzzzzzzzzz1', { channelId: 'renamed-channel', channelTitle: '新名稱' })));
 
-    const sources = await new Collector(vault).sources({ youtube: { subscriptions: [] } });
+    const sources = await new Collector(vault, undefined, { log: recordingLog() }).sources({ youtube: { subscriptions: [] } });
 
     expect(sources.groups).toEqual([expect.objectContaining({
       sourceType: 'youtube',

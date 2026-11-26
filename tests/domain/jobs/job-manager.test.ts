@@ -27,6 +27,7 @@ import { transcriptOf } from '../../support/youtube-documents.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/a';
 const VAULT_ID = 'vault-id';
@@ -106,12 +107,13 @@ function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; sto
   const search = {
     index: vi.fn(async () => { if (options.failIndex) throw new Error('meilisearch down'); }),
   };
-  const records = options.records ?? memoryJobRecords(PRODUCT_SOURCES);
+  const records = options.records ?? memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() });
   const store = options.store ?? records.jobs;
   let sequence = 0;
   const manager = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
-    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
+    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search, { log: recordingLog() }), subscriptions: subs,
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.recentTargets ? { recentTarget: (type: string, url: string) => options.recentTargets!.get(type, url) } : {}),
     createId: () => `job-${++sequence}`,
@@ -312,7 +314,7 @@ describe('JobManager', () => {
   });
 
   it('lists top-level jobs newest first with a cursor and hides another Vault', async () => {
-    const records = memoryJobRecords(PRODUCT_SOURCES);
+    const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() });
     const store = records.jobs;
     const { manager, source } = setup({ records });
     source.holdCaptures = false;
@@ -322,8 +324,9 @@ describe('JobManager', () => {
     expect(manager.list({ limit: 2, cursor: first.nextCursor! })).toMatchObject({ jobs: [{ source: { id: videoId(0) } }], nextCursor: null });
 
     const other = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
-      vaultPath: '/vaults/b', vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault()), subscriptions: new SubscriptionRecorder(),
+      vaultPath: '/vaults/b', vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(new MemoryVault(), undefined, { log: recordingLog() }), subscriptions: new SubscriptionRecorder(),
     });
     expect(other.list().jobs).toEqual([]);
     expect(() => other.get(first.jobs[0]!.id)).toThrowError(expect.objectContaining({ code: 'job_not_found' }));
@@ -386,7 +389,7 @@ describe('JobStore', () => {
 
   it('persists accepted jobs and events, and marks unfinished jobs interrupted on reopen', async () => {
     directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-'));
-    const records = await openJobRecords(directory, PRODUCT_SOURCES);
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog() });
     const store = records.jobs;
     const { manager, source, collect } = setup({ records, limits: { discovery: 1, capture: 1 } });
     source.channelVideos.set('UC-STOP', videos(2, 's'));
@@ -401,7 +404,7 @@ describe('JobStore', () => {
     await store.flush();
     await records.activity.flush();
 
-    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES);
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog() });
     const reopened = reopenedRecords.jobs;
     const channelJob = reopened.get(accepted.job.id)!;
     expect(channelJob).toMatchObject({ state: 'interrupted', source: { title: '停止中的頻道' }, progress: { done: 1, created: 1 } });
@@ -423,6 +426,7 @@ describe('JobStore', () => {
     const flushTimers: Array<() => void> = [];
     let appends = 0;
     const records = await openJobRecords(directory, PRODUCT_SOURCES, {
+      log: recordingLog(),
       timers: timersAfter((ms, callback) => { if (ms === 1_000) flushTimers.push(callback); return () => undefined; }),
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
@@ -447,7 +451,7 @@ describe('JobStore', () => {
   });
 
   it('keeps interrupted jobs when finished jobs exceed the retention limit', () => {
-    const store = memoryJobRecords(PRODUCT_SOURCES).jobs;
+    const store = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() }).jobs;
     const record = (id: string, state: 'completed' | 'interrupted', minute: number): CollectionJob => ({
       id, kind: 'youtube.video', state, phase: 'capture', vaultPath: VAULT, vaultId: VAULT_ID, parentId: null,
       source: { type: 'youtube', id: null, url: watchUrl(videoId(minute)), title: null },
@@ -468,49 +472,38 @@ describe('JobStore', () => {
     const NO_EVENTS = { event: () => undefined };
     const blockWrites = async (folder: string) => { await rm(folder, { recursive: true, force: true }); await writeFile(folder, ''); };
     const allowWrites = async (folder: string) => { await rm(folder, { force: true }); await mkdir(folder); };
-    const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     it('refuses a submit with jobs_write_failed rather than accept a job a stop would lose, still starts the job, and a later submit joins it once writing works', async () => {
       directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-unwritable-'));
-      const error = quiet();
-      try {
-        const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS);
-        const { manager, source } = setup({ store });
-        await blockWrites(directory);
-        await expect(manager.submitItem('youtube', watchUrl(videoId(1)))).rejects.toMatchObject({ code: 'jobs_write_failed' });
-        await expect(store.flush()).rejects.toMatchObject({ code: 'jobs_write_failed' });
-        await source.holds.started(videoId(1));
+      const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS, recordingLog());
+      const { manager, source } = setup({ store });
+      await blockWrites(directory);
+      await expect(manager.submitItem('youtube', watchUrl(videoId(1)))).rejects.toMatchObject({ code: 'jobs_write_failed' });
+      await expect(store.flush()).rejects.toMatchObject({ code: 'jobs_write_failed' });
+      await source.holds.started(videoId(1));
 
-        await allowWrites(directory);
-        const again = await manager.submitItem('youtube', watchUrl(videoId(1)));
-        expect(again.deduplicated).toBe(true);
-        expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs.map((job: { id: string }) => job.id)).toEqual([again.job.id]);
-        source.release(videoId(1));
-        await manager.whenSettled(again.job.id);
-        await manager.close();
-      } finally {
-        error.mockRestore();
-      }
+      await allowWrites(directory);
+      const again = await manager.submitItem('youtube', watchUrl(videoId(1)));
+      expect(again.deduplicated).toBe(true);
+      expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs.map((job: { id: string }) => job.id)).toEqual([again.job.id]);
+      source.release(videoId(1));
+      await manager.whenSettled(again.job.id);
+      await manager.close();
     });
 
     it('fails a running job whose progress cannot be written, and closing still finishes', async () => {
       directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-unwritable-'));
-      const error = quiet();
-      try {
-        const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS);
-        const { manager, source } = setup({ store });
-        const id = videoId(2);
-        const submission = await manager.submitItem('youtube', watchUrl(id));
-        await source.holds.started(id);
-        await store.flush();
-        await blockWrites(directory);
-        source.release(id);
-        expect(await manager.whenSettled(submission.job.id)).toMatchObject({ state: 'failed', error: { code: 'jobs_write_failed' } });
-        await manager.close();
-        await store.close();
-      } finally {
-        error.mockRestore();
-      }
+      const store = await JobStore.open(directory, PRODUCT_SOURCES, NO_EVENTS, recordingLog());
+      const { manager, source } = setup({ store });
+      const id = videoId(2);
+      const submission = await manager.submitItem('youtube', watchUrl(id));
+      await source.holds.started(id);
+      await store.flush();
+      await blockWrites(directory);
+      source.release(id);
+      expect(await manager.whenSettled(submission.job.id)).toMatchObject({ state: 'failed', error: { code: 'jobs_write_failed' } });
+      await manager.close();
+      await store.close();
     });
   });
 
@@ -519,23 +512,19 @@ describe('JobStore', () => {
     async (contents) => {
       directory = await mkdtemp(path.join(tmpdir(), 'xr-jobs-corrupt-'));
       await writeFile(path.join(directory, 'jobs.json'), contents);
-      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      try {
-        const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => new Date('2026-10-15T01:02:03.456Z') });
-        const store = records.jobs;
-        expect(store.list(VAULT, VAULT_ID)).toEqual([]);
-        expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
-        expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);
-        expect(error).toHaveBeenCalledOnce();
+      const log = recordingLog();
+      const records = await openJobRecords(directory, PRODUCT_SOURCES, { log, now: () => new Date('2026-10-15T01:02:03.456Z') });
+      const store = records.jobs;
+      expect(store.list(VAULT, VAULT_ID)).toEqual([]);
+      expect(await readdir(directory)).toEqual(['jobs.json.corrupt-2026-10-15T01-02-03-456Z']);
+      expect(await readFile(path.join(directory, 'jobs.json.corrupt-2026-10-15T01-02-03-456Z'), 'utf8')).toBe(contents);
+      expect(log.records).toEqual([expect.objectContaining({ level: 'error', message: expect.stringContaining('jobs.json.corrupt-') })]);
 
-        const { manager, source } = setup({ records });
-        source.holdCaptures = false;
-        await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(9)))).job.id);
-        await store.flush();
-        expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs).toHaveLength(1);
-      } finally {
-        error.mockRestore();
-      }
+      const { manager, source } = setup({ records });
+      source.holdCaptures = false;
+      await manager.whenSettled((await manager.submitItem('youtube', watchUrl(videoId(9)))).job.id);
+      await store.flush();
+      expect(JSON.parse(await readFile(path.join(directory, 'jobs.json'), 'utf8')).jobs).toHaveLength(1);
     },
   );
 });

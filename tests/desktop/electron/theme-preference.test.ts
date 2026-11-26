@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FileThemePreference, isStoredTheme } from '../../../src/desktop/electron/theme-preference.js';
+import { recordingLog } from '../../support/log.js';
 
 describe('Electron device theme preference', () => {
   it('follows the system for a missing or invalid config and only stores the theme', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-theme-'));
     const file = path.join(root, 'appearance.json');
-    const preference = new FileThemePreference(file);
+    const preference = new FileThemePreference(file, recordingLog());
 
     await expect(preference.read()).resolves.toBe('system');
     await writeFile(file, '{"theme":"not-a-theme"}');
@@ -24,14 +25,14 @@ describe('Electron device theme preference', () => {
     const file = path.join(root, 'appearance.json');
     await writeFile(file, '{\n  "theme": "dark"\n}\n');
 
-    await expect(new FileThemePreference(file).read()).resolves.toBe('dark');
+    await expect(new FileThemePreference(file, recordingLog()).read()).resolves.toBe('dark');
     await expect(readFile(file, 'utf8')).resolves.toBe('{\n  "theme": "dark"\n}\n');
   });
 
   it('completes rapid writes in order and keeps the last choice', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-theme-'));
     const file = path.join(root, 'appearance.json');
-    const preference = new FileThemePreference(file);
+    const preference = new FileThemePreference(file, recordingLog());
 
     await Promise.all((['dark', 'light', 'system', 'dark', 'system'] as const).map((theme) => preference.write(theme)));
     await expect(preference.read()).resolves.toBe('system');

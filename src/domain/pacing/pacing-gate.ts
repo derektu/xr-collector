@@ -3,6 +3,7 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { PacingStatus } from '../../shared/jobs/job-types.js';
 import type { PacingDeclaration } from '../../shared/sources/source-contract.js';
 import { backgroundTimers, type Timers } from '../../shared/lib/time.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export type GatePriority = 'interactive' | 'background';
 
@@ -30,6 +31,7 @@ interface CooldownPolicy {
 const DEFAULT_COOLDOWN: CooldownPolicy = { initialMs: 5 * 60_000, maxMs: 60 * 60_000, resetAfterMs: 2 * 60 * 60_000 };
 
 export interface PacingGateOptions {
+  log: LogWriter;
   waitRangeMs?: WaitRange;
   cooldown?: Partial<CooldownPolicy>;
   statePath?: string | null;
@@ -82,6 +84,7 @@ export class PacingGate implements Pacing {
   private readonly now: () => Date;
   private readonly random: () => number;
   private readonly timers: Timers;
+  private readonly log: LogWriter;
   private readonly queue: Waiter[] = [];
   private readonly listeners = new Set<(event: PacingEvent) => void>();
   private active = false;
@@ -101,9 +104,10 @@ export class PacingGate implements Pacing {
     this.now = options.now ?? (() => new Date());
     this.random = options.random ?? Math.random;
     this.timers = options.timers ?? backgroundTimers;
+    this.log = options.log;
   }
 
-  static async open(declaration: PacingDeclaration, options: PacingGateOptions = {}): Promise<PacingGate> {
+  static async open(declaration: PacingDeclaration, options: PacingGateOptions): Promise<PacingGate> {
     const gate = new PacingGate(declaration, options);
     if (gate.statePath) {
       try {
@@ -116,7 +120,7 @@ export class PacingGate implements Pacing {
           };
         }
       } catch (error) {
-        console.warn(`Pacing state of ${gate.group} could not be read; starting without a cooldown.`, error);
+        gate.log.write({ level: 'warn', source: 'pacing', message: `Pacing state of ${gate.group} could not be read; starting without a cooldown`, error });
       }
     }
     gate.dropExpiredCooldown();
@@ -275,7 +279,7 @@ export class PacingGate implements Pacing {
 
   private emit(event: PacingEvent): void {
     for (const listener of [...this.listeners]) {
-      try { listener(event); } catch (error) { console.error(`Pacing listener of ${this.group} failed`, error); }
+      try { listener(event); } catch (error) { this.log.write({ level: 'error', source: 'pacing', message: `Pacing listener of ${this.group} failed`, error }); }
     }
   }
 
@@ -284,7 +288,7 @@ export class PacingGate implements Pacing {
     if (!statePath) return;
     const value = { ...this.stored };
     this.writing = this.writing.then(() => writeJsonFile(statePath, value)).catch((error: unknown) => {
-      console.error(`Pacing state of ${this.group} could not be saved`, error);
+      this.log.write({ level: 'error', source: 'pacing', message: `Pacing state of ${this.group} could not be saved`, error });
     });
   }
 

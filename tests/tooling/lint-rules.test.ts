@@ -86,6 +86,25 @@ describe('effect hook rules', () => {
   });
 });
 
+describe('console rule', () => {
+  it('reports console, also through global objects, everywhere in src but the log module, pointing at LogWriter', async () => {
+    for (const lintedAs of ['src/domain/jobs/report.ts', 'src/transport/web/App.tsx', 'src/desktop/electron/main.ts']) {
+      const findings = await lintFixture('console.ts', lintedAs);
+      expect(located(findings), lintedAs).toEqual([
+        'no-restricted-globals:1', 'no-restricted-properties:2', 'no-restricted-properties:3', 'no-restricted-globals:4',
+      ]);
+      expect(findings.every((finding) => finding.message.includes('`LogWriter`')), lintedAs).toBe(true);
+      expect(findings[0]?.message).toContain('docs/code-guidelines.md, section Log');
+    }
+  });
+
+  it('leaves the log module, tests and scripts alone', async () => {
+    for (const lintedAs of ['src/domain/log/collector-log.ts', 'tests/domain/jobs/report.test.ts', 'scripts/report.mjs']) {
+      expect(await lintFixture('console.ts', lintedAs), lintedAs).toEqual([]);
+    }
+  });
+});
+
 describe('type rules', () => {
   it('report any everywhere, pointing at unknown', async () => {
     for (const lintedAs of ['src/domain/jobs/parse.ts', 'tests/domain/jobs/parse.test.ts', 'vite.config.ts']) {

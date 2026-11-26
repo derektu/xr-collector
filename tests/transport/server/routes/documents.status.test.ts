@@ -20,6 +20,7 @@ import { video } from '../../../support/exchange-fixtures.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { bundledLexicon, bundledMeilisearch, REAL_ENGINE_TAG } from '../../../support/real-engine.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
+import { recordingLog } from '../../../support/log.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -70,7 +71,7 @@ async function setup(search?: Pick<TranscriptSearch, 'index'>, clock: { now: Dat
   await writeFile(filePath(root, 'handwritten'), FILE_WITHOUT_STATUS);
   const events: Array<Omit<NewJobEvent, 'vaultPath' | 'jobId'>> = [];
   const changes: Change[] = [];
-  const collector = new Collector(vault, search, { recordEvent: (entry) => events.push(entry), noteChange: (change) => changes.push(change) });
+  const collector = new Collector(vault, search, { log: recordingLog(), recordEvent: (entry) => events.push(entry), noteChange: (change) => changes.push(change) });
   return { root, vault, collector, events, changes };
 }
 
@@ -177,6 +178,7 @@ describe('document status in search', { tags: [REAL_ENGINE_TAG] }, () => {
     const search = new ManagedTranscriptSearch(
       new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(bundledLexicon) }),
       async () => Promise.all((await vault.list()).map(async (document) => (await vault.read(document.id))!)),
+      recordingLog(),
       { load: async () => ({ lastRebuiltAt: null }), save: async () => { rebuilds += 1; } },
     );
     await search.start();

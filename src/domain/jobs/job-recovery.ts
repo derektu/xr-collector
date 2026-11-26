@@ -1,6 +1,7 @@
 import { roleOf } from '../../shared/jobs/job-role.js';
 import type { SourceDeclarations } from '../../shared/sources/source-registry.js';
 import type { CollectionJob, JobError, JobRecovery, JobResult, JobStopKind, SkipReason } from '../../shared/jobs/job-types.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export const MAX_UNCLEAN_STOPS = 3;
 
@@ -14,6 +15,7 @@ function isInterrupted(job: CollectionJob): job is InterruptedJob {
 
 export interface RecoveryHost {
   sources: SourceDeclarations;
+  log: LogWriter;
   stored(): CollectionJob[];
   runs(type: string): boolean;
   stopped(type: string, id: string): Promise<SkipReason | null>;
@@ -30,7 +32,9 @@ export async function resumeInterrupted(host: RecoveryHost): Promise<void> {
     if (!roleOf(sources, job) || !host.runs(job.source.type)) unknownTypes.add(job.kind);
     else pending.push(job);
   }
-  for (const kind of unknownTypes) console.warn(`Interrupted ${kind} jobs are kept and not resumed: their source type is not available`);
+  for (const kind of unknownTypes) {
+    host.log.write({ level: 'warn', source: 'jobs', message: `Interrupted ${kind} jobs are kept and not resumed: their source type is not available` });
+  }
   pending.reverse().sort(byCreatedAtAscending);
   const repeated: JobError = { code: INTERRUPTED_REPEATEDLY, message: '工作多次在執行中被中斷，已停止自動接續。可重新提交。' };
   const skipped = new Set<string>();

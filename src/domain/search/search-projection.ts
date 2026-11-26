@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { pidFilePath } from './meilisearch-process.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export const SEARCH_INDEX_VERSION = 1;
 
@@ -13,7 +14,7 @@ export function searchDatabasePath(searchData: string, vaultRoot: string): strin
   return `${vaultPrefix(searchData, vaultRoot)}-v${SEARCH_INDEX_VERSION}`;
 }
 
-export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string }): Promise<string> {
+export async function prepareSearchDatabase(options: { searchData: string; vaultRoot: string; log: LogWriter }): Promise<string> {
   const databasePath = searchDatabasePath(options.searchData, options.vaultRoot);
   const prefix = vaultPrefix(options.searchData, options.vaultRoot);
   const current = new Set([databasePath, `${databasePath}-state.json`, pidFilePath(databasePath)].map((entry) => path.basename(entry)));
@@ -25,7 +26,7 @@ export async function prepareSearchDatabase(options: { searchData: string; vault
   try {
     for (const target of others) await rm(target, { recursive: true, force: true });
   } catch (error) {
-    console.warn('Unable to delete the search data of other index versions', error);
+    options.log.write({ level: 'warn', source: 'search', message: 'Unable to delete the search data of other index versions', error });
   }
   return databasePath;
 }

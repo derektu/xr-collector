@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { prepareSearchDatabase, searchDatabasePath } from '../../../src/domain/search/search-projection.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -23,7 +24,7 @@ it('keeps the current version of this Vault and deletes its other versions', asy
     await writeFile(file, '');
   }
 
-  expect(await prepareSearchDatabase({ searchData, vaultRoot })).toBe(current);
+  expect(await prepareSearchDatabase({ log: recordingLog(), searchData, vaultRoot })).toBe(current);
 
   expect((await readdir(profile)).sort()).toEqual([current, `${current}-state.json`, `${current}.pid`, otherVault, `${otherVault}-state.json`, path.join(profile, 'settings.json')]
     .map((entry) => path.basename(entry)).sort());

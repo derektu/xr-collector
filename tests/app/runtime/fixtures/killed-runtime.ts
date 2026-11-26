@@ -7,12 +7,14 @@ import { startCollectorServer } from '../../../../src/transport/server/collector
 import { UnavailableTranscriptSearch } from '../../../../src/domain/search/managed-transcript-search.js';
 import { withYouTube } from '../../../support/youtube-sources.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { recordingLog } from '../../../support/log.js';
 
 const [profilePath, vaultPath] = process.argv.slice(2) as [string, string];
 let holding!: () => void;
 const held = new Promise<void>((resolve) => { holding = resolve; });
 
 const runtime = await startCollectorServer({
+  log: recordingLog(),
   sources: PRODUCT_SOURCES,
   profilePath,
   explicitVaultPath: vaultPath,

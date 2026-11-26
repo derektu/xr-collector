@@ -31,6 +31,7 @@ import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '..
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const SOURCES = productSourcesWith(FAKE, FAKE2);
 
@@ -66,8 +67,8 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
   });
   const sources = { fake: new FakeSource('fake'), fake2: new FakeSource('fake2') };
   const gates = {
-    fake: await PacingGate.open(FAKE.pacing!, { now, timers: manualTimers, statePath: null }),
-    fake2: await PacingGate.open(FAKE2.pacing!, { now, timers: manualTimers, statePath: null }),
+    fake: await PacingGate.open(FAKE.pacing!, { log: recordingLog(), now, timers: manualTimers, statePath: null }),
+    fake2: await PacingGate.open(FAKE2.pacing!, { log: recordingLog(), now, timers: manualTimers, statePath: null }),
   };
   const plugins = [createFakePlugin(FAKE, sources.fake, gates.fake), createFakePlugin(FAKE2, sources.fake2, gates.fake2)];
   const indexed = new Set<string>();
@@ -77,13 +78,14 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
   };
   const schedule = new MemoryScheduleStore();
   const build = async () => {
-    const records = await openJobRecords(jobsDirectory, SOURCES, { now });
+    const records = await openJobRecords(jobsDirectory, SOURCES, { log: recordingLog(), now });
     const store = records.jobs;
     const vault = new MarkdownVault(new VaultFileWriter(root, SOURCES), { now });
-    const collector: Collector = new Collector(vault, search, { recordEvent: (entry) => jobs.recordEvent(entry) });
+    const collector: Collector = new Collector(vault, search, { log: recordingLog(), recordEvent: (entry) => jobs.recordEvent(entry) });
     const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
     let services!: Record<'fake' | 'fake2', SubscriptionService>;
     const jobs: JobManager = new JobManager({
+      log: recordingLog(),
       sources: SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, Object.values(services))), now, timers: manualTimers,
       pacing: [gates.fake, gates.fake2],
@@ -92,6 +94,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
     });
     let scheduler!: CollectionScheduler;
     const service = (type: 'fake' | 'fake2') => new SubscriptionService(type, stores[type], jobs, {
+      log: recordingLog(),
       sources: SOURCES,
       autoCollection: () => scheduler.isEnabled(),
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
@@ -101,7 +104,7 @@ async function world(options: { retry?: { maxAttempts: number; delaysMs: number[
       now,
     });
     services = { fake: service('fake'), fake2: service('fake2') };
-    scheduler = new CollectionScheduler([services.fake, services.fake2], schedule, { now, pollIntervalMs: 24 * 60 * MINUTE });
+    scheduler = new CollectionScheduler([services.fake, services.fake2], schedule, { log: recordingLog(), now, pollIntervalMs: 24 * 60 * MINUTE });
     return { records, store, vault, collector, stores, jobs, services, scheduler };
   };
   let current = await build();
@@ -319,21 +322,21 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     await closing;
     expect(w.sources.fake2.captures).toEqual(['busy-1']);
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const reopened = (await openJobRecords(w.jobsDirectory, SOURCES, { now: () => w.clock.now })).jobs;
+    const reopened = (await openJobRecords(w.jobsDirectory, SOURCES, { log: recordingLog(), now: () => w.clock.now })).jobs;
+    const log = recordingLog();
     const remaining = new FakeSource('fake');
     const manager = new JobManager({
+      log,
       sources: SOURCES,
       vaultPath: w.root, vaultId: 'vault-id', store: reopened, plugins: [createFakePlugin(FAKE, remaining)],
-      documents: new Collector(new MarkdownVault(new VaultFileWriter(w.root, SOURCES))),
+      documents: new Collector(new MarkdownVault(new VaultFileWriter(w.root, SOURCES)), undefined, { log: recordingLog() }),
     });
     await manager.resume();
     await eventually(() => expect(manager.isBusy()).toBe(false));
     expect(manager.get(job.job.id)).toMatchObject({ kind: 'fake2.item', state: 'interrupted' });
     expect(remaining.captures).toEqual([]);
     expect(w.sources.fake2.captures).toEqual(['busy-1']);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('fake2.item'));
-    warn.mockRestore();
+    expect(log.records).toEqual([expect.objectContaining({ level: 'warn', message: expect.stringContaining('fake2.item') })]);
     await manager.close();
   });
 });
@@ -419,12 +422,12 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     await new MarkdownVault(new VaultFileWriter(a.vault, SOURCES)).add(document('fake2', 'shared-2'));
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add(feed('fake', 'news'));
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ log: recordingLog(), sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(b.profile).write(created);
     expect(await items(b.vault)).toEqual(await items(a.vault));
 
     await new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) }).add(document('fake', 'b-only'));
-    await new Collector(new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) })).delete('fake2:shared-2');
+    await new Collector(new MarkdownVault(new VaultFileWriter(b.vault, SOURCES), { now: () => new Date(at(1)) }), undefined, { log: recordingLog() }).delete('fake2:shared-2');
     await new JsonSubscriptionStore(new VaultFileWriter(b.vault, SOURCES), 'fake2', () => new Date(at(1))).add(feed('fake2', 'b-feed'));
     const file = await exportFrom(b, 'b-1');
     const replacing = await machine('A-replace', root);
@@ -457,7 +460,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
     const failed = (key: string, attempts: number) => ({ itemKey: key, title: key, attempts, errorCode: 'no_subtitles', failedAt: at(1), skipped: attempts >= 3 });
     await new JsonSubscriptionStore(new VaultFileWriter(a.vault, SOURCES), 'fake').add({ ...feed('fake', 'news'), failures: [failed('news-a', 1)] });
     const first = await exportFrom(a, 'a-1');
-    const created = await importNewVault({ sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ log: recordingLog(), sources: SOURCES, packageFile: first, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(b.profile).write(created);
     const failuresIn = async (vault: string, type: string, id: string) =>
       (await new JsonSubscriptionStore(new VaultFileWriter(vault, SOURCES), type).list()).find((row) => row.id === id)?.failures;

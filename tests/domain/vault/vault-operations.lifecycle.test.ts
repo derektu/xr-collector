@@ -9,6 +9,7 @@ import { VaultOperations } from '../../../src/domain/vault/vault-operations.js';
 import { VaultSelection } from '../../../src/domain/vault/vault-selection.js';
 import { cleanUp, fakeSearch, seed, temp } from '../../support/exchange-fixtures.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 afterEach(cleanUp);
 
@@ -26,8 +27,9 @@ async function lifecycle(): Promise<Lifecycle> {
   const selection = new VaultSelection(path.join(root, 'profile'));
   const selected = () => existsSync(selection.file) ? (JSON.parse(readFileSync(selection.file, 'utf8')) as { path: string }).path : null;
   const steps: string[] = [];
-  let current: { vault: OpenedVault; search: TranscriptSearch } = { vault: await openVault(vault, PRODUCT_SOURCES), search: fakeSearch(vault) };
+  let current: { vault: OpenedVault; search: TranscriptSearch } = { vault: await openVault(vault, PRODUCT_SOURCES, recordingLog()), search: fakeSearch(vault) };
   const operations = new VaultOperations({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES, selection, exportFolder: path.join(root, 'exports'),
     backupFolder: path.join(root, 'backups'), createdBy: 'XR Collector test', machineName: '測試機', noteChange: () => undefined,
   }, {
@@ -39,7 +41,7 @@ async function lifecycle(): Promise<Lifecycle> {
     flushJobs: async () => undefined,
     reloadSchedule: async () => undefined,
     prepare: async (candidateRoot) => {
-      const candidate = { vault: await openVault(candidateRoot, PRODUCT_SOURCES), search: fakeSearch(candidateRoot) };
+      const candidate = { vault: await openVault(candidateRoot, PRODUCT_SOURCES, recordingLog()), search: fakeSearch(candidateRoot) };
       steps.push(`prepare, selection ${selected()}`);
       return {
         activate: () => {

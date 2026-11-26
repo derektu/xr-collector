@@ -5,6 +5,7 @@ import { claimLaunch, type LaunchHost } from '../../../src/desktop/electron/desk
 import { MainWindow, type WindowRuntime } from '../../../src/desktop/electron/main-window.js';
 import { registerPageChannels } from '../../../src/desktop/electron/page-channels.js';
 import { eventually } from '../../support/wait.js';
+import { recordingLog } from '../../support/log.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -69,6 +70,7 @@ const runtime: WindowRuntime = {
 
 function mainWindow(fakes: ReturnType<typeof windows>, started: () => WindowRuntime | null = () => runtime) {
   return new MainWindow({
+    log: recordingLog(),
     platform: 'darwin', hidden: false, size: { width: 1240, height: 820 }, preload: '/app/preload.cjs',
     createWindow: fakes.create, focusApp: () => undefined, openExternal: () => undefined,
     runtime: started, quitting: () => false, sessionEnded: () => undefined, closedByPerson: () => undefined,
@@ -144,6 +146,7 @@ describe('Electron main login-startup wiring', () => {
     const window = mainWindow(fakes, () => started);
     const readyListeners: ((event: { sender: WebContents }) => void)[] = [];
     registerPageChannels({
+      log: recordingLog(),
       ipc: {
         handle: () => undefined,
         on: (channel: string, listener: (event: { sender: WebContents }) => void) => { if (channel === 'xrCollector:navigation:ready') readyListeners.push(listener); },

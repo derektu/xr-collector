@@ -6,6 +6,7 @@ import { DEVELOPMENT_AGENT_PORT, bundledResources, checkoutRoot } from '../../ap
 import { loadBuildInfo } from '../../domain/updates/index.js';
 import { startCollectorServer } from './collector-server.js';
 import { backupFolder, exportFolder } from '../../domain/vault/index.js';
+import { openCollectorLog } from '../../domain/log/index.js';
 
 const projectRoot = checkoutRoot();
 const resources = bundledResources({ packaged: false, checkout: projectRoot });
@@ -13,6 +14,7 @@ const profilePath = path.resolve(process.env.XR_COLLECTOR_PROFILE ?? path.join(p
 const explicitVaultPath = process.env.XR_COLLECTOR_VAULT;
 const webRoot = path.join(projectRoot, 'dist', 'web');
 const port = Number.parseInt(process.env.XR_COLLECTOR_PORT ?? '7175', 10);
+const log = openCollectorLog({ folder: path.join(profilePath, 'logs') });
 const searchPort = process.env.XR_COLLECTOR_MEILISEARCH_PORT
   ? Number.parseInt(process.env.XR_COLLECTOR_MEILISEARCH_PORT, 10)
   : undefined;
@@ -21,10 +23,12 @@ const sources = await createSourcePlugins({
   profilePath,
   env: process.env,
   program: resources.program,
+  log,
 });
 const runtime = await startCollectorServer({
   buildInfo: await loadBuildInfo(),
   profilePath,
+  log,
   sources: sources.registry,
   workspace: {
     plugins: sources.plugins,
@@ -45,15 +49,16 @@ const runtime = await startCollectorServer({
   ...(existsSync(webRoot) ? { webRoot } : {}),
 });
 
-console.log(`XR Collector API listening at ${runtime.listeners.ui.url}`);
-console.log(`Vault: ${runtime.status().vaultPath ?? `not ready — ${runtime.status().message}`}`);
+log.write({ level: 'info', source: 'server', message: `XR Collector API listening at ${runtime.listeners.ui.url}` });
+log.write({ level: 'info', source: 'server', message: `Vault: ${runtime.status().vaultPath ?? `not ready — ${runtime.status().message}`}` });
 
 let stopping = false;
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
   try { await runtime.close(); process.exitCode = 0; }
-  catch (error) { console.error(error); process.exitCode = 1; }
+  catch (error) { log.write({ level: 'error', source: 'server', message: 'Unable to stop the server', error }); process.exitCode = 1; }
+  await log.flushed();
 }
 
 process.on('SIGINT', () => void stop());

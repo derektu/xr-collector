@@ -8,6 +8,7 @@ import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
 import type { DesktopTarget } from './main-window.js';
 import type { NotificationTarget } from './notification-navigation.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export const READ_GAP_MS = 1000;
 
@@ -18,6 +19,7 @@ export interface AppTrayOptions {
   changes: { subscribe(listener: (batch: ChangeBatch) => void): () => void };
   show(page?: Extract<DesktopTarget, string> | { notification: NotificationTarget }): void;
   quit(): void;
+  log: LogWriter;
 }
 
 export class AppTray {
@@ -108,6 +110,10 @@ export class AppTray {
     this.draw();
   }
 
+  private actionFailed(action: TrayAction, error: unknown): void {
+    this.options.log.write({ level: 'warn', source: 'desktop', message: `Tray action ${action} failed`, error });
+  }
+
   private draw(): void {
     const key = JSON.stringify(this.menu);
     if (key === this.drawn) return;
@@ -119,9 +125,9 @@ export class AppTray {
       if (item.kind === 'status') return { label: item.label, enabled: false };
       if (item.kind === 'submenu') return { label: item.label, submenu: item.items.map((child) => ({
         id: child.action, label: child.label,
-        click: () => void this.run(child.action).catch((error: unknown) => console.warn(`Tray action ${child.action} failed`, error)),
+        click: () => void this.run(child.action).catch((error: unknown) => this.actionFailed(child.action, error)),
       })) };
-      const click = () => void this.run(item.action).catch((error: unknown) => console.warn(`Tray action ${item.action} failed`, error));
+      const click = () => void this.run(item.action).catch((error: unknown) => this.actionFailed(item.action, error));
       return item.checked === undefined
         ? { id: item.action, label: item.label, click }
         : { id: item.action, label: item.label, type: 'checkbox', checked: item.checked, click };

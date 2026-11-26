@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { DeviceVaults } from '../../../src/domain/vault/index.js';
 import { createVaultDirectory } from '../../../src/domain/vault/vault-directory.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -19,7 +20,7 @@ async function device(profile = 'profile') {
   const location = path.join(root, 'location');
   await mkdir(location);
   const profilePath = path.join(root, profile);
-  return { root, location, profilePath, vaults: new DeviceVaults({ profilePath, sources: PRODUCT_SOURCES, createdBy: 'test' }) };
+  return { root, location, profilePath, vaults: new DeviceVaults({ log: recordingLog(), profilePath, sources: PRODUCT_SOURCES, createdBy: 'test' }) };
 }
 
 function failingStart(): Promise<never> {

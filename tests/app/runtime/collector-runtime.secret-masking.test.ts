@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import { protectSecret } from '../../../src/shared/lib/redact.js';
 import type { DeviceUpdateStatus } from '../../../src/shared/api/update-types.js';
@@ -12,6 +12,8 @@ import { UnavailableTranscriptSearch } from '../../../src/domain/search/managed-
 import { withYouTube } from '../../support/youtube-sources.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { QUIET_OUTPUT, recordingLog } from '../../support/log.js';
+import { openCollectorLog } from '../../../src/domain/log/index.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -42,6 +44,7 @@ describe('secrets in source errors', () => {
     let token = '';
     const leak = () => `ERROR: agent ${token} Authorization: Bearer ${BEARER} https://cdn.test/v?id=1&access_token=${PARAMETER}`;
     const runtime = await startCollectorServer({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       profilePath,
       explicitVaultPath: path.join(root, 'vault'),
@@ -145,6 +148,7 @@ describe('secrets in source errors', () => {
     };
     const runtimeOptions = {
       profilePath,
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       explicitVaultPath: path.join(root, 'vault'),
       workspace: withYouTube({
@@ -216,8 +220,6 @@ describe('secrets in source errors', () => {
     const searchKey = 'search-engine-key-296';
     protectSecret(searchKey);
     const leak = `agent ${token} search ${searchKey}`;
-    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    cleanups.push(async () => log.mockRestore());
     const listeners = new Set<() => void>();
     let update = { phase: 'idle', message: '' } as unknown as DeviceUpdateStatus;
     const updates: UpdateAccess = {
@@ -231,6 +233,7 @@ describe('secrets in source errors', () => {
       subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     };
     const runtime = await startCollectorServer({
+      log: openCollectorLog({ folder: path.join(profilePath, 'logs'), output: QUIET_OUTPUT }),
       sources: PRODUCT_SOURCES,
       profilePath,
       explicitVaultPath: path.join(root, 'vault'),
@@ -279,6 +282,6 @@ describe('secrets in source errors', () => {
       const status = await read(base, '/api/search/status');
       for (const secret of [token, searchKey, '[已遮蔽]']) expect.soft(status, `search status (${base === ui ? 'UI' : 'Agent'})`).not.toContain(secret);
     }
-    expectMasked('program log', log.mock.calls.flat().join(' '));
+    expectMasked('program log', await read(agentUrl, '/api/device/logs?level=error'));
   });
 });

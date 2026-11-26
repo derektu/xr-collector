@@ -9,11 +9,13 @@ import { checkNewVault, createNewVault, DEFAULT_VAULT_NAME, describePackage, new
 import { createVaultDirectory, inspectVaultDirectory, notAVault } from './vault-directory.js';
 import { importNewVault } from './vault-import.js';
 import { VaultSelection } from './vault-selection.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface DeviceVaultsOptions {
   profilePath: string;
   sources: SourceRegistry;
   createdBy: string;
+  log: LogWriter;
 }
 
 export type InitialVault =
@@ -77,7 +79,7 @@ export class DeviceVaults {
       root = await createNewVault(request.location, request.name, createdBy, folders);
     } else if (request.action === 'import') {
       root = await importNewVault({
-        packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, folders), createdBy, sources,
+        packageFile: request.packagePath, folder: await newVaultFolder(request.location, request.name, folders), createdBy, sources, log: this.options.log,
       });
       documentCount = (await inspectVaultDirectory(root, sources).then((inspection) => inspection.kind === 'existing' ? inspection.documentCount : 0));
     } else {
@@ -94,7 +96,7 @@ export class DeviceVaults {
     try {
       workspace = await start(root);
     } catch (error) {
-      console.error('Vault services failed to start', error);
+      this.options.log.write({ level: 'error', source: 'vault', message: 'Vault services failed to start', error });
       await discard();
       throw new CollectorError('vault_invalid', '知識庫無法啟動，請確認目錄內容與搜尋服務後重試。', { cause: error });
     }

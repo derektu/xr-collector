@@ -29,6 +29,7 @@ import { HeldCaptures } from '../../support/held-captures.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/recovery';
 const VAULT_ID = 'vault-id';
@@ -160,7 +161,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
   let indexHangs = false;
 
   async function boot(prepare: (source: ScriptedSource) => void = () => undefined): Promise<Generation> {
-    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => clock.now });
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog(), now: () => clock.now });
     const store = records.jobs;
     stores.push(records);
     const source = new ScriptedSource(script);
@@ -169,8 +170,9 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
     const search = { index: async () => { if (hangIndex) await never(); } };
     const timers: Timer[] = [];
     const manager = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search), subscriptions: subs,
+      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, search, { log: recordingLog() }), subscriptions: subs,
       limits: { discovery: 1, capture: 1, ...options.limits },
       ...(options.retry ? { retry: options.retry } : {}),
       ...(options.pause ? { pause: options.pause } : {}),
@@ -769,6 +771,7 @@ describe('the order interrupted jobs are restored in', () => {
     ]);
     const restored: string[] = [];
     await resumeInterrupted({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       stored: () => ids.map((id) => jobs.get(id)!),
       runs: () => true,
@@ -782,6 +785,7 @@ describe('the order interrupted jobs are restored in', () => {
   it('restores jobs created in the same millisecond in the reverse of the order the records come in', async () => {
     const restored: string[] = [];
     await resumeInterrupted({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       stored: () => [interrupted('first', videoId(1), 0), interrupted('second', videoId(2), 0), interrupted('third', videoId(3), 0)],
       runs: () => true,

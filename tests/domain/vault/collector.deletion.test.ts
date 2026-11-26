@@ -27,6 +27,7 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { eventSpec } from '../../../src/shared/activity/event-catalog.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const T0 = new Date('2026-10-16T00:00:00.000Z');
 const CHANNEL = 'UCdeletiontestchannel000';
@@ -102,16 +103,17 @@ async function world() {
     },
   };
   const events: Parameters<NonNullable<CollectorOptions['recordEvent']>>[0][] = [];
-  const collector = new Collector(vault, search, { recordEvent: (entry) => events.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }) });
+  const collector = new Collector(vault, search, { log: recordingLog(), recordEvent: (entry) => events.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }) });
   const subs = new SubscriptionRecorder();
   const subscription = subs.add('youtube', SUBSCRIPTION, { settings: SUBSCRIPTION.settings });
   const source = new Source();
   let sequence = 0;
 
   async function boot(): Promise<{ store: JobStore; manager: JobManager }> {
-    const store = (await openJobRecords(jobsDirectory, PRODUCT_SOURCES, { now: () => clock.now })).jobs;
+    const store = (await openJobRecords(jobsDirectory, PRODUCT_SOURCES, { log: recordingLog(), now: () => clock.now })).jobs;
     stores.push(store);
     const manager = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: subs,
       limits: { discovery: 1, capture: 1 }, now: () => clock.now, createId: () => `job-${++sequence}`,
@@ -193,7 +195,7 @@ describe('deleting a document (A1)', () => {
     directories.push(root);
     const vault = new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES));
     await vault.add(transcriptDocument(captured(vid('alpha'))));
-    const result = await new Collector(vault).delete(`youtube:${vid('alpha')}`);
+    const result = await new Collector(vault, undefined, { log: recordingLog() }).delete(`youtube:${vid('alpha')}`);
     expect(result).toMatchObject({ indexed: false, indexMessage: expect.stringContaining('搜尋服務尚未啟用') });
   });
 });

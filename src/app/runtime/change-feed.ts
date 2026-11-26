@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { formatCursor, type Change, type ChangeBatch, type ChangeCursor, type NoteChange } from '../../shared/api/changes.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export type Catchup = { kind: 'batches'; batches: ChangeBatch[] } | { kind: 'reset' };
 
 export interface ChangeFeedOptions {
+  log: LogWriter;
   now?: () => Date;
   epoch?: string;
   keepBatches?: number;
@@ -25,8 +27,10 @@ export class ChangeFeed {
   private readonly keepBatches: number;
   private readonly keepMs: number;
   private readonly defer: (publish: () => void) => void;
+  private readonly log: LogWriter;
 
-  constructor(options: ChangeFeedOptions = {}) {
+  constructor(options: ChangeFeedOptions) {
+    this.log = options.log;
     this.epoch = options.epoch ?? randomBytes(4).toString('hex');
     this.now = options.now ?? (() => new Date());
     this.keepBatches = options.keepBatches ?? KEEP_BATCHES;
@@ -56,7 +60,7 @@ export class ChangeFeed {
     this.kept.push({ ...batch, number: this.number, time: at.getTime() });
     this.prune(at.getTime());
     for (const listener of [...this.listeners]) {
-      try { listener(batch); } catch (error) { console.error('Change listener failed', error); }
+      try { listener(batch); } catch (error) { this.log.write({ level: 'error', source: 'runtime', message: 'Change listener failed', error }); }
     }
     return this.revision;
   }

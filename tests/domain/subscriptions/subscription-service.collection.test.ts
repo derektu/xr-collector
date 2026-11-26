@@ -19,6 +19,7 @@ import { transcriptDocument } from '../../../src/domain/sources/youtube/server.j
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const DAY = 24 * 60 * 60_000;
 const HOUR = 60 * 60_000;
@@ -39,18 +40,20 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
   const policy: CollectionPolicy = { ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
-  const records = options.jobsDirectory ? await openJobRecords(options.jobsDirectory, PRODUCT_SOURCES, { now }) : memoryJobRecords(PRODUCT_SOURCES, { now });
+  const records = options.jobsDirectory ? await openJobRecords(options.jobsDirectory, PRODUCT_SOURCES, { log: recordingLog(), now }) : memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now });
   const store = records.jobs;
   const build = () => {
     const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
-    const collector = new Collector(documents);
+    const collector = new Collector(documents, undefined, { log: recordingLog() });
     const jobs: JobManager = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
       retry: { maxAttempts: 1 },
     });
     const channels = new SubscriptionService('youtube', channelStore, jobs, {
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     });

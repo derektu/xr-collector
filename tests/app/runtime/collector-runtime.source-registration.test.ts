@@ -12,6 +12,7 @@ import { createFakePlugin, FAKE, FakeSource } from '../../support/fake-source-pl
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { eventually } from '../../support/wait.js';
 import { productPlugins, youtubePlugins } from '../../support/youtube-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -27,7 +28,7 @@ async function temp(): Promise<string> {
 async function options(sources: SourceRegistry, plugins: readonly SourcePlugin[]): Promise<CollectorServerOptions> {
   const root = await temp();
   return {
-    profilePath: path.join(root, 'profile'), sources, explicitVaultPath: path.join(root, 'vault'),
+    profilePath: path.join(root, 'profile'), log: recordingLog(), sources, explicitVaultPath: path.join(root, 'vault'),
     workspace: {
       plugins, searchBinary: 'unused', searchLexicon: 'unused', searchData: path.join(root, 'search'),
       exportFolder: path.join(root, 'exports'), backupFolder: path.join(root, 'backups'),

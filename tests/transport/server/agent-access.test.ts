@@ -29,6 +29,7 @@ import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { subscriptionCollection } from '../../support/subscription-collection.js';
 import { deadline } from '../../../src/shared/lib/time.js';
 import { portBelowEphemeralRange } from '../../support/ports.js';
+import { recordingLog } from '../../support/log.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -49,10 +50,11 @@ async function fixture() {
     await vault.add(transcriptDocument(capture));
   }
   const capture = vi.fn();
-  const collector = new Collector(vault);
+  const collector = new Collector(vault, undefined, { log: recordingLog() });
   const jobs = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
-    vaultPath: path.join(root, 'vault'), vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES).jobs, documents: collector,
+    vaultPath: path.join(root, 'vault'), vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() }).jobs, documents: collector,
     plugins: [youtubePlugin({ capture, resolveChannel: vi.fn(), discover: vi.fn() })],
   });
   return { root, vault, collector, capture, jobs };
@@ -155,7 +157,7 @@ describe('Agent authenticated HTTP access', () => {
   it('reports incomplete indexing while browse/read remain available', async () => {
     const { collector } = await fixture();
     const backend = { initialize: vi.fn(), count: vi.fn(), isCurrent: vi.fn(), replaceAll: vi.fn(), upsert: vi.fn(), remove: vi.fn(), search: vi.fn() };
-    const search = new ManagedTranscriptSearch(backend, async () => []);
+    const search = new ManagedTranscriptSearch(backend, async () => [], recordingLog());
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, search, agentAuthorize: acceptsBearer('secret') });
     cleanup.push(() => app.close());
     const headers = { authorization: 'Bearer secret' };
@@ -173,8 +175,11 @@ describe('Agent authenticated HTTP access', () => {
     const lexiconPath = path.resolve('resources/search/coct-main.txt');
     const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath: path.join(root, 'search') });
     cleanup.push(() => engine.close());
-    const search = new ManagedTranscriptSearch(new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
-      async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))));
+    const search = new ManagedTranscriptSearch(
+      new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon: await loadSearchLexicon(lexiconPath) }),
+      async () => Promise.all((await vault.list()).map((d) => collector.read(d.id))),
+      recordingLog(),
+    );
     await search.start();
     const settingsFile = path.join(root, 'agent-settings.json');
     const options = {

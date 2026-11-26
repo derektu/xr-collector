@@ -4,6 +4,7 @@ import type { Change } from '../../../src/shared/api/changes.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/records';
 const VAULT_ID = 'vault-id';
@@ -20,7 +21,7 @@ function job(id: string, title: string | null): CollectionJob {
 describe('job records', () => {
   it('shows the title a job learned after its events were written, and notes each recorded event', async () => {
     const changes: Change[] = [];
-    const records = memoryJobRecords(PRODUCT_SOURCES, { now: () => NOW, noteChange: (change) => changes.push(change) });
+    const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now: () => NOW, noteChange: (change) => changes.push(change) });
     records.jobs.put(job('video', null));
     records.jobs.event({ eventType: 'job.started', message: '開始', vaultPath: VAULT, jobId: 'video' });
     records.jobs.put(job('video', '後來知道的標題'));

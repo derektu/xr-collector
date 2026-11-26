@@ -9,6 +9,7 @@ import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { createFakePlugin, FAKE, FakeSource } from '../../support/fake-source-plugin.js';
 import { productSourcesWith } from '../../support/product-sources.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';
+import { recordingLog } from '../../support/log.js';
 
 const SOURCES = productSourcesWith(FAKE);
 
@@ -24,8 +25,9 @@ function setup() {
   };
   const subs = new SubscriptionRecorder(SOURCES);
   const manager = new JobManager({
-    sources: SOURCES, vaultPath: '/vaults/reports', vaultId: 'vault-id', store: memoryJobRecords(SOURCES).jobs, subscriptions: subs,
-    documents: new Collector(vault), plugins: [createFakePlugin(FAKE, source)], retry: { maxAttempts: 1 },
+    log: recordingLog(),
+    sources: SOURCES, vaultPath: '/vaults/reports', vaultId: 'vault-id', store: memoryJobRecords(SOURCES, { log: recordingLog() }).jobs, subscriptions: subs,
+    documents: new Collector(vault, undefined, { log: recordingLog() }), plugins: [createFakePlugin(FAKE, source)], retry: { maxAttempts: 1 },
   });
   subs.attach(manager);
   return { source, subs, manager };

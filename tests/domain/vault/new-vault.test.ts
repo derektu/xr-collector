@@ -8,6 +8,7 @@ import { checkNewVault, createNewVault, describePackage, nameProblem } from '../
 import { inspectVaultDirectory, VAULT_MARKER } from '../../../src/domain/vault/vault-directory.js';
 import { packageOf } from '../../support/package-fixtures.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -80,7 +81,7 @@ describe('DeviceVaults.checkNew location', () => {
     const vault = path.join(root, 'Vault');
     const profile = path.join(root, 'profile');
     for (const folder of [path.join(vault, 'notes'), path.join(profile, 'cache'), path.join(root, 'Other')]) await mkdir(folder, { recursive: true });
-    return { root, vault, profile, vaults: new DeviceVaults({ profilePath: profile, sources: PRODUCT_SOURCES, createdBy: 'test' }) };
+    return { root, vault, profile, vaults: new DeviceVaults({ log: recordingLog(), profilePath: profile, sources: PRODUCT_SOURCES, createdBy: 'test' }) };
   }
 
   it.each<[string, string | null, (at: { root: string; vault: string; profile: string }) => [string, string | null]]>([

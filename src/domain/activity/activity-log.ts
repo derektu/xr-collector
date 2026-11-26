@@ -5,6 +5,7 @@ import { eventSpec } from '../../shared/activity/event-catalog.js';
 import type { ActivityLogHealth, EventRecorder, JobEvent, NewJobEvent } from '../../shared/activity/activity-types.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
 import { backgroundTimers, type Timers } from '../../shared/lib/time.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -20,6 +21,7 @@ const SEGMENT_DIRECTORY = 'events';
 const SEGMENT_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/u;
 
 export interface ActivityLogOptions {
+  log: LogWriter;
   now?: () => Date;
   timers?: Timers;
   append?: (file: string, data: string) => Promise<void>;
@@ -64,11 +66,11 @@ export class ActivityLog implements EventRecorder {
     this.append = options.append ?? ((file, data) => appendFile(file, data, { encoding: 'utf8', mode: 0o600 }));
   }
 
-  static memory(options: ActivityLogOptions = {}): ActivityLog {
+  static memory(options: ActivityLogOptions): ActivityLog {
     return new ActivityLog(null, options);
   }
 
-  static async open(directory: string, options: ActivityLogOptions = {}): Promise<ActivityLog> {
+  static async open(directory: string, options: ActivityLogOptions): Promise<ActivityLog> {
     const log = new ActivityLog(directory, options);
     await log.purge();
     for (const event of await log.readAll()) {
@@ -156,7 +158,7 @@ export class ActivityLog implements EventRecorder {
   private schedulePurge(): void {
     if (this.closed) return;
     this.cancelPurge = this.timers.after(PURGE_INTERVAL_MS, () => {
-      void this.purge().catch((error: unknown) => console.error('Activity log purge failed', error))
+      void this.purge().catch((error: unknown) => this.options.log.write({ level: 'error', source: 'activity', message: 'Activity log purge failed', error }))
         .finally(() => this.schedulePurge());
     });
   }
@@ -191,7 +193,7 @@ export class ActivityLog implements EventRecorder {
           lastFailureAt: this.now().toISOString(),
           lastError: redact(error instanceof Error ? error.message : String(error)),
         };
-        console.error('Activity log write failed; its events are dropped', error);
+        this.options.log.write({ level: 'error', source: 'activity', message: 'Activity log write failed; its events are dropped', error });
       }
       this.pending.splice(0, count);
     }

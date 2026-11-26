@@ -17,6 +17,7 @@ import type { ActivityAccess } from '../../shared/activity/activity-types.js';
 import type { VaultSetup } from '../../shared/vault/vault-types.js';
 import type { BuildInfo } from '../../shared/api/update-types.js';
 import type { TranscriptSearch } from '../../shared/api/search-types.js';
+import type { LogReader, LogWriter } from '../../shared/log/log-types.js';
 import { errorStatus, requestErrorMessage, requestErrorStatus } from './error-status.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerAgentRoutes } from './routes/agent.js';
@@ -24,6 +25,7 @@ import { registerChangeRoutes } from './routes/changes.js';
 import { registerDeviceRoutes } from './routes/device.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { registerJobRoutes, type CollectionJobs } from './routes/jobs.js';
+import { registerLogRoutes, registerPageLogRoute } from './routes/logs.js';
 import { networkGuard, type ConnectivityAccess } from './routes/network.js';
 import { registerScheduleRoutes, type ScheduleManagement } from './routes/schedule.js';
 import { registerSubscriptionRoutes, type SubscriptionCollection } from './routes/subscriptions.js';
@@ -36,6 +38,8 @@ export type {
 
 export interface HttpAppOptions {
   sources: SourceRegistry;
+  log?: LogWriter & LogReader;
+  pageLog?: LogWriter;
   buildInfo?: BuildInfo;
   changes?: ChangeFeed;
   collector?: Collector;
@@ -137,7 +141,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     return payload;
   });
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof CollectorError) {
       if (error.retryAt) {
         const seconds = Math.max(1, Math.ceil((new Date(error.retryAt).getTime() - Date.now()) / 1000));
@@ -153,7 +157,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
       void reply.status(requestStatus).send({ error: { code: 'invalid_request', message: requestErrorMessage(requestStatus, error) } });
       return;
     }
-    app.log.error(error);
+    options.log?.write({ level: 'error', source: 'server', message: `Unexpected error answering ${request.method} ${request.url}`, error });
     void reply.status(500).send({
       error: { code: 'internal_error', message: '發生未預期的錯誤。' },
     });
@@ -170,6 +174,8 @@ export async function createHttpApp(options: HttpAppOptions): Promise<FastifyIns
     ...(options.pacing ? { pacing: options.pacing } : {}),
   });
   if (options.agentConnection) registerAgentRoutes(app, options.agentConnection);
+  if (options.log) registerLogRoutes(app, options.log);
+  if (options.pageLog) registerPageLogRoute(app, options.pageLog);
   registerDocumentRoutes(app, {
     sources: options.sources, subscriptions,
     ...(options.collector ? { collector: options.collector } : {}),

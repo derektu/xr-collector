@@ -36,6 +36,7 @@ import { transcriptOf } from '../../support/youtube-documents.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/pacing';
 const VAULT_ID = 'vault-id';
@@ -160,13 +161,14 @@ async function world(options: { waitMs?: number } = {}) {
   const wait = options.waitMs ?? 0;
 
   const boot = async () => {
-    const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, timers: manualTimers, waitRangeMs: { min: wait, max: wait } });
-    const records = await openJobRecords(jobsPath, PRODUCT_SOURCES, { now: clock });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { log: recordingLog(), statePath, now: clock, random: () => 0, timers: manualTimers, waitRangeMs: { min: wait, max: wait } });
+    const records = await openJobRecords(jobsPath, PRODUCT_SOURCES, { log: recordingLog(), now: clock });
     const store = records.jobs;
     const source = new GatedSource(gate);
     const manager = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions: subs,
+      vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }, { log: recordingLog() }), subscriptions: subs,
       now: clock, timers: manualTimers, createId: () => `job-${++sequence}`, pacing: [gate],
     });
     subs.attach(manager);

@@ -9,6 +9,7 @@ import { activityStateSearch, type ActivityViewState } from './activity/activity
 import { AddContent } from './adding/AddContent.js';
 import type { AddMode } from './adding/add-menu.js';
 import { api } from './api/api-client.js';
+import { logPageProblem } from './api/page-log.js';
 import {
   createBrowserThemeStore, createElectronThemeStore, defaultThemePreference, navigation, offlineCheckedLabel, pathForRoute, resolveTheme, routeForPath, serializeThemeWrites, settingsNavigation, jobsBadge,
   type NavigationItem, type ShellPage, type ThemePreference, type ThemeStore,
@@ -59,13 +60,13 @@ export default function App() {
   }, [bridge, desktop]);
   const storedTheme = useRead(async () => {
     if (!store) {
-      console.warn('Theme preference bridge is unavailable');
+      logPageProblem('warn', 'Theme preference bridge is unavailable');
       return defaultThemePreference;
     }
     try {
       return await store.read();
     } catch (error) {
-      console.warn('Unable to read theme preference', error);
+      logPageProblem('warn', 'Unable to read theme preference', error);
       return defaultThemePreference;
     }
   }, [store]);
@@ -161,7 +162,7 @@ export default function App() {
   }
   function persist(next: ThemePreference): void {
     setThemePreference(next);
-    void store?.write(next).catch((error: unknown) => { console.warn('Unable to save theme preference', error); });
+    void store?.write(next).catch((error: unknown) => { logPageProblem('warn', 'Unable to save theme preference', error); });
   }
 
   const themeName = resolveTheme(themePreference, systemDark) === 'light' ? 'silverblue' : 'duskblue';

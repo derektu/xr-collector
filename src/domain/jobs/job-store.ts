@@ -8,6 +8,7 @@ import type { SourceDeclarations } from '../../shared/sources/source-registry.js
 import type { NoteChange } from '../../shared/api/changes.js';
 import type { CollectionJob, JobStopKind } from '../../shared/jobs/job-types.js';
 import type { EventRecorder, NewJobEvent } from '../../shared/activity/activity-types.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 const JOBS_FILE = 'jobs.json';
 const FILE_VERSION = 1;
@@ -28,18 +29,19 @@ export class JobStore {
     private readonly directory: string | null,
     private readonly sources: SourceDeclarations,
     private readonly events: EventRecorder,
+    private readonly log: LogWriter,
     private readonly now: () => Date,
     private readonly noteChange: NoteChange = () => undefined,
   ) {}
 
-  static memory(sources: SourceDeclarations, events: EventRecorder, now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
-    return new JobStore(null, sources, events, now, noteChange);
+  static memory(sources: SourceDeclarations, events: EventRecorder, log: LogWriter, now: () => Date = () => new Date(), noteChange?: NoteChange): JobStore {
+    return new JobStore(null, sources, events, log, now, noteChange);
   }
 
   static async open(
-    directory: string, sources: SourceDeclarations, events: EventRecorder, now: () => Date = () => new Date(), noteChange?: NoteChange,
+    directory: string, sources: SourceDeclarations, events: EventRecorder, log: LogWriter, now: () => Date = () => new Date(), noteChange?: NoteChange,
   ): Promise<JobStore> {
-    const store = new JobStore(directory, sources, events, now, noteChange);
+    const store = new JobStore(directory, sources, events, log, now, noteChange);
     let contents: string | null = null;
     try {
       contents = await readFile(path.join(directory, JOBS_FILE), 'utf8');
@@ -54,7 +56,7 @@ export class JobStore {
         const target = path.join(directory, JOBS_FILE);
         const corrupt = `${target}.corrupt-${now().toISOString().replace(/[:.]/gu, '-')}`;
         await rename(target, corrupt);
-        console.error(`Collection jobs file is unreadable; moved it to ${corrupt} and started with no job history`);
+        log.write({ level: 'error', source: 'jobs', message: `Collection jobs file is unreadable; moved it to ${corrupt} and started with no job history` });
       }
     }
     const stopped = [...store.jobs.values()].filter((job) => job.state === 'queued' || job.state === 'running');
@@ -142,7 +144,7 @@ export class JobStore {
   }
 
   private async flushOrLog(): Promise<void> {
-    await this.flush().catch((error: unknown) => console.error('Collection jobs are not written', error));
+    await this.flush().catch((error: unknown) => this.log.write({ level: 'error', source: 'jobs', message: 'Collection jobs are not written', error }));
   }
 
   private scheduleFlush(): void {
@@ -157,7 +159,7 @@ export class JobStore {
           await this.write(directory);
           this.writeFailure = null;
         } catch (error) {
-          console.error('Collection jobs write failed', error);
+          this.log.write({ level: 'error', source: 'jobs', message: 'Collection jobs write failed', error });
           this.writeFailure = new CollectorError('jobs_write_failed', '無法寫入工作紀錄，請確認磁碟空間後再試。', { cause: error });
         }
       }
