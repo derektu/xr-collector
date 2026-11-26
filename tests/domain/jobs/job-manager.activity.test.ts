@@ -14,7 +14,7 @@ import type { DocumentSummary, SavedDocument } from '../../../src/shared/documen
 import type { JobEvent } from '../../../src/shared/activity/activity-types.js';
 import type { SubscriptionRecord } from '../../../src/shared/subscriptions/subscription-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
-import { eventLine, eventText } from '../../../src/transport/web/activity-presentation.js';
+import { eventLine, eventText } from '../../../src/transport/web/activity/activity-presentation.js';
 import { forwardingPort, type SubscriptionPort } from '../../../src/domain/jobs/subscription-port.js';
 import { memoryJobRecords, openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
 import type { DiscoveredYouTubeVideo, ResolvedYouTubeChannel, YouTubeSource, CapturedTranscript } from '../../../src/domain/sources/youtube/adapter.js';

@@ -15,7 +15,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/xr-collector-runtime
-        key: runtime-${{ runner.os }}-${{ inputs.prepare }}-${{ hashFiles('src/domain/search/meilisearch-runtime-pins.json', 'scripts/runtime-dependency-pins.json', 'scripts/runtime-cache.mjs', 'scripts/runtime-dependencies.mjs', 'scripts/prepare-meilisearch.mjs') }}
+        key: runtime-${{ runner.os }}-${{ inputs.prepare }}-${{ hashFiles('src/domain/search/meilisearch-runtime-pins.json', 'scripts/runtime/runtime-dependency-pins.json', 'scripts/runtime/runtime-cache.mjs', 'scripts/runtime/runtime-dependencies.mjs', 'scripts/runtime/prepare-meilisearch.mjs') }}
     - name: Prepare the pinned runtimes
       shell: bash
       run: ${{ inputs.prepare }}

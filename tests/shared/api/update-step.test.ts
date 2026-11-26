@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { trayLabelText, trayModel } from '../../../src/desktop/electron/tray-menu.js';
 import type { DeviceUpdateStatus, UpdatePhase } from '../../../src/shared/api/update-types.js';
-import { sidebarUpdateLabel } from '../../../src/transport/web/update-presentation.js';
+import { sidebarUpdateLabel } from '../../../src/transport/web/settings/update-presentation.js';
 
 const offer = { version: '0.1.3' };
 function status(phase: UpdatePhase, options: Partial<DeviceUpdateStatus> = {}): DeviceUpdateStatus {

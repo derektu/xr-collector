@@ -24,7 +24,7 @@ export async function loadBuildInfo(options: { packaged?: boolean } = {}): Promi
 }
 
 async function sourceBuildInfo(): Promise<BuildInfo> {
-  const producer = await import(new URL('../../../scripts/write-build-info.mjs', import.meta.url).href);
+  const producer = await import(new URL('../../../scripts/package/write-build-info.mjs', import.meta.url).href);
   return validateBuildInfo(await producer.createBuildInfo({ kind: 'development' }));
 }
 

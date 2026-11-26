@@ -11,7 +11,7 @@
 - `vault-import-merge`：預覽差異後以較新為準合併。本機沒有的項目帶來的刪除紀錄計入「刪除」，只有紀錄時也走同樣的預覽、「取消」與「匯入」。
 - `vault-import-replace`：預覽選「完全取代」後，上方數量改為完全取代的變更，按鈕為「取消」「取代」，按「取代」直接套用。本機沒有的項目帶來的刪除紀錄同樣計入上方的「刪除」。
 - `vault-import-nothing`：沒有需要匯入的內容，只有「完成」（`import-close`），不寫入。本機有較新的修改或刪除時另顯示筆數與「完全取代…」，按下進入已選「完全取代」的預覽。
-- `vault-import-partial`：套用時檔案放到定位途中失敗，顯示「匯入未完成」與匯入前備份的路徑，Desktop 另有「顯示位置」（`src/transport/web/VaultExchange.tsx`、`src/domain/vault/vault-operations.ts`）。放到定位之前失敗時回到輸入階段，顯示「匯入失敗，知識庫未變更。」。
+- `vault-import-partial`：套用時檔案放到定位途中失敗，顯示「匯入未完成」與匯入前備份的路徑，Desktop 另有「顯示位置」（`src/transport/web/vault/VaultExchange.tsx`、`src/domain/vault/vault-operations.ts`）。放到定位之前失敗時回到輸入階段，顯示「匯入失敗，知識庫未變更。」。
 - `vault-create`：以名稱＋位置表單建立新的知識庫並切換過去，原知識庫留在原處。
 - `vault-open-other`：開啟另一個既有的知識庫。
 - `vault-fixed`：`--vault fixed` 時建立與開啟其他知識庫顯示無法使用。

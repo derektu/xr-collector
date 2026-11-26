@@ -4,6 +4,8 @@ XR Collector 是 Node.js／TypeScript 專案：Fastify 提供 API 與 Web UI，E
 
 指令範例中，Mac 使用 Terminal（zsh），Windows 使用命令提示字元（cmd）。
 
+`package.json` 的指令與 CI 呼叫的工具在 `scripts/`：根目錄是開發用的 `dev.mjs` 與系統匣圖示的 `render-tray-icons.mjs`，`runtime/` 準備隨附的 runtime 與釘住的版本，`package/` 檢查建置環境、打包、簽章與上傳發布，`ci/` 是只在 CI 執行的工具，`lib/` 是這些工具共用的程序、鎖、等待與計時。
+
 ## 先安裝
 
 | 項目 | Mac（Apple Silicon） | Windows x64 |
@@ -48,7 +50,7 @@ Windows 的最後一行是 `npm run prepare:runtime -- win`。
 
 ### `npm run prepare:runtime`
 
-下載釘住版本的 yt-dlp、Deno 與 Meilisearch，核對 SHA-256 後放進使用者層級的 runtime cache，再安裝到這個 checkout 的 `resources/bin`。版本與 SHA-256 釘在 `scripts/runtime-dependency-pins.json` 與 `src/domain/search/meilisearch-runtime-pins.json`。
+下載釘住版本的 yt-dlp、Deno 與 Meilisearch，核對 SHA-256 後放進使用者層級的 runtime cache，再安裝到這個 checkout 的 `resources/bin`。版本與 SHA-256 釘在 `scripts/runtime/runtime-dependency-pins.json` 與 `src/domain/search/meilisearch-runtime-pins.json`。
 
 - 第一次要連網下載，Meilisearch 約 340 MB；之後從 cache 安裝。
 - cache 位置：Mac 是 `~/.cache/xr-collector/runtime`，Windows 是 `%LOCALAPPDATA%\xr-collector\runtime`；可用絕對路徑的 `XR_COLLECTOR_RUNTIME_CACHE` 改位置。同一台機器的所有 checkout 與 worktree 共用，第二個 checkout 只需從 cache 安裝。
@@ -97,7 +99,7 @@ App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno）、搜尋詞�
 
 typecheck 與 build 用 TypeScript 7 的 `tsc`，以 `node node_modules/typescript-7/bin/tsc` 呼叫（套件 `typescript-7`）。`typescript` 套件是 TS 6 的相容套件 `@typescript/typescript6`，給 typescript-eslint 解析程式碼，因為 typescript-eslint 不支援 TS 7，見 [TypeScript 7.0 發布說明](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0)。`node_modules/.bin/tsc` 不一定指向 TS 7，所以腳本與測試不用它。
 
-**Vitest 測試**在 `tests/`，路徑與受測的 `src/` 檔相同（`src/domain/jobs/job-queue.ts` 的測試是 `tests/domain/jobs/job-queue.test.ts`），不對應單一 src 檔的只在 `tooling`、`packaging` 與 `support`。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
+**Vitest 測試**在 `tests/`，路徑與受測的 `src/` 檔相同（`src/domain/jobs/job-queue.ts` 的測試是 `tests/domain/jobs/job-queue.test.ts`），`scripts/` 的測試在 `tests/scripts/`（`scripts/package/package-app.mjs` 的測試是 `tests/scripts/package/package-app.test.ts`），不對應單一檔案的只在 `tooling` 與 `support`。每個目錄涵蓋單元、HTTP 與檔案系統整合，不連 YouTube。使用真實 Meilisearch 的測試在 `resources/bin` 沒有本平台 binary 時跳過，所以 `prepare:runtime` 之後才完整。各目錄的責任與平台 skip 見 [測試說明](../tests/README.md)。
 
 **E2E 流程**由 verify skill（`.claude/skills/verify/`）執行：它在隔離的 profile、Vault 與 port 啟動 App，以 Playwright 依使用者的方式操作並留下截圖與 `results.json`。已收錄的回歸流程放在 `.claude/skills/verify/flows/`。
 

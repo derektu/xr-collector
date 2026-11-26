@@ -20,6 +20,10 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 
 層級、模組入口與同層允許的 import 見 [架構](architecture.md#執行與業務邊界)，由 `tests/tooling/import-layers.test.ts` 強制。
 
+| 規則 | 強制 |
+| --- | --- |
+| 同一個功能的程式碼放在同一個目錄。一層檔案多到看不出哪些屬於同一個功能時，依功能分子目錄，例如 `src/transport/web/sources/`、`scripts/package/`；子目錄之間直接 import 檔案，不為子目錄加 `index.ts` 轉出 | review |
+
 ## 時間與非同步
 
 | 規則 | 強制 |

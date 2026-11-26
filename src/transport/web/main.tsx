@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { PRODUCT_SOURCES } from './plugins.js';
-import { SourceDeclarationsProvider } from './source-declarations.js';
+import { SourceDeclarationsProvider } from './sources/source-declarations.js';
 import App from './App.js';
 import './styles.css';
 

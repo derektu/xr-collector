@@ -41,7 +41,7 @@ Electron 載入的是同一套 HTTP 畫面與 API，多數產品行為不依賴�
 
 ### 另一個平台的完整驗證
 
-改動平台相依時，交付前在另一個平台跑完整 `npm run verify`；每個發布候選前兩平台都跑。另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替，也不放未提交修改。準備步驟：`npm ci`，再安裝該平台釘住的 runtime（Mac 是 `npm run download:runtime`，Windows 是 `npm run download:runtime:win`；沒有 Visual C++ runtime 的機器再執行 `node scripts/prepare-windows-crt.mjs`）。只在一個平台成立的行為以平台條件 skip，不用 mock 冒充另一個平台通過。
+改動平台相依時，交付前在另一個平台跑完整 `npm run verify`；每個發布候選前兩平台都跑。另一個平台以 Git checkout 受驗的 commit，換行才會與該平台的 Git 設定一致，不用檔案同步代替，也不放未提交修改。準備步驟：`npm ci`，再安裝該平台釘住的 runtime（Mac 是 `npm run download:runtime`，Windows 是 `npm run download:runtime:win`；沒有 Visual C++ runtime 的機器再執行 `node scripts/runtime/prepare-windows-crt.mjs`）。只在一個平台成立的行為以平台條件 skip，不用 mock 冒充另一個平台通過。
 
 Windows 上的完整測試正常需要 80～110 秒，Mac 約 15 秒；VM 剛開機或病毒碼更新後約半小時內會慢 2～4 倍。逾時與 teardown error 照失敗處理。
 

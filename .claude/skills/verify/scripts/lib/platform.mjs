@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { windowsPowerShellEnvironment } from '../../../../../scripts/windows-powershell.mjs';
+import { windowsPowerShellEnvironment } from '../../../../../scripts/lib/windows-powershell.mjs';
 
 export const WINDOWS = process.platform === 'win32';
 
