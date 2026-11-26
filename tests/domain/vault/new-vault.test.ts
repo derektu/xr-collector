@@ -1,7 +1,4 @@
-// Creating a new Vault from a location and a name: names macOS or Windows cannot use, and locations
-// that are missing, unwritable, already hold the name, or lie inside the Vault in use or the program
-// data directory, are refused; an export file's date, counts and folder name are read for creating a
-// Vault from it.
+// Broken, a new Vault lands where macOS or Windows cannot use it, or over data already there.
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,7 +33,8 @@ describe('nameProblem', () => {
     [' XR', '名稱的開頭和結尾不能是空白。'], ['XR ', '名稱的開頭和結尾不能是空白。'],
     ['.hidden', '名稱不能以句點開頭。'], ['..', '名稱不能以句點開頭。'], ['Vault.', '名稱不能以句點結尾。'],
     ['con', '「con」是系統保留的名稱，請換個名稱。'], ['LPT1.txt', RESERVED], ['COM4', RESERVED], ['lpt9.log', RESERVED],
-    // Windows reserves COM and LPT with a superscript 1, 2 or 3 like COM1 to COM9.
+    // External: Windows reserves COM and LPT followed by a superscript 1, 2 or 3 like COM1 to COM9
+    // (https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
     ...['COM¹', 'COM²', 'COM³', 'LPT¹', 'LPT²', 'LPT³', 'com²', 'Lpt³', 'COM¹.txt', 'lpt².tar.gz'].map((name) => [name, RESERVED] as [string, string]),
     ['COM⁴', null], ['COM0', null], ['COM¹0', null], ['XCOM¹', null],
     ['知'.repeat(86), '名稱太長。'],

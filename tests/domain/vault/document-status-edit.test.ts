@@ -1,7 +1,5 @@
-// Changing a document's status in the Vault file: publishing and taking back to draft rewrite only
-// the top-level `status` and `collector.updated_at`, every other frontmatter byte and the body stay
-// as they were, and `updated_at` moves forward. Without it a status change could drop a field
-// another tool wrote, reformat the file, or lose the time an import merge decides by.
+// Broken, a status change drops a field another tool wrote, reformats the file, or loses the time an
+// import merge decides by.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,11 +21,9 @@ async function vaultAt(clock: { now: Date }) {
   return { root, vault: new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now: () => clock.now }) };
 }
 
-/** The file with the `status` and `updated_at` lines taken out, so what remains must not change. */
 const withoutStatusLines = (text: string) => text.split('\n').filter((line) => !/^status: |^ {2}updated_at: /u.test(line)).join('\n');
 const frontmatterOf = (text: string) => parse(text.match(/^---\n([\s\S]*?)\n---/u)![1]!) as { status?: string; collector: { updated_at?: string } };
 
-/** A document file another tool wrote: no `status`, comments, quoting, flow collections, extra fields, and a body with trailing spaces and no final newline. */
 const FOREIGN = `---
 type: Transcript
 # 由其他工具寫入

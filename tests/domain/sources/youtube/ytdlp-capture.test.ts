@@ -1,7 +1,4 @@
-// Capturing a video's subtitles through yt-dlp: reading json3 subtitles, choosing by the track
-// yt-dlp actually downloads so a translation is never saved as the spoken text, passing the request
-// gate, and reading yt-dlp errors as an unavailable video, a YouTube rate limit or a network
-// failure.
+// Broken, a translation is saved as the spoken text, or a yt-dlp failure is reported with the wrong cause.
 import { readFile, writeFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
@@ -45,9 +42,9 @@ describe('classifyYtDlpError', () => {
   });
 });
 
-// A video shaped like Lenny's Podcast JHo-aiePjoM: the `en` code lists 21 format groups, all
-// translations (`tlang=en`) except the 4th; `en-orig` is the spoken track. yt-dlp downloads the last
-// json3 entry of a code, which here is a translation.
+// External: yt-dlp downloads the last entry of the chosen format under a language code
+// (yt_dlp/YoutubeDL.py process_subtitles); on Lenny's Podcast JHo-aiePjoM the last `en` json3 entry is
+// a translation (`tlang=en`) and `en-orig` is the spoken track.
 const FORMATS = ['json3', 'srv1', 'srv2', 'srv3', 'ttml', 'srt', 'vtt'];
 const group = (name: string, tlang: string | null) => FORMATS.map((ext) => ({
   ext, name, url: `https://www.youtube.com/api/timedtext?v=JHo-aiePjoM&fmt=${ext}${tlang ? `&tlang=${tlang}` : ''}`,
@@ -67,7 +64,6 @@ const englishGroups = () => [
   ...Array.from({ length: 17 }, () => group('English', 'en')).flat(),
 ];
 
-/** Runs YtDlpCapture against a scripted yt-dlp and records every call, gate pass and info file it wrote. */
 async function captureWith(info: object) {
   const calls: string[][] = [];
   const gatePasses: string[] = [];
@@ -98,7 +94,6 @@ describe('YtDlpCapture subtitle track (P-T1)', () => {
     expect(calls).toHaveLength(2);
     const subtitleCall = calls[1]!;
     expect(subtitleCall[subtitleCall.indexOf('--sub-langs') + 1]).toBe('en-orig');
-    // The subtitle request reads the saved information instead of the video page.
     expect(subtitleCall).toContain('--load-info-json');
     expect(subtitleCall).not.toContain('https://www.youtube.com/watch?v=JHo-aiePjoM');
     expect(gatePasses).toEqual(['background', 'background']);

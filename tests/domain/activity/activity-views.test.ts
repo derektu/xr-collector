@@ -1,7 +1,4 @@
-// The activity summary folds a run of scheduled checks with the same result into one row per
-// subscription, so a quiet channel shows one row instead of a page of "no new videos". Manual
-// checks, new content and skipped items end a run; raw events stay complete, summary pages continue
-// by time, and groups survive a restart until retention expires them.
+// Broken, a quiet channel fills the activity page with one "no new videos" row per check.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -42,7 +39,6 @@ function terminal(id: string, at: string, options: {
   };
 }
 
-/** `event` without its check summary, as the events before and beside a check's end are written. */
 function checkless(event: JobEvent): JobEvent {
   const { check: _check, ...rest } = event;
   return rest;

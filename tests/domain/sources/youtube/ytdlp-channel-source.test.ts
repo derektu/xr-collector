@@ -1,6 +1,4 @@
-// Resolving a YouTube channel and listing its videos through yt-dlp: the channel identity from any
-// channel address form, dated pages of videos including upcoming premieres, refusing video
-// addresses and channels without a videos tab, and passing previews through the request gate.
+// Broken, a channel cannot be subscribed, or its videos and premieres go missing.
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import { YtDlpChannelSource } from '../../../../src/domain/sources/youtube/ytdlp-channel-source.js';

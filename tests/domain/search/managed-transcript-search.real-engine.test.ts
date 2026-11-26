@@ -1,7 +1,5 @@
-// Search on the bundled Meilisearch engine (real-engine cases): the index survives restarts and
-// rebuilds when the Vault changed; paging, filters, Traditional/Simplified and full-width forms,
-// contiguous Chinese fragments and Latin typos match as a user expects; a deleted document leaves
-// results at once. The engine key the app generates is masked in any text the app writes or shows.
+// Broken, search on the bundled engine misses what a user expects, shows deleted documents, or
+// exposes the engine key.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -53,7 +51,6 @@ async function tempDatabase(): Promise<string> {
   return path.join(root, 'search-data');
 }
 
-/** Starts the engine on a database, runs the managed startup check, and hands both to the callback. */
 async function withSearch<T>(
   databasePath: string,
   documents: () => SavedDocument[],
@@ -110,7 +107,6 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
     const original = [transcript('aaaaaaaaaaa', '原本的沙漠內容'), transcript('bbbbbbbbbbb', '第二篇的海洋內容')];
     await withSearch(databasePath, () => original, async () => undefined);
 
-    // Same two documents: one body edited, one replaced by a different video.
     const changed = [transcript('aaaaaaaaaaa', '改寫後的冰河內容'), transcript('ccccccccccc', '新來的火山內容')];
     await withSearch(databasePath, () => changed, async (search, _engine, rebuilds) => {
       expect(rebuilds).toBe(1);
@@ -267,14 +263,13 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
     });
   });
 
-  it('stops returning a deleted document as soon as its removal is requested', async () => {
+  it('stops returning a deleted document as soon as its removal is requested, and needs no rebuild after a restart', async () => {
     const databasePath = await tempDatabase();
     const kept = transcript('keep0000000', '共同的草原內容，保留下來。');
     const deleted = transcript('gone0000000', '共同的草原內容，只有這篇有獨特的峽谷字。');
     let vault = [kept, deleted];
     await withSearch(databasePath, () => vault, async (search, engine) => {
       expect((await search.search({ query: '草原' })).total).toBe(2);
-      // The exclusion filter a pending removal uses, against the real engine.
       const backend = new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey });
       const excluded = await backend.search({ query: '草原' }, [deleted.id]);
       expect([excluded.total, excluded.hits.map(({ id }) => id)]).toEqual([1, [kept.id]]);
@@ -285,7 +280,6 @@ describe('bundled Meilisearch integration', { tags: [REAL_ENGINE_TAG] }, () => {
       expect(common.hits.map(({ id }) => id)).toEqual([kept.id]);
       expect(common.total).toBe(1);
     });
-    // The engine no longer holds it, so a restart needs no rebuild.
     await withSearch(databasePath, () => vault, async (search, _engine, rebuilds) => {
       expect(rebuilds).toBe(0);
       expect((await search.search({ query: '峽谷' })).total).toBe(0);

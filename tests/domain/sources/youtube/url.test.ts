@@ -1,7 +1,4 @@
-// Telling what a pasted YouTube input is: one video (playlist parameters dropped), a channel by
-// handle or address, a playlist, refused as unsupported, or an invalid address. Watch, youtu.be,
-// shorts and live links of one video normalize to one canonical watch URL, and other sites,
-// channels and look-alike hosts are refused as a video.
+// Broken, a pasted YouTube link is misread, saved under a second address, or another site passes as a video.
 import { describe, expect, it } from 'vitest';
 import { CollectorError } from '../../../../src/shared/lib/collector-error.js';
 import { classifyYouTubeInput, parseYouTubeVideoUrl } from '../../../../src/domain/sources/youtube/url.js';

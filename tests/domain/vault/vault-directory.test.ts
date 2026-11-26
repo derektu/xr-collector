@@ -1,6 +1,4 @@
-// Recognizing what a chosen folder is (empty, a Vault with its document count, or invalid with the
-// reason) without changing it, and creating a Vault folder with its marker only where no Vault or
-// other content is.
+// Broken, choosing a folder changes it, or a Vault is created over other content.
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,7 +27,6 @@ async function vault(root: string, documents = 0): Promise<string> {
   return root;
 }
 
-/** Every path under `root` with its bytes, so a rejection that rewrote a file shows. */
 async function snapshot(root: string): Promise<Record<string, string>> {
   const entries = (await readdir(root, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile());
   return Object.fromEntries(await Promise.all(entries.map(async (entry) => {

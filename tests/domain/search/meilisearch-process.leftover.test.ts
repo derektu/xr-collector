@@ -1,6 +1,4 @@
-// Starting the search engine after a crash: an engine a killed app left on the same database is
-// stopped before a new one starts. Stopping the engine leaves no timer behind, so the server and the
-// Desktop app exit as soon as the engine has. Both cases run the real engine.
+// Broken, search cannot start after a crash, or the server and Desktop app hang on exit.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -34,7 +32,6 @@ async function healthy(engine: RunningMeilisearch): Promise<boolean> {
   return (await fetch(`${engine.url}/health`, { headers: { Authorization: `Bearer ${engine.apiKey}` } })).ok;
 }
 
-/** Runs the fixture that starts an engine, kills the fixture with SIGKILL, and returns the engine it left behind. */
 async function leaveEngineBehind(databasePath: string): Promise<number> {
   const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('tests/domain/search/fixtures/killed-engine.ts'), bundledMeilisearch, databasePath], {
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -55,9 +52,8 @@ async function leaveEngineBehind(databasePath: string): Promise<number> {
   return pid;
 }
 
-// On Windows, libuv places every child it spawns without `detached` in a job object that closes,
-// ending the child, when the parent dies; a killed app takes its engine with it, so no leftover exists
-// to stop there.
+// External: on Windows, libuv puts every child spawned without `detached` in a job object that ends
+// the child when the parent dies (libuv src/win/process.c).
 describe('engine left behind by a killed app', { tags: [REAL_ENGINE_TAG] }, () => {
   it.skipIf(process.platform === 'win32')('stops the engine a killed run left on the same database before starting a new one', async () => {
     const databasePath = await tempDatabase();

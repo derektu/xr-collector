@@ -1,7 +1,4 @@
-// Keeping the search index in step with the Vault, against a fake engine and recorded engine
-// requests: rebuilding a stale index at start, reporting a failed rebuild, the settings, filters
-// and pages a search sends, and keeping a deleted document out of results even when its removal
-// failed.
+// Broken, search results drift from the Vault, missing documents or showing deleted ones.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { MAX_PENDING_REMOVALS } from '../../../src/domain/search/managed-transcript-search.js';
@@ -303,7 +300,6 @@ describe('ManagedTranscriptSearch', () => {
   });
 });
 
-/** A backend holding documents in memory that applies the exclusion like the engine filter does. */
 function recordingBackend(initial: SavedDocument[]) {
   const held = new Map(initial.map((document) => [document.id, document]));
   const calls = { removes: [] as string[][], excludes: [] as string[][], rebuilds: 0 };

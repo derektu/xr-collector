@@ -1,5 +1,4 @@
-// Mapping document IDs to Vault file paths and back: known source types and valid source IDs only,
-// naming the same file the Vault writes, so a document is found by its ID.
+// Broken, a document is not found by its ID.
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

@@ -1,6 +1,4 @@
-// Which search data a Vault keeps at start: its database for the current index version, while its
-// databases of other versions, with their state and process files, are deleted so they do not fill
-// the disk. Another Vault's search data and unrelated files beside them stay.
+// Broken, old search databases fill the disk, or another Vault's search data is deleted.
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';

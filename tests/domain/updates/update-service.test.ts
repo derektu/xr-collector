@@ -1,8 +1,5 @@
-// App update state: a check finds a newer release without downloading it, and a release without this
-// platform's feed reads as up to date so platforms can be uploaded one at a time; only a finished
-// download becomes installable; installing records the version first, so the next start can say
-// whether that version is running. A broken rule leaves people on an old build, installs something
-// they did not choose, or reports an install that never happened.
+// Broken, people stay on an old build, install something they did not choose, or see an install
+// that never happened.
 import { readFileSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -13,7 +10,6 @@ import { UpdateService, type AppUpdater, type UpdateServiceOptions } from '../..
 
 const offer: UpdateOffer = { version: '0.1.2' };
 
-/** An updater whose check answers `found`, and whose download waits until the test settles it. */
 class FakeUpdater implements AppUpdater {
   readonly available = true;
   downloads: Array<{ progress: (transferred: number, total: number) => void; signal: AbortSignal; finish: () => void; fail: (error: Error) => void }> = [];
@@ -38,7 +34,6 @@ async function open(options: Partial<UpdateServiceOptions> = {}) {
   return { service, updater, directory, events };
 }
 
-/** A service holding `offer` downloaded and ready to install. */
 async function ready(options: Partial<UpdateServiceOptions> = {}) {
   const opened = await open(options);
   await opened.service.check();

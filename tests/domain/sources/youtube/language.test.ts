@@ -1,6 +1,4 @@
-// Which subtitle track a YouTube capture takes: the preferred language first, manual before
-// automatic, the -orig automatic track, and never live chat or an auto-translated track, so a
-// document holds the words as spoken.
+// Broken, a document holds a translation or live chat instead of the words as spoken.
 import { describe, expect, it } from 'vitest';
 import { chooseSubtitleTrack, type SubtitleTrack } from '../../../../src/domain/sources/youtube/language.js';
 

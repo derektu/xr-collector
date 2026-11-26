@@ -1,7 +1,4 @@
-// A deleted document is gone from every read, the search index and later channel checks. Its
-// deletion record decides what shows, so a file left behind stays hidden. Only the user submitting
-// the item on its own after the deletion brings it back, so a video the user deleted never returns
-// on its own.
+// Broken, a video the user deleted comes back on its own or still shows in reads and search.
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -58,7 +55,6 @@ const SUBSCRIPTION: SubscriptionRecord = {
   settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
 };
 
-/** Lists the channel's videos newest first; captures wait while held and fail as told. */
 class Source implements YouTubeSource {
   listing: string[] = [];
   readonly captures: string[] = [];
@@ -87,7 +83,6 @@ class Source implements YouTubeSource {
   }
 }
 
-/** A Vault, its collector with a recording search index, and a job manager over them. */
 async function world() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-deletion-'));
   const jobsDirectory = await mkdtemp(path.join(tmpdir(), 'xr-deletion-jobs-'));
@@ -107,7 +102,6 @@ async function world() {
     },
   };
   const events: Parameters<NonNullable<CollectorOptions['recordEvent']>>[0][] = [];
-  // The severity each event is recorded with: the emitter's, or the catalog default for its kind.
   const collector = new Collector(vault, search, { recordEvent: (entry) => events.push({ ...entry, severity: entry.severity ?? eventSpec(entry.eventType)!.severity }) });
   const subs = new SubscriptionRecorder();
   const subscription = subs.add('youtube', SUBSCRIPTION, { settings: SUBSCRIPTION.settings });
@@ -128,7 +122,6 @@ async function world() {
 
   return {
     root, vault, collector, subs, subscription, source, clock, tick, indexed, removed, events, boot,
-    /** Holds index removals until the returned function runs, like a removal waiting behind a rebuild. */
     holdRemovals() { let open = () => {}; removeGate = new Promise((resolve) => { open = resolve; }); return () => { removeGate = null; open(); }; },
     async collect(manager: JobManager, id: string) {
       const submission = await manager.submitItem('youtube', watchUrl(id));
@@ -245,7 +238,6 @@ describe('visibility and re-collection (A2)', () => {
     await expect(w.collector.save(transcriptDocument(captured(a)), { explicitAt: T0.toISOString() })).rejects.toMatchObject({ code: 'document_deleted' });
     await expect(w.collector.save(transcriptDocument(captured(a)))).rejects.toMatchObject({ code: 'document_deleted' });
 
-    // The clock still reads the deletion time; the document is stamped one millisecond later.
     const later = new Date(T0.getTime() + 1).toISOString();
     const result = await w.collector.save(transcriptDocument({ ...captured(a), bodyMarkdown: '重新收集的正文' }), { explicitAt: later });
     expect(result.document.collectedAt).toBe(later);
@@ -281,7 +273,6 @@ describe('deletions and collection (A4)', () => {
 
     const job = await w.checkChannel(manager);
 
-    // The newest five are the candidates; the deleted one is dropped and not replaced by an older video.
     expect(job.items?.map((item) => item.sourceId)).toEqual([b, c, vid('delta'), vid('echo')]);
     expect(w.source.captures).toEqual([a, b, c, vid('delta'), vid('echo')]);
     expect((await w.collector.list()).map((document) => document.sourceId)).not.toContain(a);
@@ -303,7 +294,6 @@ describe('deletions and collection (A4)', () => {
     w.source.listing = [a];
     expect((await w.checkChannel(manager)).result?.outcome).toBe('empty');
 
-    // A retry of the failed single-video job is an explicit request made now.
     w.source.failures.delete(a);
     w.tick();
     const retry = await manager.retry(failed.id);
@@ -327,7 +317,6 @@ describe('explicit requests and the deletion time (A5)', () => {
     const blocker = await manager.submitItem('youtube', watchUrl(hold));
     await w.source.capturing(hold);
     const early = await manager.submitItem('youtube', watchUrl(a));
-    // The document arrives another way, such as an import, and is deleted while the job waits.
     w.tick();
     await w.vault.add(transcriptDocument(captured(a)));
     w.tick();

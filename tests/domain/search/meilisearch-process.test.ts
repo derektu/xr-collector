@@ -1,9 +1,4 @@
-// Which process an engine record lets startup stop on macOS: the recorded process, only while it
-// runs the engine's executable. A wrong reading ends someone else's process whose number was reused,
-// or leaves an engine running on the database the new engine needs. The record is always cleared, so
-// a stale or broken record never blocks search, and an engine that ignores SIGTERM is killed once the
-// stop wait runs out, so startup never hangs on it. A stand-in Node process plays the engine by naming
-// Node's executable as the engine binary, so these cases need no engine.
+// Broken, starting search ends someone else's process, leaves an old engine on the database, or hangs.
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,7 +17,6 @@ function alive(pid: number): boolean {
 }
 
 async function standIn(): Promise<number> {
-  // The stand-in ends itself after a minute, so a run cut short leaves nothing behind.
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore', windowsHide: true });
   const pid = await new Promise<number>((resolve, reject) => {
     child.once('spawn', () => resolve(child.pid!));

@@ -1,5 +1,4 @@
-// The update feed an XR_COLLECTOR_UPDATE_BASE_URL override names: an installer fetched over plain
-// HTTP from another machine, or from a URL carrying credentials, could be swapped or leak them.
+// Broken, an update installer could be swapped in transit or leak credentials.
 import { expect, it } from 'vitest';
 import { updateFeedUrl } from '../../../src/domain/updates/index.js';
 
