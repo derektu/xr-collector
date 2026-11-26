@@ -1,3 +1,4 @@
+// Broken, jobs reach YouTube during a cooldown, or fail and stall while waiting one out.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,9 +37,6 @@ import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
 
-// Jobs and the YouTube request channel run together on one manual clock: a scripted YouTube answers
-// through a real PacingGate, so cooldowns, waits and restarts follow the same rules as the app.
-
 const VAULT = '/vaults/pacing';
 const VAULT_ID = 'vault-id';
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
@@ -76,7 +74,6 @@ async function settle(): Promise<void> {
   for (let index = 0; index < 20; index += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-/** YouTube as yt-dlp would answer, every request passing the gate like YtDlpCapture does. */
 class GatedSource implements YouTubeSource {
   readonly requests: string[] = [];
   readonly failures = new Map<string, CollectorError[]>();
@@ -162,7 +159,6 @@ async function world(options: { waitMs?: number } = {}) {
   let sequence = 0;
   const wait = options.waitMs ?? 0;
 
-  /** One process: a gate read from its state file, a job store on disk and a manager. */
   const boot = async () => {
     const gate = await PacingGate.open(YOUTUBE_PACING, { statePath, now: clock, random: () => 0, timers: manualTimers, waitRangeMs: { min: wait, max: wait } });
     const records = await openJobRecords(jobsPath, PRODUCT_SOURCES, { now: clock });
@@ -196,7 +192,6 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     expect(p.manager.get(first.job.id).retry).toBeUndefined();
     expect(p.gate.status()).toMatchObject({ state: 'cooldown', cooldownUntil: until, level: 1 });
 
-    // Nothing reaches YouTube during the cooldown, including work accepted meanwhile.
     const second = await p.manager.submitItem('youtube', watchUrl('bbbbbbbbbbb'));
     await w.advance(5 * MINUTE - 1);
     expect(p.source.requests).toEqual(['info:aaaaaaaaaaa']);
@@ -231,7 +226,6 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const queuedJob = await p.manager.submitItem('youtube', watchUrl('kkkkkkkkkkk'));
     const until = new Date(T0 + 5 * MINUTE).toISOString();
     await eventually(() => expect(p.manager.get(limitedJob.job.id).wait).toBeDefined());
-    // The job that was only waiting in line shows the same cooldown, so the UI and Agents see why.
     expect(p.manager.get(queuedJob.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } });
     const lateJob = await p.manager.submitItem('youtube', watchUrl('lllllllllll'));
     expect(p.manager.get(lateJob.job.id)).toMatchObject({ state: 'queued', wait: { reason: 'rate_limited', until } });
@@ -243,7 +237,6 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
       expect(done).toMatchObject({ state: 'completed' });
       expect(done.wait).toBeUndefined();
     }
-    // Outside a cooldown a new job carries no wait.
     p.source.holdNext = true;
     const after = await p.manager.submitItem('youtube', watchUrl('mmmmmmmmmmm'));
     expect(p.manager.get(after.job.id).wait).toBeUndefined();
@@ -267,7 +260,6 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     const done = await p.manager.whenSettled(accepted.job.id);
     expect(done).toMatchObject({ state: 'completed', progress: { created: 1 } });
     expect(done.items![0]!.wait).toBeUndefined();
-    // Waiting out a cooldown is no failure of the item.
     expect(w.subs.of('failed')).toEqual([]);
     expect(w.subs.of('collected')).toEqual([{ kind: 'collected', type: 'youtube', id: channel.id, key: 'ccccccccccc' }]);
   });
@@ -326,7 +318,6 @@ describe('jobs during a YouTube cooldown (P-T5)', () => {
     p.source.releaseHeld();
     await w.advance(0);
     await eventually(() => expect(p.gate.status().state).toBe('waiting'));
-    // The info request ended; the subtitle request now waits 8 seconds for its turn.
     expect(p.source.requests).toEqual(['info:ggggggggggg']);
     const release = await p.manager.hold();
     expect(p.manager.get(first.job.id)).toMatchObject({ state: 'queued' });

@@ -1,7 +1,4 @@
-// What a YouTube subscription collects from subscribing through pause, resume and removal: the
-// newest uncollected videos within its range and limit, the same at every kind of check, failed
-// videos tried again, unstarted work skipped on a pause while a running capture finishes, and
-// paused and removed subscriptions kept as they are after a restart.
+// Broken, a subscription collects the wrong videos, or a pause or removal does not hold after a restart.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,16 +31,11 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
-/**
- * One Vault's subscription services over synthetic YouTube channels, a controllable clock and a
- * real channel settings file. `restart()` builds new services on the same Vault and device record.
- */
 async function world(options: { capture?: number; discovery?: number; maxQueued?: number; jobsDirectory?: string } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscriptions-'));
   roots.push(root);
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
-  /** The settings `subscribe` gives new subscriptions. */
   const policy: CollectionPolicy = { ...DEFAULT_POLICY };
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
@@ -56,7 +48,6 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
       sources: PRODUCT_SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
       limits: { discovery: options.discovery ?? 1, capture: options.capture ?? 4, ...(options.maxQueued ? { maxQueued: options.maxQueued } : {}) },
-      // Failed checks here drive the catch-up rules; automatic retries have their own cases.
       retry: { maxAttempts: 1 },
     });
     const channels = new SubscriptionService('youtube', channelStore, jobs, {
@@ -81,7 +72,6 @@ async function world(options: { capture?: number; discovery?: number; maxQueued?
 
 type World = Awaited<ReturnType<typeof world>>;
 
-/** Subscribes through the channel-add job and returns the settled first collection. */
 async function subscribe(w: World, name: string): Promise<CollectionJob> {
   const added = await w.jobs.whenSettled((await w.channels.add(`@${name}`, { ...w.policy })).job.id);
   expect(added.result).toMatchObject({ outcome: 'created' });
@@ -100,10 +90,8 @@ describe('first subscription (S-T3)', () => {
   it('collects the newest uncollected videos published within the Global range, at most the Global count', async () => {
     const w = await world();
     const id = w.source.addChannel('first');
-    // Ages 1, 4, 7 … 88 days; a 1-month range from 15 October reaches back to 15 September (30 days).
     const ids = w.source.publish(id, 'f', w.clock.now, Array.from({ length: 30 }, (_, index) => 1 + 3 * index));
     w.source.channels.get(id)!.videos.unshift({ id: 'premiere000', publishedAt: '2026-10-20T00:00:00.000Z', upcoming: true });
-    // Two in-range videos were already collected as single videos.
     for (const existing of [ids[1]!, ids[3]!]) await w.documents.add(transcriptDocument((await w.source.capture({ videoId: existing, canonicalUrl: `https://www.youtube.com/watch?v=${existing}` }))));
     w.source.captures.length = 0;
 
@@ -119,7 +107,6 @@ describe('first subscription (S-T3)', () => {
     const w = await world();
     const id = w.source.addChannel('approx');
     const [inside, borderline] = w.source.publish(id, 'x', w.clock.now, [2, 45]);
-    // "1 month ago" in the listing, 45 days by the video's own metadata.
     w.source.channels.get(id)!.videos[1]!.listedAt = new Date(w.clock.now.getTime() - 25 * DAY).toISOString();
 
     const first = await subscribe(w, 'approx');
@@ -133,21 +120,18 @@ describe('first subscription (S-T3)', () => {
     expect((await w.records.views.query({ jobId: skippedJobId, eventType: ['job.completed'] }, { vaultPath: w.root })).events[0])
       .toMatchObject({ severity: 'debug', outcome: 'skipped' });
 
-    // The next check keeps it as a candidate without asking YouTube again.
     expect((await w.channelStore.list())[0]!.outOfRange).toEqual([{ videoId: borderline, before: '2026-09-15T04:00:00.000Z' }]);
     w.advance(HOUR);
     const [next] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     expect(next).toMatchObject({ state: 'completed', result: { outcome: 'empty' }, items: [] });
     expect(w.jobs.list({ state: 'all', limit: 100 }).jobs.filter((job) => job.kind === 'youtube.video')).toHaveLength(0);
 
-    // A wider range starts before the recorded one, so the video is checked again and now collected.
     await w.channels.updateSettings(id, { backfillDays: 60 });
     w.advance(HOUR);
     const [wider] = await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
     expect(wider!.items).toEqual([expect.objectContaining({ sourceId: borderline, outcome: 'created' })]);
     expect((await w.channelStore.list())[0]!.outOfRange).toEqual([{ videoId: borderline, before: '2026-09-15T04:00:00.000Z' }]);
 
-    // Once the video leaves the candidates, the record goes with it.
     w.source.channels.get(id)!.videos.splice(1, 1);
     w.advance(HOUR);
     await settleAll(w, await w.channels.startRun({ trigger: 'scheduled' }));
@@ -265,7 +249,6 @@ describe('every check follows the same rule (R-05)', () => {
     }],
   ];
 
-  /** Twelve videos within the range, of which the second is collected and the fourth taken out of the candidates. */
   async function prepared(w: World, id: string): Promise<string[]> {
     const ids = w.source.publish(id, 'v', w.clock.now, Array.from({ length: 12 }, (_, index) => 0.5 + index / 2));
     await w.documents.add(transcriptDocument(await w.source.capture({ videoId: ids[1]!, canonicalUrl: `https://www.youtube.com/watch?v=${ids[1]}` })));
@@ -379,7 +362,6 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     ]);
     expect(collectedIds(w)).toEqual([ids[0]]);
 
-    // Resuming checks with the subscription's settings; the collected video stays a candidate that is not collected.
     w.source.holdCaptures = false;
     await w.channels.updateSettings(id, { backfillDays: 7, backfillMaxItems: 5 });
     const resumed = await w.channels.setEnabled(id, true);
@@ -388,7 +370,6 @@ describe('pause, resume and remove (S-T8, S-T9)', () => {
     expect(check).toMatchObject({ scope: { trigger: 'resume' } });
     expect(check.items!.map((item) => item.sourceId)).toEqual([ids[1], ids[2]]);
 
-    // A pause that lands while the listing is read discards what the listing found.
     let release!: () => void;
     w.source.holdDiscovery = new Promise((resolve) => { release = resolve; });
     w.advance(HOUR);

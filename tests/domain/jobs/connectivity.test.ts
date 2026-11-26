@@ -1,7 +1,4 @@
-// Collection pauses while the device is offline and resumes on the first successful probe. The App
-// counts as online without probing, rechecks an offline device every 30 seconds, probes nothing
-// while the system sleeps, and reads a captive portal's sign-in page as offline, so checks do not
-// fail one by one against a network that is not there.
+// Broken, checks fail one by one against a network that is not there.
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CollectionPause, type PauseChange } from '../../../src/shared/jobs/collection-pause.js';
@@ -11,7 +8,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A connectivity service over a probe the test answers; every probe is counted. */
 function world(options: { offlineRecheckMs?: number } = {}) {
   const pause = new CollectionPause();
   const changes: PauseChange[] = [];
@@ -66,7 +62,6 @@ describe('connectivity (#128)', () => {
     expect(w.probe.calls).toBe(4);
     expect(w.connectivity.status()).toEqual({ state: 'online', checkedAt: '2026-10-24T06:00:30.000Z' });
     expect(w.changes.map(({ reason, inForce }) => [reason, inForce])).toEqual([['offline', true], ['offline', false]]);
-    // Online again, nothing is probed on a timer.
     await vi.advanceTimersByTimeAsync(10 * OFFLINE_RECHECK_MS);
     expect(w.probe.calls).toBe(4);
     w.connectivity.close();
@@ -81,7 +76,6 @@ describe('connectivity (#128)', () => {
     w.advance(1);
     expect(await w.connectivity.confirm()).toBe('online');
     expect(w.probe.calls).toBe(2);
-    // A person asking to check confirms whatever the last answer was.
     expect(await w.connectivity.check()).toBe('online');
     expect(w.probe.calls).toBe(3);
     w.connectivity.close();
@@ -127,7 +121,6 @@ describe('the internet probe (#128)', () => {
     ]);
     const signal = new AbortController().signal;
 
-    // A portal redirects one address and answers the other with its own sign-in page.
     answers['/generate_204'] = { status: 302, body: '', headers: { location: `${origin}/login` } };
     answers['/hotspot'] = { status: 200, body: '<html>請先登入</html>' };
     expect(await probe(signal)).toBe(false);

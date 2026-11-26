@@ -1,8 +1,4 @@
-// The scheduler checks each subscription on its own interval and rhythm, never a paused one and
-// nothing while automatic collection is off. While the system sleeps or the network is gone it
-// dispatches nothing, then checks each due subscription once; a check that began listing after its
-// subscription came due serves that due time, also when it finishes before the poll submits. A
-// settings change moves the next check by the newest interval, and concurrent changes all persist.
+// Broken, subscriptions are checked late, twice, or while paused, offline or asleep.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -43,10 +39,6 @@ class MemoryScheduleStore implements ScheduleStore {
   }
 }
 
-/**
- * Subscriptions over synthetic channels with a controllable clock, and a scheduler whose polls the
- * test runs by hand.
- */
 async function world(schedule: StoredSchedule = { enabled: true }, pause?: CollectionPause, connectivity?: Connectivity) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-scheduler-'));
   roots.push(root);
@@ -78,16 +70,13 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
     root, clock, source, jobs, channels, channelStore, scheduler, scheduleStore, events, eventRecords, runs,
     jobEvents: () => jobEvents.mock.calls.map(([entry]) => entry.eventType),
     advance(ms: number) { clock.now = new Date(clock.now.getTime() + ms); },
-    /** Starts the scheduler and returns once the check it starts has finished. */
     async start() {
       await scheduler.start();
       await scheduler.idle();
     },
     async idle() {
-      // A dispatched check records the dispatch before it submits its jobs.
       await scheduler.idle();
       await eventually(() => expect(jobs.isBusy()).toBe(false));
-      // A check leaves the job list before it records its end in the subscription.
       (await jobs.hold())();
     },
     async subscribe(name: string, settings: Partial<CollectionPolicy>): Promise<string> {
@@ -170,7 +159,6 @@ describe('per-subscription scheduling (A2)', () => {
     w.advance(15 * MINUTE);
     await w.scheduler.checkNow();
     await w.source.holds.reach([video!]);
-    // The check listed at 04:15 and finishes after 04:30 came due, before the next poll.
     w.advance(15 * MINUTE);
     w.source.holdCaptures = false;
     w.source.release(video!);
@@ -197,7 +185,6 @@ describe('per-subscription scheduling (A2)', () => {
     await poll(w);
     expect(w.scheduledChecks(active)).toBe(1);
 
-    // Turning it on counts an overdue next check from now.
     await w.scheduler.updateSchedule({ enabled: true });
     expect(await w.channel(active)).toMatchObject({ nextCheckAt: '2026-10-15T06:30:00.000Z' });
     expect(await w.channel(paused)).toMatchObject({ nextCheckAt: null });
@@ -238,7 +225,6 @@ describe('per-subscription scheduling (A2)', () => {
     expect(await w.channels.updateSettings(id, { intervalMinutes: 60 })).toMatchObject({ nextCheckAt: '2026-10-15T05:00:00.000Z' });
     w.advance(30 * MINUTE);
     expect(await w.channels.updateSettings(id, { intervalMinutes: 15 })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
-    // Backfill settings move nothing and start nothing.
     expect(await w.channels.updateSettings(id, { backfillDays: 60 })).toMatchObject({ nextCheckAt: '2026-10-15T05:10:00.000Z' });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(2);
     await expect(w.channels.updateSettings(id, { backfillMaxItems: 101 })).rejects.toMatchObject({ code: 'invalid_request' });
@@ -249,14 +235,12 @@ describe('per-subscription scheduling (A2)', () => {
     const w = await world();
     const id = await w.subscribe('rhythm', { intervalMinutes: 15 });
     await w.start();
-    // Each poll comes 7 seconds later than the last; the next checks stay on the quarter hours.
     for (const next of ['04:30', '04:45', '05:00']) {
       w.advance(15 * MINUTE + 7_000);
       await poll(w);
       expect(await w.channel(id)).toMatchObject({ nextCheckAt: `2026-10-15T${next}:00.000Z` });
     }
     expect(w.scheduledChecks(id)).toBe(3);
-    // A sleep that missed several periods dispatches once, at 06:25:21; the next check stays on the same rhythm.
     w.advance(100 * MINUTE);
     await poll(w);
     expect(await w.channel(id)).toMatchObject({ nextCheckAt: '2026-10-15T06:30:00.000Z' });
@@ -321,7 +305,6 @@ describe('system sleep (#97)', () => {
     await w.start();
     w.runs.mockClear();
     pause.set('sleep', true);
-    // Dark wakes run the poll timer while the system sleeps; four periods of the quarter subscription pass.
     for (let step = 0; step < 4; step += 1) {
       w.advance(15 * MINUTE + 7_000);
       await poll(w);
@@ -376,10 +359,6 @@ describe('system sleep (#97)', () => {
 });
 
 describe('lost network (#128)', () => {
-  /**
-   * Two subscriptions, 15 and 60 minutes; the network drops, the 15-minute subscription's scheduled
-   * check finds no network and waits in the queue, and four more periods pass offline.
-   */
   async function offlineWithStalledCheck() {
     const pause = new CollectionPause();
     const network = { online: true };
@@ -407,7 +386,6 @@ describe('lost network (#128)', () => {
       await w.scheduler.checkNow();
     }
     expect(w.runs).not.toHaveBeenCalled();
-    /** The network comes back; the scheduler's poll and the stalled check both go on. */
     const reconnect = async () => {
       network.online = true;
       w.source.discoveryFailure = null;
@@ -419,7 +397,6 @@ describe('lost network (#128)', () => {
   it('pauses on a check that finds no network, dispatches nothing while offline, then checks each due subscription once', async () => {
     const { w, connectivity, quarter, hourly, stalled, reconnect } = await offlineWithStalledCheck();
 
-    // Four periods passed offline; the poll dispatched nothing and nothing failed.
     expect(w.events).toEqual(['schedule.dispatched', 'collection.paused']);
     expect(w.jobEvents()).not.toContain('job.failed');
     expect(w.jobEvents()).not.toContain('job.retry_scheduled');
@@ -449,10 +426,8 @@ describe('concurrent changes of one subscription (A5)', () => {
     ]);
     const settings = { intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50 };
     expect(await w.channel(id)).toMatchObject({ settings });
-    // Applying ran after the three changes it was queued behind.
     expect(await w.channel(other)).toMatchObject({ settings });
 
-    // A check dispatched while the interval changes moves the next check by the new interval.
     w.advance(10 * MINUTE);
     await Promise.all([w.channels.startRun({ trigger: 'manual', subscriptionIds: [id] }), w.channels.updateSettings(id, { intervalMinutes: 1440 })]);
     expect(await w.channel(id)).toMatchObject({

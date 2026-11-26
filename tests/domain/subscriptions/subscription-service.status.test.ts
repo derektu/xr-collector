@@ -1,7 +1,4 @@
-// The check status a subscription shows (scheduled, paused, auto check off, queued, checking,
-// downloading with progress, retrying, failing, auto-paused or sign-in needed), computed from its
-// record and its running work, so the subscription list says what each subscription is doing now. A
-// started check never reads as queued again while its videos wait for another subscription's capture slot.
+// Broken, the subscription list does not say what each subscription is doing now.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -27,7 +24,6 @@ const MINUTE = 60_000;
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-/** A YouTube request channel the test puts into a cooldown and out of it. */
 class ScriptedPacing implements Pacing {
   readonly group = 'youtube';
   private listener: ((event: PacingEvent) => void) | null = null;
@@ -45,10 +41,6 @@ class ScriptedPacing implements Pacing {
   }
 }
 
-/**
- * Real subscription and job services over synthetic channels with a manual clock. Retry timers are
- * kept, never fired, so a job waiting for its next attempt stays waiting.
- */
 async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-status-'));
   roots.push(root);
@@ -230,7 +222,6 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     };
     expect(workStatus(PRODUCT_SOURCES, requeued)).toEqual({ state: 'checking' });
     expect(workStatus(PRODUCT_SOURCES, { ...requeued, startedAt: null })).toEqual({ state: 'queued' });
-    // Its own cooldown or next attempt reads as retrying, and adding a channel reads as checking.
     const later = '2026-10-15T05:00:00.000Z';
     expect(workStatus(PRODUCT_SOURCES, { ...requeued, wait: { reason: 'rate_limited', until: later } }))
       .toEqual({ state: 'retrying', at: later, cause: { reason: 'rate_limited' } });
@@ -240,7 +231,6 @@ describe('subscription check status computed by the service (N75-T5)', () => {
   it('orders paused, sign-in, active work, the auto check switch and the schedule', () => {
     const now = new Date('2026-10-15T04:00:00.000Z');
     const later = '2026-10-15T05:00:00.000Z';
-    // Work facts as the job manager reports them for a subscription's queued or running check.
     const collecting = { jobId: 'j', status: { state: 'downloading' as const }, done: 3, total: 10 };
     const waiting = { ...collecting, status: { state: 'queued' as const } };
     const checking = { ...collecting, status: { state: 'checking' as const } };
@@ -256,9 +246,7 @@ describe('subscription check status computed by the service (N75-T5)', () => {
     expect(checkStatus(enabled, null, { ...context, autoCheck: false })).toEqual({ state: 'auto_check_off' });
     expect(checkStatus({ enabled: true, nextCheckAt: now.toISOString() }, null, context)).toEqual({ state: 'queued' });
     expect(checkStatus(enabled, null, context)).toEqual({ state: 'scheduled', nextCheckAt: later });
-    // A subscription without a next check time yet, such as after an import, waits for the scheduler to plan one.
     expect(checkStatus({ enabled: true, nextCheckAt: null }, null, context)).toEqual({ state: 'queued' });
-    // Failures in a row: a pause the subscription made itself names them; a running or due check shows as it is.
     const failures = { count: 3, since: now.toISOString(), error: { code: 'network_error', message: '無法連線。' } };
     expect(checkStatus({ enabled: false, nextCheckAt: null, checkFailures: failures, autoPausedAt: now.toISOString() }, null, context))
       .toEqual({ state: 'auto_paused', failures: 3 });

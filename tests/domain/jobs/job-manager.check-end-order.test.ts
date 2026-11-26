@@ -1,6 +1,4 @@
-// A check reads as finished only after its subscription recorded the end, so a window that
-// refreshes on the finished job never shows the subscription's previous check. While the end is
-// written, a manual check joins the running one and a pause frees the source for a resume check.
+// Broken, a window that refreshes on a finished check still shows the subscription's previous check.
 import { describe, expect, it } from 'vitest';
 import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
 import type { ChangeBatch } from '../../../src/shared/api/changes.js';
@@ -18,7 +16,6 @@ const VAULT = '/vaults/order';
 const VAULT_ID = 'vault-id';
 const CHANNEL = { id: 'UCorder', title: '順序', url: 'https://www.youtube.com/channel/UCorder/videos' };
 
-/** A subscription port whose first check-end write waits until the test releases it. */
 class SlowEnd extends SubscriptionRecorder {
   release: () => void = () => undefined;
   entered: Promise<void>;

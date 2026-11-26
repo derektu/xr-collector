@@ -1,3 +1,4 @@
+// Broken, manual retry fails or the Activity page misreports what jobs did.
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,17 +33,11 @@ import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_DECLARATIONS, PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
 
-// Manual retry, job summary and the job fields activity events carry, over the real job manager.
-
 const VAULT = '/vaults/activity';
 const VAULT_ID = 'vault-id';
 const T0 = new Date('2026-10-15T06:00:00.000Z');
 const directories: string[] = [];
 
-/**
- * The Activity line of a collected completion reads its result from the event's fields and says what
- * the server's message says after its opening words.
- */
 function expectCollectedLine(completed: JobEvent): void {
   const opening = '收集完成';
   expect(completed.message.startsWith(opening)).toBe(true);
@@ -80,7 +75,6 @@ class MemoryVault implements DocumentVault {
   readonly now = () => new Date();
 }
 
-/** Failures queued per call kind; captures can wait until released. */
 class ScriptedSource implements YouTubeSource {
   readonly captureFailures = new Map<string, CollectorError[]>();
   readonly discoverFailures: CollectorError[] = [];
@@ -115,10 +109,8 @@ class ScriptedSource implements YouTubeSource {
 }
 
 let tick = 0;
-/** Each reading is a millisecond later, so events keep the order they happened in. */
 const clock = () => new Date(T0.getTime() + tick++);
 
-/** A job manager over a scripted source that reports to `subscriptions`. */
 function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { capture?: number } = {}) {
   const store = records.jobs;
   const vault = new MemoryVault();
@@ -132,7 +124,6 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
     timers: timersAfter((_ms, callback) => { timers.push(callback); return () => undefined; }),
   });
   const runTimers = () => { for (const callback of timers.splice(0)) callback(); };
-  /** Runs the timers once the manager has set one. */
   const runNextTimers = async () => {
     await eventually(() => expect(timers).not.toHaveLength(0));
     runTimers();
@@ -141,7 +132,6 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
   return { manager, store, records, source, vault, runTimers, runNextTimers, events };
 }
 
-/** Jobs whose subscriptions are an in-memory recorder of what the jobs report. */
 function setup(records: JobRecords = memoryJobRecords(PRODUCT_SOURCES, { now: clock }), limits: { capture?: number } = {}) {
   const subs = new SubscriptionRecorder();
   const world = build(subs, records, limits);
@@ -149,7 +139,6 @@ function setup(records: JobRecords = memoryJobRecords(PRODUCT_SOURCES, { now: cl
   return { ...world, subs };
 }
 
-/** Jobs and the real subscription service over a subscriptions file in a temporary Vault. */
 async function setupWithService() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-subscriptions-'));
   directories.push(root);
@@ -170,7 +159,6 @@ function subscription(id: string): SubscriptionRecord {
   };
 }
 
-/** Subscribes the recorder to a channel with the default settings. */
 function subscribe(subs: SubscriptionRecorder, id: string) {
   const { settings, ...target } = subscription(id);
   return subs.add('youtube', target, { settings });
@@ -206,7 +194,6 @@ describe('manual retry (A-T9)', () => {
     const { manager, source, runNextTimers, events } = setup();
     source.captureFailures.set('bbbbbbbbbbb', [network(), network(), network()]);
     const id = (await manager.submitItem('youtube', watchUrl('bbbbbbbbbbb'))).job.id;
-    // Three attempts: the first and two automatic retries.
     for (let retry = 0; retry < 2; retry += 1) await runNextTimers();
     const failed = await manager.whenSettled(id);
     expect(failed).toMatchObject({ state: 'failed', retry: { attempts: 3 } });
@@ -345,7 +332,6 @@ describe('job summary and event fields', () => {
   });
 
   it('counts active jobs and jobs finished since a time, leaving out retried failures', async () => {
-    // A second capture slot lets the retry finish while another capture is held.
     const { manager, source } = setup(undefined, { capture: 2 });
     source.captureFailures.set('eeeeeeeeeee', [noSubtitles()]);
     source.captureFailures.set('fffffffffff', [noSubtitles()]);
@@ -401,7 +387,6 @@ describe('job summary and event fields', () => {
     const failing = await manager.whenSettled((await manager.submitCheck('youtube', channel, 'manual')).job.id);
     expect(await completion(failing.id)).toMatchObject({ outcome: 'partial', check: { created: 0, failed: 1 } });
     expectCollectedLine(await completion(failing.id));
-    // A failed video's event names the video in its message, so its line does not lead with the title.
     expect((await events({ jobId: failing.id, eventType: ['subscription.item_failed'] }))[0]).toMatchObject({ sourceTitle: '失敗', namesSource: true });
   });
 });
@@ -413,7 +398,6 @@ describe('check summaries from real jobs (#96 A2, L6)', () => {
     const check = async (failing: boolean) => {
       if (failing) source.discoverFailures.push(network(), network(), network());
       const id = (await manager.submitCheck('youtube', channel, 'scheduled')).job.id;
-      // A check that cannot list the channel makes three attempts: the first and two automatic retries.
       if (failing) for (let retry = 0; retry < 2; retry += 1) await runNextTimers();
       return manager.whenSettled(id);
     };
@@ -486,7 +470,6 @@ describe('retention leaves job records alone (A-T3)', () => {
     const interrupted = (await first.manager.submitItem('youtube', watchUrl('jjjjjjjjjjj'))).job.id;
     await first.source.holds.started('jjjjjjjjjjj');
     await store.flush();
-    // The process stops while the capture runs; reopening marks the job interrupted.
     now = new Date(T0.getTime() + 40 * 86_400_000);
     const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => now });
     const reopened = reopenedRecords.jobs;
