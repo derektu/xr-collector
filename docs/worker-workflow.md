@@ -25,11 +25,9 @@ module 的方向見 [開發驗證流程第 5 節](development-validation.md#5-�
 
 ## 二、工作目錄與 branch
 
-每個 session 有自己的 worktree，由開 session 的工具登記為這個 session 的工作目錄。同一個 session 的每張票都在同一個目錄裡做，`node_modules`、下載的 runtime 與 verify 的證據會跨票留著。沒有 `node_modules` 或票改了 `package-lock.json` 時跑 `npm ci`，第一次跑 verify 前跑 `npm run download:runtime`。這個目錄不要改名、不要搬。
+每個 session 的工作目錄由使用者開 session 時決定，可能是 worktree，也可能是主 checkout。做票就在這個目錄開 ticket branch，不另建 worktree、不換目錄（diff 窗格只看得到這裡）。同一個 session 的每張票都在同一個目錄做，`node_modules`、下載的 runtime 與 verify 的證據會跨票留著。沒有 `node_modules` 或票改了 `package-lock.json` 時跑 `npm ci`，第一次跑 verify 前跑 `npm run download:runtime`。這個目錄不要改名、不要搬。
 
-一律在這個 worktree 裡做事（diff 窗格只看得到這裡）。主 checkout 追蹤 main、不放未提交的修改，除了第七節複製證據，不在主 checkout 動任何東西。開工時用 `git rev-parse --show-toplevel` 確認自己在這個 session 的 worktree 裡；落在主 checkout 時，停下來告訴使用者，不要自己想辦法搬。
-
-沒有票的時候，worktree detached 在 `origin/main`；工具剛建好的 worktree 可能停在工具開的 branch 上，不在上面做事。開工時自己開 branch：
+沒有票的時候，worktree detached 在 `origin/main`，主 checkout 停在 `main`；工具剛建好的 worktree 可能停在工具開的 branch 上，不在上面做事。開工時自己開 branch：
 
 ```sh
 git fetch origin && git checkout -b ticket/<票號>-<短名> origin/main
@@ -43,13 +41,15 @@ dev subagent 實作，review subagent 依 [開發驗證流程第 5 節](developm
 
 review 讀程式，不重跑 `npm run verify` 和回歸流程：dev 交回前已經跑過，同一份程式重跑結果相同。讀到可疑的地方要實際確認時，只跑能證明那一點的測試。review 要求修改時，修完照第四節再跑一次，才去找使用者。
 
-實作途中冒出來的設計問題，問完就在同一個 branch 上補完，不要留成下一張票。問題會影響其他票（共用的 API、規格、verify skill）時，先講再動。
+實作途中冒出來的設計問題，問完就在同一個 branch 上補完，不要留成下一張票。問題會影響其他票（共用的 API、規格、verify skill）時，先講再動。討論或審查中冒出的問題，預設在本票處理；要另開票或另外動手之前，先問使用者。
+
+subagent 或 skill 交回的改動，自己對過 diff 再往下走。
 
 ## 四、測試
 
 開發中每改完一處，只跑跟這次改動有關的測試與流程。
 
-找使用者之前和 commit 之前，跑 `npm run verify` 與驗收計畫列出的全部 verify 流程。
+找使用者之前和 commit 之前，跑 `npm run verify` 與驗收計畫列出的全部 verify 流程。交回或找使用者之前，確認這次啟動的程序都已結束、沒有殘留。
 
 ## 五、停下來交給使用者
 
@@ -70,7 +70,7 @@ node scripts/dev.mjs stop
 
 然後連同網址與 PID 回報：
 
-- 照票面的項目逐項講：這一項做了、做成什麼樣，或是沒做、為什麼。票面的 checkbox 由使用者勾，不要自己勾。
+- 照票面的項目逐項講：這一項做了、做成什麼樣，或是沒做、為什麼。
 - 哪些是自己下的判斷，理由是什麼，讓使用者否決得掉
 - 自己跑過哪些驗證與結果，以及 [開發驗證流程第 5 節](development-validation.md#5-審查與交付) 的交付內容。這時還沒 commit，交付內容列的是受測的未提交內容；CI 結果在第七節補上。
 - **動了哪些共用的檔案**：`docs/` 的規格、`AGENTS.md`、verify skill、`skills/xr-collector-agent/`、前後端共用的 API 型別，讓使用者看出會不會跟其他票衝突。
@@ -97,7 +97,7 @@ node scripts/dev.mjs stop
 2. 驗收期間直接改、還沒經過 review 的改動，送 review subagent 審一次，審完、修完才 commit。進 main 的程式都經過 review。
 3. commit、push、開 PR（帶 `Closes #<票號>`），等 CI 通過後 rebase merge。commit 訊息和 PR 描述寫系統現在的樣子。
 4. 用 `node scripts/dev.mjs stop` 停掉這張票的 dev instance（開過 App 就關掉 App），把 worktree 的 `.local/ticket-artifacts/<issue>/` 複製到主 checkout 的同一路徑（不覆寫已有的檔案）。主 checkout 是 `git worktree list` 的第一行。
-5. `git fetch origin && git checkout --detach origin/main`，再刪除本機與遠端的 ticket branch（checkout 中的 branch 刪不掉，所以先 detach）。
+5. 回到最新的 main：worktree 用 `git fetch origin && git checkout --detach origin/main`，主 checkout 用 `git checkout main && git pull --ff-only`。再刪除本機與遠端的 ticket branch（checkout 中的 branch 刪不掉，所以先離開它）。
 6. 在 issue 寫上驗收結果，看板移到 Done。
 
 只有 CI 或回歸流程失敗、rebase 衝突解不掉時，才停下來回報。下一張票從這份文件重新開始。

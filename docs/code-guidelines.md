@@ -38,7 +38,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 
 `eslint.config.ts` 為下列路徑保留直接計時的例外：`src/shared/lib/time.ts`、`src/transport/web/infra/`、`tests/support/`（測試替身模擬耗時）、`scripts/lib/wait.mjs` 與 verify 的 `scripts/lib/wait.mjs`。
 
-用延遲閃過的時序問題是 bug：查出根因再修，不用延遲、重跑或拉長上限讓它消失。
+用延遲閃過的時序問題是 bug：查出根因再修，不用延遲、重跑或拉長上限讓它消失。共享的狀態只有一個擁有者；時序問題要修成能保證正確，不靠計數或等待。
 
 ## React
 
