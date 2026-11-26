@@ -1,5 +1,4 @@
-// Which changes make a screen read again: a screen reloads only after changes to what it shows, and
-// every screen after the Vault's contents change.
+// Broken, a screen keeps showing outdated data or reloads on unrelated changes.
 import { describe, expect, it } from 'vitest';
 import { staleAfter, type Change, type Resource } from '../../../../src/transport/web/api/change-feed.js';
 

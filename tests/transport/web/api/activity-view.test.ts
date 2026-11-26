@@ -1,6 +1,4 @@
-// The activity page reads raw events and summaries from one route and tells them apart by the
-// response's `view`. A page of the other shape, or one that names no view, is an error the page
-// reports, never rows read as empty.
+// Broken, the activity page shows a malformed page as empty rows instead of an error.
 import { describe, expect, it } from 'vitest';
 import type { ActivityLogHealth, ActivityPage, ActivitySummaryPage } from '../../../../src/shared/activity/activity-types.js';
 import { pageOfView } from '../../../../src/transport/web/api/activity-view.js';
@@ -9,8 +7,7 @@ const HEALTH: ActivityLogHealth = { dropped: 0, lastFailureAt: null, lastError: 
 const RAW: ActivityPage = { view: 'raw', events: [], nextCursor: null, retentionDays: 30, log: HEALTH };
 const SUMMARY: ActivitySummaryPage = { view: 'summary', entries: [], nextCursor: null, retentionDays: 30, log: HEALTH };
 
-/** A page as a server that does not name its view would send it. */
-function unnamed(page: ActivityPage | ActivitySummaryPage): ActivityPage | ActivitySummaryPage {
+function withoutView(page: ActivityPage | ActivitySummaryPage): ActivityPage | ActivitySummaryPage {
   const { view: _view, ...rest } = page;
   return rest as ActivityPage | ActivitySummaryPage;
 }
@@ -27,7 +24,7 @@ describe('activity page view', () => {
   });
 
   it('rejects a page that names no view', () => {
-    expect(() => pageOfView(unnamed(RAW), 'raw')).toThrow('answered view undefined to a raw query');
-    expect(() => pageOfView(unnamed(SUMMARY), 'summary')).toThrow('answered view undefined to a summary query');
+    expect(() => pageOfView(withoutView(RAW), 'raw')).toThrow('answered view undefined to a raw query');
+    expect(() => pageOfView(withoutView(SUMMARY), 'summary')).toThrow('answered view undefined to a summary query');
   });
 });

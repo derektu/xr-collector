@@ -1,3 +1,4 @@
+// Broken, a preview during a cooldown waits instead of saying when it can resume.
 import { describe, expect, it } from 'vitest';
 import { PacingGate } from '../../../../src/domain/pacing/pacing-gate.js';
 import { YOUTUBE_PACING } from '../../../../src/domain/sources/youtube/server.js';
@@ -6,9 +7,6 @@ import type { SubscriptionPreview } from '../../../../src/shared/subscriptions/s
 import { createHttpApp, type SubscriptionCollection } from '../../../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { stoppedTimers } from '../../../support/timers.js';
-
-// The pacing state and a channel preview during a cooldown over HTTP: the preview answers
-// rate_limited at once with the time it resumes, and the state clears when the cooldown ends.
 
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 

@@ -1,7 +1,4 @@
-// Closing the HTTP server, as quit and restart do: it waits for a handler under way even after its
-// client left, cancels a subscription preview, delivers a keep-alive response in progress, and does not
-// hang on idle connections, open event streams or waiting change reads. A close that hangs leaves
-// quit or restart stuck.
+// Broken, quit or restart hangs.
 import { once } from 'node:events';
 import http from 'node:http';
 import net from 'node:net';
@@ -27,7 +24,6 @@ afterEach(() => {
   for (const agent of agents.splice(0)) agent.destroy();
 });
 
-/** A search whose rebuild runs until the test releases it. */
 function heldSearch() {
   let release!: () => void;
   let started!: () => void;
@@ -64,7 +60,6 @@ const connections = (running: RunningServer) => new Promise<number>((resolve, re
   running.app.server.getConnections((error, count) => error ? reject(error) : resolve(count));
 });
 
-/** Opens a connection and returns once the server holds it. */
 async function openSocket(running: RunningServer, bytes?: string): Promise<net.Socket> {
   const before = await connections(running);
   const socket = net.connect(running.port, '127.0.0.1');
@@ -76,7 +71,6 @@ async function openSocket(running: RunningServer, bytes?: string): Promise<net.S
   return socket;
 }
 
-/** Resolves once the server receives a request for `path`. */
 const arrives = (running: RunningServer, path: string) => new Promise<void>((resolve) => {
   running.app.server.on('request', (request: http.IncomingMessage) => { if (request.url?.startsWith(path)) resolve(); });
 });
@@ -106,7 +100,7 @@ describe('HTTP server close', () => {
     expect(held.finished()).toBe(true);
   });
 
-  // Fastify keeps an idle connection for 72 seconds, past the test bound, so a close that waited for it fails.
+  // External: Fastify keeps an idle keep-alive connection open for 72 seconds by default (keepAliveTimeout).
   it('delivers the response of a keep-alive request under way and closes without waiting for its idle timeout', async () => {
     const held = heldSearch();
     const running = await server(held.search);

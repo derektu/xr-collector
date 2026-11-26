@@ -1,3 +1,4 @@
+// Broken, the Activity and Jobs pages and Agents read wrong activity or job data.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -19,10 +20,6 @@ import { withYouTube } from '../../../support/youtube-sources.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
-
-// The activity and job query routes: device data readable before a Vault is chosen, the summary,
-// group and retry routes with their statuses, and parameter validation. The rules behind the pages
-// are tested in tests/domain/activity and tests/domain/jobs.
 
 const VAULT = '/vaults/http';
 const VAULT_ID = 'vault-id';

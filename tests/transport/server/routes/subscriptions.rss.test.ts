@@ -1,3 +1,4 @@
+// Broken, an Agent cannot manage RSS subscriptions or read their documents.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchText } from '../../../../src/domain/sources/rss/http.js';
 import { rssPlugin, subscriptionId } from '../../../../src/domain/sources/rss/server.js';
@@ -9,9 +10,6 @@ import { cleanUp, machine, open, seed, temp } from '../../../support/exchange-fi
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
-
-// RSS through the routes every source type shares (R11-T9): an Agent with a token previews,
-// subscribes, changes, checks and removes an RSS subscription and reads its documents.
 
 const TOKEN = 'rss-routes-token';
 let feeds: SyntheticFeeds;

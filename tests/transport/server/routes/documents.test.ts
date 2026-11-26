@@ -1,7 +1,5 @@
-// The documents HTTP contract the UI and authorized Agents share: listing and reading documents
-// with their publisher, paging newest first with an exact total, filters by source type and
-// publisher ID, the source list with subscription state, and search status against the Vault count.
-// Browse and read keep working while search is unavailable, and reading never rewrites a file.
+// Broken, the UI and Agents see wrong or missing documents, browsing stops while search is down,
+// or reading a document rewrites its file.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -30,11 +28,9 @@ interface Fixture {
   collectedAt: string;
   publishedAt?: string;
   body?: string;
-  /** Extra frontmatter a later version or another tool may have written. */
-  extra?: Record<string, unknown>;
+  unknownFrontmatter?: Record<string, unknown>;
 }
 
-/** Writes a document file in the Vault format directly, with or without the optional fields. */
 async function writeDocument(root: string, fixture: Fixture): Promise<void> {
   const directory = path.join(root, 'documents', 'youtube');
   await mkdir(directory, { recursive: true });
@@ -55,7 +51,7 @@ async function writeDocument(root: string, fixture: Fixture): Promise<void> {
       subtitle: { language_code: 'zh-Hant', kind: 'manual' },
       source_tags: [],
     },
-    ...fixture.extra,
+    ...fixture.unknownFrontmatter,
   };
   const body = fixture.body ?? `## 段落標題\n\n這是 **${fixture.videoId}** 的[字幕](https://example.com)正文。`;
   await writeFile(path.join(directory, `${fixture.videoId}.md`), `---\n${stringify(metadata)}---\n\n${body}\n`);
@@ -79,12 +75,12 @@ function channels(list: SubscriptionRecord[]) {
 }
 
 describe('documents HTTP contract', () => {
-  it('reads documents with and without a publisher ID through the shared contract', async () => {
+  it('reads documents with and without a publisher ID through the shared contract, without rewriting the file', async () => {
     const root = await vaultRoot();
     await writeDocument(root, { videoId: 'nopubid0001', collectedAt: '2026-09-01T00:00:00.000Z', publisher: '未記錄 ID 的頻道' });
     await writeDocument(root, {
       videoId: 'current0001', publisherId: 'UC-a', collectedAt: '2026-10-01T00:00:00.000Z', publishedAt: '2026-09-30T00:00:00.000Z',
-      extra: { aliases: ['未知欄位'], collector_extension: { note: 'kept' } },
+      unknownFrontmatter: { aliases: ['未知欄位'], collector_extension: { note: 'kept' } },
     });
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector: new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES))) });
 
@@ -113,7 +109,6 @@ describe('documents HTTP contract', () => {
     const read = (await app.inject('/api/documents/youtube%3Acurrent0001')).json().document;
     expect(read.bodyMarkdown).toContain('## 段落標題');
     expect(read).not.toHaveProperty('excerpt');
-    // Reading never rewrites the file, so fields this version does not know stay on disk.
     expect(await readFile(path.join(root, 'documents', 'youtube', 'current0001.md'), 'utf8')).toContain('collector_extension');
     await app.close();
   });
@@ -121,7 +116,6 @@ describe('documents HTTP contract', () => {
   it('pages browse results newest first with ties broken by ID and an exact total', async () => {
     const root = await vaultRoot();
     const ids = Array.from({ length: 45 }, (_, index) => `page${String(index).padStart(7, '0')}`);
-    // Pairs share a collection time so the ID tie-break decides their order.
     await Promise.all(ids.map((videoId, index) => writeDocument(root, {
       videoId, publisherId: 'UC-a', collectedAt: new Date(Date.UTC(2026, 9, 1, 0, Math.floor(index / 2))).toISOString(),
     })));

@@ -1,6 +1,4 @@
-// GET/PUT /api/device/login-startup, the open-at-login setting: readable before a Vault is set up,
-// refused outside the packaged app on the UI and the Agent listener alike, strict about the request body, and reporting a needed approval
-// or a failed read-back with stable error codes.
+// Broken, the open-at-login setting changes outside the packaged app or fails without a stable reason.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';

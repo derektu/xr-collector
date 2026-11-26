@@ -1,9 +1,5 @@
-// Document status over the HTTP API the UI and authorized Agents share: every document reads as a
-// draft or published (a collected one and one another tool wrote without `status` are published),
-// browse and search filter by status with counts that follow the other filters, publishing and
-// taking back to draft change only the status, notify readers and record an event, and the search
-// index follows. Without it an Agent cannot see or change status, an unauthorized request could, a
-// filter mixes in the other status, or search keeps showing a status the document no longer has.
+// Broken, an Agent cannot see or change a document's status, an unauthorized request can, a status
+// filter mixes in the other status, or search shows a stale status.
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -35,8 +31,7 @@ const agent = { authorization: `Bearer ${TOKEN}` };
 const statusPath = (id: string) => `/api/documents/${encodeURIComponent(id)}/status`;
 const filePath = (root: string, videoId: string) => path.join(root, 'documents', 'youtube', `${videoId}.md`);
 
-/** A document file as another tool writes it: the Vault format without `status`. */
-const UNTAGGED = `---
+const FILE_WITHOUT_STATUS = `---
 type: Transcript
 title: "手寫 文件"
 resource: https://www.youtube.com/watch?v=handwritten
@@ -64,11 +59,6 @@ interface Setup {
   changes: Change[];
 }
 
-/**
- * A Vault with five collected documents and one another tool wrote: `ch1aaaaaaa1`–`3` of channel
- * UC-one, `ch2aaaaaaa1`–`2` of UC-two, and `handwritten` of UC-hand. Every body holds 半導體 and
- * orchard, so both the Chinese fragment and the Latin search path find all six.
- */
 async function setup(search?: Pick<TranscriptSearch, 'index'>, clock: { now: Date } = { now: new Date('2026-11-01T00:00:00.000Z') }): Promise<Setup> {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-document-status-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -77,7 +67,7 @@ async function setup(search?: Pick<TranscriptSearch, 'index'>, clock: { now: Dat
     await vault.add(transcriptDocument(video(id, { channelId, bodyMarkdown: `${id} 談半導體產業，orchard observatory。` })));
   }
   await mkdir(path.join(root, 'documents', 'youtube'), { recursive: true });
-  await writeFile(filePath(root, 'handwritten'), UNTAGGED);
+  await writeFile(filePath(root, 'handwritten'), FILE_WITHOUT_STATUS);
   const events: Array<Omit<NewJobEvent, 'vaultPath' | 'jobId'>> = [];
   const changes: Change[] = [];
   const collector = new Collector(vault, search, { recordEvent: (entry) => events.push(entry), noteChange: (change) => changes.push(change) });
@@ -180,7 +170,6 @@ describe('document status over HTTP', () => {
 });
 
 describe('document status in search', { tags: [REAL_ENGINE_TAG] }, () => {
-  /** A managed search on the engine at `databasePath`, loading the Vault's documents; counts its rebuilds. */
   async function startSearch(databasePath: string, vault: MarkdownVault): Promise<{ search: ManagedTranscriptSearch; engine: RunningMeilisearch; rebuilds: () => number }> {
     const engine = await startMeilisearchProcess({ binaryPath: bundledMeilisearch, databasePath });
     cleanup.push(() => engine.close());
@@ -211,7 +200,6 @@ describe('document status in search', { tags: [REAL_ENGINE_TAG] }, () => {
       expect((await http.inject({ method: 'PUT', url: statusPath(id), headers: agent, payload: { status } })).statusCode).toBe(200);
     for (const id of ['youtube:ch1aaaaaaa2', 'youtube:ch2aaaaaaa1', 'youtube:handwritten']) await put(id, 'draft');
 
-    /** Draft and published hits of a query with every other filter, checked against the counts and the unfiltered total. */
     const byStatus = async (filters: string) => {
       const any = await get(`/api/search?${filters}`);
       const draft = await get(`/api/search?${filters}&status=draft`);
@@ -232,7 +220,6 @@ describe('document status in search', { tags: [REAL_ENGINE_TAG] }, () => {
     expect(await byStatus('q=半導&sourceType=youtube&publisherId=UC-one')).toEqual(expected.channelOne);
     expect(await byStatus('q=orchard&sourceType=youtube&publisherId=UC-one')).toEqual(expected.channelOne);
 
-    // Publishing reaches the search filter by the time the response arrives.
     await put('youtube:ch1aaaaaaa2', 'published');
     const followed = { draft: ['youtube:ch2aaaaaaa1', 'youtube:handwritten'], published: [...expected.fragment.published, 'youtube:ch1aaaaaaa2'].sort() };
     expect(await byStatus('q=半導體')).toEqual(followed);

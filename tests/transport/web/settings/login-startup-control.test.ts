@@ -1,6 +1,4 @@
-// The login startup switch shows what the operating system reports. Without these rules a refused
-// write leaves the switch on although the OS kept it off, a change made in the OS settings stays
-// hidden until the page reloads.
+// Broken, the login startup switch shows on although the OS kept it off, or misses a change made in the OS settings.
 import { describe, expect, it } from 'vitest';
 import { LoginStartupControl, loginStartupNote, type LoginStartupPort } from '../../../../src/transport/web/settings/login-startup-control.js';
 import type { LoginStartupStatus } from '../../../../src/shared/api/device-types.js';
@@ -10,7 +8,6 @@ const status = (enabled: boolean): LoginStartupStatus => ({
   supported: true, enabled, state: enabled ? 'enabled' : 'disabled', message: enabled ? '已在登入電腦時自動啟動。' : '登入自啟已關閉。',
 });
 
-/** An OS whose reads and writes wait until the test answers them. */
 function heldOs() {
   const calls: Array<{ kind: 'read' | 'write'; enabled: boolean | undefined; signal: AbortSignal; answer: (value: LoginStartupStatus) => void; fail: (error: Error) => void }> = [];
   const call = (kind: 'read' | 'write', signal: AbortSignal, enabled?: boolean) => new Promise<LoginStartupStatus>((resolve, reject) => {
@@ -75,8 +72,6 @@ describe('login startup control', () => {
     expect(control.current().status?.enabled).toBe(false);
   });
 
-  // The note follows the state the OS reports; the server's message only ever shows, so rewording it
-  // never brings the routine states back below the switch.
   it('shows guidance for states other than on and off, whatever the message says', () => {
     const reported = (state: LoginStartupStatus['state'], message: string): LoginStartupStatus => ({
       supported: state !== 'unavailable', enabled: state === 'enabled', state, message,

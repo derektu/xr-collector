@@ -1,6 +1,4 @@
-// How export and import read in the window: file sizes, file progress while an import writes,
-// what an import adds, updates and removes by kind, the export time, the platform's file manager,
-// and which operations switch the Vault.
+// Broken, export and import show wrong sizes, progress or results, or the wrong operations switch the Vault.
 import { describe, expect, it } from 'vitest';
 import {
   changes, exportTime, fileManager, fileName, fileProgress, hasChanges, importApplyOutcome, relocationPhase, sizeLabel, switchesVault,

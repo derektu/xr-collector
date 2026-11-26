@@ -1,7 +1,4 @@
-// What the Subscriptions pages show: times relative to today in the device time zone, type and name
-// filters and detail paths kept in the URL, active jobs counted once, collection record rows, why
-// work waits for a retry, the last and next check, shortened names and addresses, and a URL
-// recognition applied only to the address it answered.
+// Broken, the Subscriptions pages show wrong times, filters or names, or act on a recognition of another address.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CollectionJob } from '../../../../src/shared/jobs/job-types.js';
 import type { PendingSubscription, ScheduledCheck, SubscriptionEntry } from '../../../../src/shared/subscriptions/subscription-types.js';
@@ -56,7 +53,7 @@ function job(overrides: Partial<CollectionJob>): CollectionJob {
 
 describe('source presentation (T-09)', () => {
   it('formats times relative to today in the device time zone', () => {
-    const now = new Date('2026-10-15T06:00:00.000Z'); // 14:00 in Taipei
+    const now = new Date('2026-10-15T06:00:00.000Z');
     expect(shortTime('2026-10-15T05:30:00.000Z', now)).toEqual({ day: 'today', time: '13:30' });
     expect(shortTime('2026-10-14T13:05:00.000Z', now)).toEqual({ day: 'yesterday', time: '21:05' });
     expect(shortTime('2026-10-13T16:30:00.000Z', now)).toEqual({ day: 'yesterday', time: '00:30' });
@@ -209,7 +206,6 @@ describe('source presentation (T-09)', () => {
     };
     const answer = { input: 'youtu.be/aaaaaaaaaaa', recognition };
     expect(currentRecognition(answer, '  youtu.be/aaaaaaaaaaa ')).toEqual({ recognition, primary: collect });
-    // The input changed while the next recognition waits: the old card and its action no longer apply.
     expect(currentRecognition(answer, 'youtu.be/bbbbbbbbbbb')).toBeNull();
     expect(currentRecognition(null, 'youtu.be/aaaaaaaaaaa')).toBeNull();
     expect(currentRecognition({ input: 'x', recognition: { ...recognition, actions: [] } }, 'x')).toEqual({ recognition: { ...recognition, actions: [] }, primary: null });

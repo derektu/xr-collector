@@ -1,7 +1,5 @@
-// The Agent's authenticated listener: every route refuses a missing or wrong key, and with the key
-// an Agent pages, reads, searches and deletes documents. It takes
-// the preferred port or the next free one, keeps its key across restarts and rotates it on reset; a
-// port it cannot bind or a key it cannot save leaves the UI API working.
+// Broken, a caller without the Agent key reaches the data, an Agent loses its key across restarts,
+// or an Agent listener failure takes the UI API down.
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -188,7 +186,6 @@ describe('Agent authenticated HTTP access', () => {
     const config = access.connection();
     if (process.platform !== 'win32') expect((await stat(settingsFile)).mode & 0o777).toBe(0o600);
     expect(new URL(config.url).hostname).toBe('127.0.0.1');
-    // The development test runner is the HTTP client; no client-side helper is distributed.
     const get = async (route: string) => {
       const current = access.connection();
       const response = await fetch(`${current.url}${route}`, {
@@ -286,8 +283,7 @@ describe('Agent authenticated HTTP access', () => {
   it('keeps the key file no more open than its owner needs, on creation, after a reset and on reopen', async () => {
     const { root, collector } = await fixture();
     const settingsFile = path.join(root, 'agent-settings.json');
-    // On Windows the profile folder's inherited access rules protect the key; an ordinary file in the
-    // same folder shows them, and the key file must not grant anyone more.
+    // External: on Windows a new file inherits its access rules from its folder.
     const ordinary = path.join(root, 'ordinary.txt');
     await writeFile(ordinary, 'x');
     const ownerOnly = process.platform === 'win32' ? await fileReaders(ordinary) : ['mode 600'];
@@ -297,7 +293,6 @@ describe('Agent authenticated HTTP access', () => {
     await first.resetKey();
     expect(await fileReaders(settingsFile)).toEqual(ownerOnly);
     await first.close();
-    // A key file another program left readable is closed again when the app opens it.
     if (process.platform !== 'win32') await chmod(settingsFile, 0o644);
     const reopened = await startAgentAccess(options);
     cleanup.push(() => reopened.close());
@@ -355,11 +350,9 @@ describe('Agent authenticated HTTP access', () => {
 
   it('keeps the UI API usable when the first private key cannot be saved', async () => {
     const { root, collector } = await fixture();
-    // A trailing separator makes the initial read report ENOENT, then makes the first temporary
-    // write target a missing directory. This reaches the save failure rather than a read failure.
     const missingParent = path.join(root, 'missing-settings-parent');
-    const settingsFile = `${missingParent}${path.sep}`;
-    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
+    const settingsPathInsideMissingFolder = `${missingParent}${path.sep}`;
+    const access = await startAgentAccess({ sources: PRODUCT_SOURCES, collector, settingsFile: settingsPathInsideMissingFolder, preferredPort: await freePort(), skillPath: path.resolve('skills/xr-collector-agent') });
     cleanup.push(() => access.close());
     const ui = await createHttpApp({ sources: PRODUCT_SOURCES, collector, agentConnection: access });
     cleanup.push(() => ui.close());
@@ -382,7 +375,6 @@ function listenOnFreePort(): Promise<Server> {
   });
 }
 
-/** A port nothing listens on right now, so the Agent listener never competes with a running app. */
 async function freePort(): Promise<number> {
   const server = await listenOnFreePort();
   const { port } = server.address() as { port: number };
@@ -390,10 +382,6 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/**
- * Who may open a file: its POSIX mode, or on Windows every identity the file's access rules allow,
- * with the signed-in user, SYSTEM and Administrators named by role and anyone else by SID.
- */
 async function fileReaders(file: string): Promise<string[]> {
   if (process.platform !== 'win32') return [`mode ${((await stat(file)).mode & 0o777).toString(8)}`];
   const script = [

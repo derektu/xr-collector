@@ -1,6 +1,5 @@
-// Subscriptions over HTTP: a request shows in the list while its channel resolves, a removed
-// channel stays marked in the document filter, and removing a subscription with its documents
-// reports the documents it could not delete.
+// Broken, a pending subscription disappears from the list, a removed channel vanishes from the document
+// filter, or a removal hides the documents it could not delete.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,10 +22,6 @@ import { acceptsBearer } from '../../../support/agent-access.js';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
 
-/**
- * Real subscription, job and document services over synthetic channels and a Markdown Vault with
- * deletion records, served twice: to the UI without a token and to Agents with one.
- */
 async function world(options: { failDeleting?: (id: string) => boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-subscription-http-'));
   roots.push(root);

@@ -1,6 +1,4 @@
-// The detail of a group of routine checks loads ten checks at a time. Without these rules an older
-// page requested at one level lands after the reader switched levels and mixes checks read at the
-// old level into the new list, or switching levels throws away the checks the reader had loaded.
+// Broken, a group's detail mixes in checks read at another level, or switching levels drops loaded checks.
 import { describe, expect, it } from 'vitest';
 import { ActivityGroupPages, type GroupPageReader, type GroupPagesState } from '../../../../src/transport/web/activity/activity-group-pages.js';
 import type {
@@ -16,7 +14,6 @@ function check(index: number, severity: ActivityQuery['severity']): ActivityChec
   return { jobId: `check-${index}`, severity: severity?.join(',') ?? 'all' } as unknown as ActivityCheckDetail;
 }
 
-/** A group of twelve checks whose reads wait until the test answers them, in the order it chooses. */
 function heldGroup() {
   const pending: Array<{ query: Parameters<GroupPageReader>[1]; answer: () => void }> = [];
   const read: GroupPageReader = (groupId, query) => new Promise<ActivityGroupPage>((resolve) => {
@@ -31,7 +28,6 @@ function heldGroup() {
   });
   const states: GroupPagesState[] = [];
   const pages = new ActivityGroupPages(read, (state) => states.push(state));
-  /** Answers the oldest request still waiting. */
   const answerNext = () => pending.shift()!.answer();
   return { pages, pending, answerNext, states };
 }
@@ -49,7 +45,6 @@ describe('activity group detail pages', () => {
     const older = pages.older();
     const switched = pages.show('group', ['error']);
     expect(pending.map((entry) => entry.query.severity)).toEqual([['info', 'warning', 'error'], ['error']]);
-    // The new level answers first; the older page at the old level arrives late.
     pending.push(pending.shift()!);
     answerNext();
     await switched;

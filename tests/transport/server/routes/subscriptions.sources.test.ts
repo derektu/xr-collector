@@ -1,7 +1,4 @@
-// The source list and source detail over HTTP: document counts per subscription with the rest under
-// single items, an error status that the next success clears, one newest-first record of a
-// channel's documents and checks, the Agent token on every route, and per-subscription settings
-// that are validated, changed, applied to the rest and kept.
+// Broken, the source list and detail show wrong counts, statuses or history, or subscription settings are lost.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,7 +23,6 @@ const MINUTE = 60_000;
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-/** Real subscription and job services over synthetic channels, served by the HTTP app with an Agent token. */
 async function world() {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-sources-'));
   roots.push(root);
@@ -40,7 +36,6 @@ async function world() {
     sources: PRODUCT_SOURCES,
     vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 },
-    // Failures here are about the subscription status; automatic retries have their own cases.
     retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
@@ -72,7 +67,6 @@ describe('source list (T-06, T-08)', () => {
     await w.subscribe('alpha');
     await w.subscribe('gamma');
     w.advance(10 * MINUTE);
-    // A single video of an unsubscribed channel, and one of a subscribed channel published later.
     await w.jobs.whenSettled((await w.jobs.submitItem('youtube', `https://youtu.be/${betaVideo}`)).job.id);
     const [lateAlpha] = w.source.publish(subscribed, 'n', w.clock.now, [0]);
     w.advance(5 * MINUTE);
@@ -94,7 +88,6 @@ describe('source list (T-06, T-08)', () => {
       type: 'youtube', kind: 'channel', kindLabel: 'YouTube 頻道', id: subscribed, title: '合成頻道 alpha',
       status: 'tracking', lastError: null, documentCount: 3, lastCollectedAt: unsubscribedAt,
     });
-    // beta's single video, gamma's three kept documents and the legacy document without a publisher ID.
     expect(body.unsubscribed).toEqual({ documentCount: 5, lastCollectedAt: new Date(w.clock.now.getTime() - 5 * MINUTE).toISOString() });
     expect(body.types).toEqual([{ type: 'youtube', count: 1 }, { type: 'rss', count: 0 }]);
     await w.app.close();
@@ -127,7 +120,6 @@ describe('source list (T-06, T-08)', () => {
     await w.subscribe('alpha');
     w.source.discoveryFailure = new CollectorError('network_error', '無法連線到 YouTube。');
     const failed = await w.jobs.whenSettled((await w.channels.startRun({ trigger: 'manual' }))[0]!.job.id);
-    // A newer channel job that a shutdown interrupted, as the job history reports it after a restart.
     const history = w.jobs.checkJobs.bind(w.jobs);
     vi.spyOn(w.jobs, 'checkJobs').mockImplementation((type) => {
       const jobs = history(type);
@@ -181,7 +173,6 @@ describe('source detail (T-07, T-08)', () => {
     expect(status).toBe(200);
     expect(body.subscription).toMatchObject({ id, type: 'youtube', kindLabel: 'YouTube 頻道', documentCount: 7, status: 'tracking' });
     const collection = body.collection as Array<{ kind: string; trigger?: string; created?: number; key?: string; at: string }>;
-    // 7 documents of this channel and its 2 checks; the other channel's document is not part of it.
     expect(collection).toHaveLength(9);
     expect(collection.filter((entry) => entry.kind === 'check').map((entry) => [entry.trigger, entry.created])).toEqual([['manual', 1], ['subscribe', 6]]);
     expect(collection[0]).toMatchObject({ kind: 'check', trigger: 'manual' });
@@ -217,7 +208,7 @@ describe('source detail (T-07, T-08)', () => {
 });
 
 describe('per-subscription settings over HTTP (A5)', () => {
-  it('subscribes with chosen settings, changes and applies them', async () => {
+  it('subscribes with chosen or default settings, keeps concurrent changes, checks a resume with its new range, and applies them', async () => {
     const w = await world();
     const auth = { authorization: 'Bearer agent-token' };
     const send = async (method: 'POST' | 'PATCH', url: string, payload?: unknown) => {
@@ -264,7 +255,6 @@ describe('per-subscription settings over HTTP (A5)', () => {
     const detail = (await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription;
     expect(detail).toMatchObject({ settings, nextCheckAt: expect.any(String), lastCheckedAt: expect.any(String) });
 
-    // Concurrent changes to different settings of one subscription all persist.
     const concurrent = await Promise.all([
       send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { intervalMinutes: 180 } }),
       send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillDays: 60 } }),
@@ -273,7 +263,6 @@ describe('per-subscription settings over HTTP (A5)', () => {
     expect(concurrent.map((answer) => answer.status)).toEqual([200, 200, 200]);
     expect((await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription.settings).toEqual({ intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50 });
 
-    // An empty settings object subscribes with the type's defaults.
     const delta = w.source.addChannel('delta');
     w.source.publish(delta, 'd', w.clock.now, [1]);
     const defaults = await send('POST', '/api/subscriptions', { url: '@delta', settings: {} });
@@ -281,7 +270,6 @@ describe('per-subscription settings over HTTP (A5)', () => {
     await w.jobs.whenSettled((await w.jobs.whenSettled(defaults.body.job.id)).result!.followUpJobId!);
     expect((await w.get(`/api/subscriptions/youtube/${delta}`)).body.subscription.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 });
 
-    // A resume and a settings change in one request check with the new range.
     const resumed = await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
     expect(resumed.body).toMatchObject({ subscription: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });
     await eventually(() => expect(w.jobs.isBusy()).toBe(false));

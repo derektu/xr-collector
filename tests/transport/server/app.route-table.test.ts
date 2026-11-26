@@ -1,7 +1,4 @@
-// The server registers exactly the routes of the API table (src/shared/api/api-routes.ts), with the table's
-// method and path, so the web client and the system tray reach the route the table promises them. A
-// route missing from the server leaves a screen or a tray action answering 404; a route registered
-// outside the table answers a shape no client type checks.
+// Broken, a screen or tray action answers 404, or a route answers a shape no client type checks.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { API_ROUTES } from '../../../src/shared/api/api-routes.js';
