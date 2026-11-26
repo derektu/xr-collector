@@ -25,13 +25,14 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 規則 | 強制 |
 |---|---|
 | 不直接用 `setTimeout`、`setInterval`（含經 `globalThis`、`window`、`global`、`self`）、`timers` 模組或 Playwright 的 `waitForTimeout`。範圍是 `src`、`tests`、`scripts` 與 `.claude/skills/verify` | lint（`xr-collector/no-timers`） |
-| 產品程式需要時間時，由呼叫端傳入計時器，例如 `activity-log.ts`、`pacing-gate.ts`、`job-manager.ts` 的 `setTimer` 選項，測試傳入自己控制的計時器 | lint 擋下直接計時；共用的時間模組尚未提供 |
-| `AbortSignal.timeout` 也是計時器，同樣禁用；外部操作的期限由呼叫端持有並傳入的 `AbortController` 中止，測試自己 abort | lint |
+| 產品程式需要時間時（排程、節流、重試間隔、心跳），由呼叫端傳入 `src/shared/lib/time.ts` 的 `Timers`（`after`、`every`），預設 `systemTimers`；不該讓 Node 程序撐著的計時用 `backgroundTimers`。測試傳入自己控制的計時器（`tests/support/timers.ts`） | lint |
+| 外部操作的期限用同檔的 `deadline(ms, reason?)`，它回傳到期中止的 signal；`AbortSignal.timeout` 也是計時器，同樣禁用 | lint |
+| 輪詢外部狀態（程序起來或結束、Meilisearch task、檔案鎖放開）用同檔的 `waitUntil(check, { interval, timeout, label })`，到上限以帶 label 的錯誤結束。`retryOn` 指定哪些錯誤算「還沒好」，到上限時丟出最後一個這類錯誤。時間模組不提供 sleep | lint |
 | 畫面等使用者的計時（停止打字後再查、通知自動消失、hover 延遲關閉）用 `src/transport/web/infra/timing.ts` 的 `useDebouncedValue`、`useTimeout` | lint 擋下直接計時 |
 | 測試的等待方式見 [專案驗證設定](project-validation.md#自動檢查) | lint 擋下睡眠；`tests/tooling/test-waits.test.ts` 擋下直接輪詢與個別上限 |
-| verify skill 的腳本經 `.claude/skills/verify/scripts/lib/wait.mjs` 等待 | lint |
+| `scripts/` 經 `scripts/lib/wait.mjs` 的 `waitFor`、`deadline`、`raceWithTimeout` 等待；verify skill 的腳本經 `.claude/skills/verify/scripts/lib/wait.mjs`，證明一段時間內某件事沒有發生的觀察窗用其中具名的 `observeFor(ms)`。兩份 `wait.mjs` 各自獨立，不互相 import | lint |
 
-`eslint.config.ts` 為下列路徑保留直接計時的例外：`src/shared/lib/time.ts`、`src/transport/web/infra/`、`tests/support/`（測試替身模擬耗時）與 verify 的 `scripts/lib/wait.mjs`。
+`eslint.config.ts` 為下列路徑保留直接計時的例外：`src/shared/lib/time.ts`、`src/transport/web/infra/`、`tests/support/`（測試替身模擬耗時）、`scripts/lib/wait.mjs` 與 verify 的 `scripts/lib/wait.mjs`。
 
 用延遲閃過的時序問題是 bug：查出根因再修，不用延遲、重跑或拉長上限讓它消失。
 
@@ -80,12 +81,13 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 
 ## 既有違規的基準線
 
-計時（`xr-collector/no-timers`）與 `useEffect`（`xr-collector/no-effect-hooks`）的既有違規記在 `eslint-suppressions.json`（ESLint bulk suppressions，按檔案與規則記數量），只能減少。兩類各有自己的規則名稱，所以一個檔案不能拿掉一處 `useEffect` 換成一處計時：
+目前所有 lint 規則都不帶基準線，lint 報出的每一處都要改。只有導入新規則、既有違規一時改不完時，才以 ESLint bulk suppressions 把它們記成基準線（`eslint-suppressions.json`）：
 
+- 按檔案與規則記數量，只能減少。每條規則有自己的名稱，所以一個檔案不能拿掉一種違規換成另一種。
 - 檔案的違規多於記錄的數量時，lint 列出該檔案這條規則的全部違規並失敗。
-- 違規少於記錄的數量時，lint 也失敗，提示以 `npx eslint --prune-suppressions .` 把記錄降到目前的數量。
+- 違規少於記錄的數量時，lint 也失敗，提示以 `npx eslint --prune-suppressions .` 把記錄降到目前的數量；全部清掉後，prune 留下的空記錄連同檔案一起刪除。
 
-comment 與 `any` 沒有基準線。新增違規不加進基準線；規則真的需要例外時，寫進 `eslint.config.ts`。
+新增的違規不加進基準線；規則真的需要例外時，寫進 `eslint.config.ts`。
 
 ## 權宜寫法
 

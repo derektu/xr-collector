@@ -15,6 +15,7 @@ import { YOUTUBE_PACING } from '../../../src/domain/sources/youtube/server.js';
 import { SubscriptionService } from '../../../src/domain/subscriptions/subscription-service.js';
 import type { SubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { timersAfter } from '../../support/timers.js';
 
 // The request channel runs with a manual clock and timers, so every wait is checked exactly.
 
@@ -31,11 +32,11 @@ function harness() {
     now: () => new Date(now),
     // 0.5 always draws the middle of the range: 4000 + floor(0.5 × 8001) = 8000 ms.
     random: () => 0.5,
-    setTimer: (callback, ms) => {
+    timers: timersAfter((ms, callback) => {
       const timer = { at: now + ms, callback, cancelled: false };
       timers.push(timer);
       return () => { timer.cancelled = true; };
-    },
+    }),
   };
   const advance = async (ms: number) => {
     const target = now + ms;

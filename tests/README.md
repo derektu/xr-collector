@@ -36,7 +36,7 @@
 
 ## 等待
 
-等待與證明「沒有發生」的規則見 [專案驗證設定的測試等待](../docs/project-validation.md#自動檢查)。可直接等的 promise 例如 `JobManager.whenSettled` 與假來源的 `holds.started()`；其餘用 `tests/support/wait.ts` 的 `eventually`。證明沒有發生的寫法，例如等 gate 裡後排的請求跑完，再確認逾時的預覽沒有送出；或等 server 的 listener 關閉，再確認 close 仍在等 handler。測試替身用固定時間模擬工作耗時，只放在 `tests/support/`；其他測試的直接計時由 lint 擋下，既有的列在 `eslint-suppressions.json`。
+等待與證明「沒有發生」的規則見 [專案驗證設定的測試等待](../docs/project-validation.md#自動檢查)。可直接等的 promise 例如 `JobManager.whenSettled` 與假來源的 `holds.started()`；其餘用 `tests/support/wait.ts` 的 `eventually`。證明沒有發生的寫法，例如等 gate 裡後排的請求跑完，再確認逾時的預覽沒有送出；或等 server 的 listener 關閉，再確認 close 仍在等 handler。測試替身用固定時間模擬工作耗時，只放在 `tests/support/`；其他測試的直接計時由 lint 擋下。需要時間的產品模組由測試傳入 `tests/support/timers.ts` 的計時器（`timersAfter` 由測試決定何時觸發，`stoppedTimers` 永不觸發），不真的等待。
 
 分類不代表測試層級：同一功能可能包含單元、HTTP 與檔案系統整合。`web` 的函式測試不是完整畫面 E2E，yt-dlp 的 fixture 測試也不是 YouTube 真實連線驗收。Web 畫面與原生操作的驗證層級依 [專案驗證設定](../docs/project-validation.md#驗證層級)，只在有實際自動化案例時建立 E2E 測試目錄。
 

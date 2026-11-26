@@ -18,6 +18,7 @@ import { productSourcesWith } from '../../support/product-sources.js';
 import { readEventFiles } from '../../support/event-files.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
+import { stoppedTimers } from '../../support/timers.js';
 
 // The subscription rules hold through SubscriptionService, the only writer of subscriptions, with a
 // real job manager running checks of fake source types: failure counts, out-of-range items,
@@ -65,7 +66,7 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
     const jobs: JobManager = new JobManager({
       sources: SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,
-      limits: { discovery: 1, capture: 1 }, retry: { maxAttempts: 1 }, setTimer: () => () => undefined,
+      limits: { discovery: 1, capture: 1 }, retry: { maxAttempts: 1 }, timers: stoppedTimers,
     });
     const service = (type: FakeType) => new SubscriptionService(type, stores[type], jobs, {
       sources: SOURCES,

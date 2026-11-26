@@ -57,10 +57,9 @@ async function captureThroughElectron(app, window) {
     for (const each of BrowserWindow.getAllWindows()) each.webContents.beginFrameSubscription(() => undefined);
   });
   window.screenshot = async ({ path: file } = {}) => {
-    await window.evaluate(() => new Promise((resolve) => {
+    await raceWithTimeout([window.evaluate(() => new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
-      setTimeout(resolve, 1_000);
-    }));
+    }))], 1_000);
     const png = Buffer.from(await app.evaluate(async ({ BrowserWindow }) => {
       const [each] = BrowserWindow.getAllWindows();
       if (!each) throw new Error('the app has no window to capture');
@@ -269,11 +268,16 @@ export async function launchElectron({
      */
     async launchAgain() {
       const second = spawn(target.executable, [...target.args, runMarker(runDir)], { cwd: target.cwd, env, stdio: 'ignore' });
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { second.kill(); reject(new Error('The second launch did not exit within 30 seconds')); }, 30_000);
-        second.once('exit', (code) => { clearTimeout(timer); resolve(code); });
-        second.once('error', (error) => { clearTimeout(timer); reject(error); });
+      const exit = new Promise((resolve, reject) => {
+        second.once('exit', (code) => resolve({ code }));
+        second.once('error', reject);
       });
+      const outcome = await raceWithTimeout([exit], 30_000, 'timeout');
+      if (outcome === 'timeout') {
+        second.kill();
+        throw new Error('The second launch did not exit within 30 seconds');
+      }
+      return outcome.code;
     },
     /**
      * Resolves once the app has quit on its own. On Windows an app that finished its shutdown can

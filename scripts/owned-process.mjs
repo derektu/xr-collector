@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { waitFor, WaitTimeout } from './lib/wait.mjs';
 
 export class UnsafeProcessTreeError extends Error {
   constructor(message, processTree, options = {}) {
@@ -123,10 +124,10 @@ export async function terminateOwnedProcessTree(pid, options = {}) {
     try { process.kill(-target, 0); return true; }
     catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
   });
-  if (!await sendGroupSignal(pid, 'SIGTERM', send, options)) return;
-  if (await waitUntilGone(pid, exists, options)) return;
-  if (!await sendGroupSignal(pid, 'SIGKILL', send, options)) return;
-  if (!await waitUntilGone(pid, exists, options)) throw new Error(`POSIX process group ${pid} remained alive after SIGKILL.`);
+  if (!await sendGroupSignal(pid, 'SIGTERM', send)) return;
+  if (await waitUntilGone(pid, exists)) return;
+  if (!await sendGroupSignal(pid, 'SIGKILL', send)) return;
+  if (!await waitUntilGone(pid, exists)) throw new Error(`POSIX process group ${pid} remained alive after SIGKILL.`);
 }
 
 async function runTaskkill(pid, options) {
@@ -141,29 +142,21 @@ async function runTaskkill(pid, options) {
   });
 }
 
-async function waitUntilGone(pid, exists, options) {
-  const timeoutMs = options.terminationTimeoutMs ?? 5_000;
-  const intervalMs = options.terminationPollMs ?? 25;
-  const sleep = options.delay ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  const deadline = Date.now() + timeoutMs;
-  while (exists(pid)) {
-    if (Date.now() >= deadline) return false;
-    await sleep(intervalMs);
+const TERMINATION_WAIT = { timeout: 5_000, interval: 25 };
+
+async function waitUntilGone(pid, exists) {
+  try {
+    return await waitFor(() => !exists(pid), `process group ${pid} to exit`, TERMINATION_WAIT);
+  } catch (error) {
+    if (error instanceof WaitTimeout) return false;
+    throw error;
   }
-  return true;
 }
 
-async function sendGroupSignal(pid, signal, send, options) {
-  const timeoutMs = options.terminationTimeoutMs ?? 5_000;
-  const intervalMs = options.terminationPollMs ?? 25;
-  const sleep = options.delay ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try { send(pid, signal); return true; }
-    catch (error) {
-      if (error.code === 'ESRCH') return false;
-      if (error.code !== 'EPERM' || Date.now() >= deadline) throw error;
-      await sleep(intervalMs);
-    }
-  }
+async function sendGroupSignal(pid, signal, send) {
+  const sent = () => {
+    try { send(pid, signal); return 'sent'; }
+    catch (error) { if (error.code === 'ESRCH') return 'gone'; throw error; }
+  };
+  return await waitFor(sent, `${signal} to reach process group ${pid}`, { ...TERMINATION_WAIT, retryOn: (error) => error.code === 'EPERM' }) === 'sent';
 }

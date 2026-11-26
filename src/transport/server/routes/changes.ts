@@ -5,6 +5,7 @@ import type { ChangeFeed } from '../../../app/runtime/index.js';
 import { CHANGE_KINDS, parseCursor, type ChangeBatch, type ChangeKind } from '../../../shared/api/changes.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import { maskSecretsJson } from '../../../shared/lib/redact.js';
+import { backgroundTimers, systemTimers } from '../../../shared/lib/time.js';
 
 export const MAX_STREAMS = 16;
 // External: A comment line keeps an idle server-sent events connection open through sleep and proxies.
@@ -51,12 +52,11 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
     response.write('retry: 1000\n\n');
     send('hello', { revision: changes.revision });
     const unsubscribe = changes.subscribe((batch) => send('change', batch));
-    const heartbeat = setInterval(() => response.write(': \n\n'), HEARTBEAT_MS);
-    heartbeat.unref();
+    const stopHeartbeat = backgroundTimers.every(HEARTBEAT_MS, () => response.write(': \n\n'));
     const end = () => {
       if (!streams.delete(end)) return;
       unsubscribe();
-      clearInterval(heartbeat);
+      stopHeartbeat();
       response.end();
     };
     streams.add(end);
@@ -92,12 +92,12 @@ export function registerChangeRoutes(app: FastifyInstance, changes: ChangeFeed):
     return new Promise((resolve) => {
       const finish = () => {
         if (!waiting.has(finish)) return;
-        clearTimeout(timer);
+        cancelTimer();
         unsubscribe();
         waiting.delete(finish);
         resolve(read());
       };
-      const timer = setTimeout(finish, wait * 1000);
+      const cancelTimer = systemTimers.after(wait * 1000, finish);
       const unsubscribe = changes.subscribe((batch) => { if (matches(batch)) finish(); });
       waiting.add(finish);
       reply.raw.once('close', finish);

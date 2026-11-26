@@ -1,5 +1,6 @@
 import type { CollectionJob } from '../../shared/jobs/job-types.js';
 import type { Pacing } from '../pacing/index.js';
+import type { Timers } from '../../shared/lib/time.js';
 
 export type WaitCondition = { kind: 'held' } | CooldownWait | RetryWait;
 export interface CooldownWait { kind: 'cooldown'; until: string }
@@ -7,7 +8,7 @@ export interface RetryWait { kind: 'retry'; until: string }
 
 export interface JobWaitsOptions {
   now: () => Date;
-  setTimer: (callback: () => void, ms: number) => () => void;
+  timers: Timers;
   gates: ReadonlyMap<string, Pacing>;
   groupOf: (job: CollectionJob) => string | null;
   held: () => boolean;
@@ -46,10 +47,10 @@ export class JobWaits {
     const current = this.cooldowns.get(group);
     if (current && current.until >= until) return 'already_later';
     current?.cancel();
-    const cancel = this.options.setTimer(() => {
+    const cancel = this.options.timers.after(this.remaining(until), () => {
       if (this.cooldowns.get(group)?.until === until) this.cooldowns.delete(group);
       this.options.onCooldownEnded(group);
-    }, this.remaining(until));
+    });
     this.cooldowns.set(group, { until, cancel });
     return 'extended';
   }
@@ -61,10 +62,10 @@ export class JobWaits {
 
   startRetry(jobId: string, until: string): void {
     this.endRetry(jobId);
-    const cancel = this.options.setTimer(() => {
+    const cancel = this.options.timers.after(this.remaining(until), () => {
       this.retries.delete(jobId);
       this.options.onRetryDue(jobId);
-    }, this.remaining(until));
+    });
     this.retries.set(jobId, { until, cancel });
   }
 

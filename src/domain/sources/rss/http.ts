@@ -1,4 +1,5 @@
 import { CollectorError } from '../../../shared/lib/collector-error.js';
+import { deadline } from '../../../shared/lib/time.js';
 
 export interface FetchedText {
   url: string;
@@ -11,7 +12,7 @@ export const MAX_BYTES = 5 * 1024 * 1024;
 const ACCEPT = 'application/rss+xml, application/atom+xml, application/rdf+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.8, */*;q=0.5';
 
 export async function fetchText(url: string, signal?: AbortSignal): Promise<FetchedText> {
-  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const timeout = deadline(FETCH_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(url, {

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { eventSpec } from '../../shared/activity/event-catalog.js';
 import type { ActivityLogHealth, EventRecorder, JobEvent, NewJobEvent } from '../../shared/activity/activity-types.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
+import { backgroundTimers, type Timers } from '../../shared/lib/time.js';
 
 export const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -20,7 +21,7 @@ const SEGMENT_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/u;
 
 export interface ActivityLogOptions {
   now?: () => Date;
-  setTimer?: (callback: () => void, ms: number) => () => void;
+  timers?: Timers;
   append?: (file: string, data: string) => Promise<void>;
   onRecorded?: (event: JobEvent) => void;
 }
@@ -46,7 +47,7 @@ interface CachedFile {
 export class ActivityLog implements EventRecorder {
   readonly now: () => Date;
   private sequence = 0;
-  private readonly setTimer: (callback: () => void, ms: number) => () => void;
+  private readonly timers: Timers;
   private readonly append: (file: string, data: string) => Promise<void>;
   private readonly memory: JobEvent[] = [];
   private pending: JobEvent[] = [];
@@ -59,11 +60,7 @@ export class ActivityLog implements EventRecorder {
 
   private constructor(private readonly directory: string | null, private readonly options: ActivityLogOptions) {
     this.now = options.now ?? (() => new Date());
-    this.setTimer = options.setTimer ?? ((callback, ms) => {
-      const timer = setTimeout(callback, ms);
-      timer.unref();
-      return () => clearTimeout(timer);
-    });
+    this.timers = options.timers ?? backgroundTimers;
     this.append = options.append ?? ((file, data) => appendFile(file, data, { encoding: 'utf8', mode: 0o600 }));
   }
 
@@ -158,18 +155,18 @@ export class ActivityLog implements EventRecorder {
 
   private schedulePurge(): void {
     if (this.closed) return;
-    this.cancelPurge = this.setTimer(() => {
+    this.cancelPurge = this.timers.after(PURGE_INTERVAL_MS, () => {
       void this.purge().catch((error: unknown) => console.error('Activity log purge failed', error))
         .finally(() => this.schedulePurge());
-    }, PURGE_INTERVAL_MS);
+    });
   }
 
   private scheduleFlush(): void {
     if (this.cancelFlush) return;
-    this.cancelFlush = this.setTimer(() => {
+    this.cancelFlush = this.timers.after(FLUSH_INTERVAL_MS, () => {
       this.cancelFlush = null;
       this.kick();
-    }, FLUSH_INTERVAL_MS);
+    });
   }
 
   private kick(): void {

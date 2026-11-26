@@ -1,6 +1,13 @@
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Lets `ms` pass while a flow watches for something that must not happen in that window, such as a
+ * screen reading on a timer. Only such a named observation window waits on time; every other wait
+ * is for a state, through `waitFor`.
+ */
+export const observeFor = (ms) => sleep(ms);
+
+/**
  * Settles like the first of `promises` to settle, or with `onTimeout` after `ms`. The timer is
  * cleared either way, so a race that ended early never keeps the process alive.
  */

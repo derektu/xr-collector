@@ -3,6 +3,7 @@ import { Menu, nativeImage, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
 import type { ChangeBatch } from '../../shared/api/changes.js';
 import { API_ROUTES, type ApiRoute, type BodyOf, type ResponseOf } from '../../shared/api/api-routes.js';
+import { systemTimers } from '../../shared/lib/time.js';
 import { menuStaleAfter, trayMenuText, trayModel } from './tray-menu.js';
 import type { TrayAction, TrayIcon, TrayMenu, TrayModel, TrayState } from './tray-menu.js';
 import type { DesktopTarget } from './main-window.js';
@@ -54,7 +55,7 @@ export class AppTray {
       try {
         do {
           const wait = this.lastRead + READ_GAP_MS - Date.now();
-          if (wait > 0) await new Promise((resolve) => { setTimeout(resolve, wait); });
+          if (wait > 0) await new Promise<void>((resolve) => { systemTimers.after(wait, resolve); });
           if (this.stopped) return;
           this.again = false;
           this.lastRead = Date.now();

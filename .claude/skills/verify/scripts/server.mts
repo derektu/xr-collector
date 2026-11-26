@@ -39,6 +39,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { sleep } from './lib/wait.mjs';
 
 const checkout = path.resolve(process.env.XR_VERIFY_CHECKOUT!);
 const run = path.resolve(process.env.XR_VERIFY_RUN!);
@@ -61,6 +62,7 @@ const { VaultSelection } = await load('src/domain/vault/vault-selection.ts');
 const { exportFolder, backupFolder } = await load('src/domain/vault/transfer-files.ts');
 const { rss2, atom, page } = await load('tests/support/synthetic-feeds.ts');
 const { UpdateService } = await load('src/domain/updates/update-service.ts');
+const { backgroundTimers, systemTimers } = await load('src/shared/lib/time.ts');
 const { parse: parseYaml, stringify: stringifyYaml } = await import('yaml');
 
 const profilePath = path.join(run, 'profile');
@@ -70,7 +72,6 @@ const loginStartupFixturePath = path.join(run, 'login-startup-fixture.json');
 const scheduleTriggerPath = path.join(run, 'schedule-trigger');
 const heldPath = path.join(run, 'held.json');
 const catalog = () => JSON.parse(readFileSync(catalogPath, 'utf8'));
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Writes through a temporary file and a rename, so a flow reading the file never sees part of it. */
 const writeAtomic = (file: string, value: unknown) => {
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -95,7 +96,13 @@ async function hold(key: string, holding: () => boolean, gone: () => boolean = (
   if (!holding()) return;
   countHeld(key, 1);
   try {
-    while (holding() && !gone()) await new Promise((resolve) => { setTimeout(resolve, 50).unref(); });
+    await new Promise<void>((resolve) => {
+      const stop = backgroundTimers.every(50, () => {
+        if (holding() && !gone()) return;
+        stop();
+        resolve();
+      });
+    });
   } finally {
     countHeld(key, -1);
   }
@@ -249,15 +256,14 @@ async function syntheticSources() {
   const youtubeGate = await PacingGate.open(YOUTUBE_PACING, {
     ...fast,
     cooldown: { initialMs: HELD_COOLDOWN_MS, maxMs: HELD_COOLDOWN_MS },
-    setTimer: (callback: () => void, ms: number) => {
-      if (ms <= 60_000) {
-        const timer = setTimeout(callback, ms);
-        timer.unref();
-        return () => clearTimeout(timer);
-      }
-      let cancelled = false;
-      void hold('cooldown', () => !cancelled && catalog().youtube?.endCooldown !== true).then(() => { if (!cancelled) callback(); });
-      return () => { cancelled = true; };
+    timers: {
+      after: (ms: number, callback: () => void) => {
+        if (ms <= 60_000) return backgroundTimers.after(ms, callback);
+        let cancelled = false;
+        void hold('cooldown', () => !cancelled && catalog().youtube?.endCooldown !== true).then(() => { if (!cancelled) callback(); });
+        return () => { cancelled = true; };
+      },
+      every: backgroundTimers.every,
     },
   });
   const rssGate = await PacingGate.open(rssDefinition.pacing, fast);
@@ -379,16 +385,19 @@ const runtime = await startCollectorServer({
       jobRetry: { maxAttempts: 3, delaysMs: [2_000, 3_000] },
       // Each started scheduler polls on its interval and also when a flow writes schedule-trigger.
       scheduleTimer: (poll: () => Promise<void>, ms: number) => {
-        const timer = setInterval(() => { void poll(); }, ms);
+        const stopPolling = systemTimers.every(ms, () => { void poll(); });
         schedulerPolls.add(poll);
-        return () => { clearInterval(timer); schedulerPolls.delete(poll); };
+        return () => { stopPolling(); schedulerPolls.delete(poll); };
       },
-      jobTimer: (callback: () => void, ms: number) => {
-        let cancelled = false;
-        const timer = setTimeout(() => {
-          void hold('retry', () => !cancelled && catalog().holdRetries === true).then(() => { if (!cancelled) callback(); });
-        }, ms);
-        return () => { cancelled = true; clearTimeout(timer); };
+      jobTimers: {
+        after: (ms: number, callback: () => void) => {
+          let cancelled = false;
+          const cancel = systemTimers.after(ms, () => {
+            void hold('retry', () => !cancelled && catalog().holdRetries === true).then(() => { if (!cancelled) callback(); });
+          });
+          return () => { cancelled = true; cancel(); };
+        },
+        every: systemTimers.every,
       },
     } : {}),
   },
@@ -407,7 +416,7 @@ const runtime = await startCollectorServer({
 // poll immediately. This keeps scheduled-trigger semantics while avoiding a 15-second wall-clock
 // wait per fixture. It belongs to the verify server, so product runtimes keep their normal timer.
 let scheduleTrigger = '';
-const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
+const stopScheduleTrigger = data === 'synthetic' ? systemTimers.every(50, () => {
   if (!existsSync(scheduleTriggerPath)) return;
   const value = readFileSync(scheduleTriggerPath, 'utf8');
   if (value === scheduleTrigger) return;
@@ -421,7 +430,7 @@ const scheduleTriggerTimer = data === 'synthetic' ? setInterval(() => {
     return;
   }
   void Promise.all(polls.map((poll) => poll())).then(() => writeFileSync(`${scheduleTriggerPath}.done`, value));
-}, 50) : null;
+}) : null;
 console.log(`verify server ready at ${runtime.listeners.ui.url} (${data} data, Vault ${vaultMode})`);
 logFailedRequests(runtime.listeners.ui.app.server);
 
@@ -450,7 +459,7 @@ let stopping = false;
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
-  if (scheduleTriggerTimer) clearInterval(scheduleTriggerTimer);
+  stopScheduleTrigger?.();
   try {
     await updateService?.close();
     await runtime.close();

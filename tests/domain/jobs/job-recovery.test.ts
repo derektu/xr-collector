@@ -27,6 +27,7 @@ import { transcriptOf } from '../../support/youtube-documents.js';
 import { HeldCaptures } from '../../support/held-captures.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { timersAfter } from '../../support/timers.js';
 
 // Interrupted work continues after a restart. A "crash" flushes the job store and opens the same
 // directory again without closing the manager: the atomic snapshot on disk is what a killed process
@@ -189,11 +190,11 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
       ...(options.connectivity ? { connectivity: options.connectivity } : {}),
       now: () => clock.now,
       createId: () => `job-${++sequence}`,
-      setTimer: (run, ms) => {
+      timers: timersAfter((ms, run) => {
         const timer: Timer = { ms, run, cancelled: false };
         timers.push(timer);
         return () => { timer.cancelled = true; };
-      },
+      }),
     });
     subs.attach(manager);
     return {

@@ -20,7 +20,7 @@ import { parseArgs } from 'node:util';
 import { cleanEnv } from '../.claude/skills/verify/scripts/lib/paths.mjs';
 import { alive, commandOf, groupAlive } from '../.claude/skills/verify/scripts/lib/platform.mjs';
 import { DEV_POOL, portFree } from '../.claude/skills/verify/scripts/lib/slots.mjs';
-import { waitFor } from '../.claude/skills/verify/scripts/lib/wait.mjs';
+import { deadline, waitFor } from './lib/wait.mjs';
 
 /** Every ticket is tried on the same Vault, so what a person collected carries over between tickets. */
 const DEFAULT_VAULT = path.join(os.homedir(), 'Downloads', 'XRData');
@@ -110,8 +110,8 @@ async function start({ vault, build }) {
   try {
     await waitFor(async () => {
       if (!alive(child.pid)) throw exited;
-      try { return (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(2_000) })).ok; } catch { return false; }
-    }, 'dev server answers /api/health', { timeout: READY_TIMEOUT_MS, fatal: (error) => error === exited });
+      try { return (await fetch(`${url}/api/health`, { signal: deadline(2_000) })).ok; } catch { return false; }
+    }, 'dev server answers /api/health', { timeout: READY_TIMEOUT_MS });
   } catch (error) {
     await stop();
     throw error;

@@ -5,4 +5,4 @@ export { apiState, readState } from './state.mjs';
 export { activateNotification, clickTray, closeWindow, launchElectron, notifications, recordOpenExternal, shownIn, stubDialogs, trayMenu, windowState } from './electron.mjs';
 export { articles, channel, channelUrl, defaultCatalog, REAL, videoUrl } from './synthetic.mjs';
 export { collect, idle, subscribe } from './seed.mjs';
-export { sleep, waitFor } from './wait.mjs';
+export { observeFor, waitFor } from './wait.mjs';

@@ -1,3 +1,5 @@
+import { systemTimers } from '../../shared/lib/time.js';
+
 const STARTUP_DELAY_MS = 30_000;
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
@@ -6,18 +8,14 @@ export interface UpdateCheckSchedulerOptions {
   lastAttemptAt(): string | null;
   available(): boolean;
   now?: () => number;
-  setTimeout?: typeof globalThis.setTimeout;
-  clearTimeout?: typeof globalThis.clearTimeout;
 }
 
 export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions): { wake(): Promise<boolean>; stop(): void } {
   const now = options.now ?? Date.now;
-  const schedule = options.setTimeout ?? globalThis.setTimeout;
-  const cancel = options.clearTimeout ?? globalThis.clearTimeout;
   const startedAt = now();
   let stopped = false;
   let running: Promise<unknown> | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cancelTimer: (() => void) | null = null;
 
   const attempt = async (): Promise<boolean> => {
     if (stopped || !options.available() || running) return false;
@@ -26,9 +24,9 @@ export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions):
     return true;
   };
   const arm = (delay: number, startup = false) => {
-    if (timer) cancel(timer);
-    timer = schedule(() => {
-      timer = null;
+    cancelTimer?.();
+    cancelTimer = systemTimers.after(delay, () => {
+      cancelTimer = null;
       const lastAttempt = attemptTime();
       if (startup && (lastAttempt === null || lastAttempt < startedAt)) {
         void attempt().catch(() => {});
@@ -37,7 +35,7 @@ export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions):
       const remaining = dueIn();
       if (remaining > 0) { arm(remaining); return; }
       void attempt().catch(() => {});
-    }, delay);
+    });
   };
   const attemptTime = (): number | null => {
     const value = options.lastAttemptAt();
@@ -54,7 +52,7 @@ export function startUpdateCheckScheduler(options: UpdateCheckSchedulerOptions):
   arm(STARTUP_DELAY_MS, true);
   return {
     wake: async () => dueIn() === 0 ? attempt() : false,
-    stop: () => { stopped = true; if (timer) cancel(timer); timer = null; },
+    stop: () => { stopped = true; cancelTimer?.(); cancelTimer = null; },
   };
 }
 
