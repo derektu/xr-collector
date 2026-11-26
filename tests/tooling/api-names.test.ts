@@ -1,15 +1,11 @@
+// A type-specific or channel-named route, field or error code makes the API differ by source type, so an
+// Agent written against the Skill misses it.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The HTTP API names subscriptions, not channels, and serves every source type on the same routes
-// (B-T4). The product code that builds requests and responses and the Agent Skill use only those
-// names. The YouTube plugin keeps its own vocabulary inside `src/domain/sources/youtube`, and stored names
-// (the subscription file, job kinds, event types and job records) are data, not API names.
-
 const ROOTS = ['src', 'skills'];
 const EXEMPT = ['src/domain/sources/youtube/'];
-/** Type-specific routes, channel-named fields and error codes of the HTTP API. */
 const API_NAMES: Array<[string, RegExp]> = [
   ['type-prefixed route', /\/api\/(?:youtube|\$\{[^}]*\})\//u],
   ['source list route', /\/api\/sources\b/u],
@@ -23,11 +19,6 @@ const API_NAMES: Array<[string, RegExp]> = [
   ['channel API client call', /\bapi\.\w*Channels?\w*\(/u],
 ];
 
-/**
- * Object keys of the request and response bodies. The server, the web client and the source
- * catalog build the wire objects, so none of them writes a `channel`, `channels` or
- * `channelId` key; the stored job record keeps `channelId` and is mapped where it is read.
- */
 const WIRE_KEY_ROOTS = ['src/transport/server/', 'src/transport/web/', 'src/domain/sources/'];
 const WIRE_KEY = /\bchannel(?:s|Id)?\s*:/u;
 

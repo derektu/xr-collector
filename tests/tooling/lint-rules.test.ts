@@ -1,3 +1,5 @@
+// Guards the developer, not the user: a lint rule that silently stops matching lets the next agent copy the
+// pattern it was meant to stop.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -6,10 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 import { isPublicFile } from '../../tooling/eslint/comment-policy.js';
-
-// Guards the developer, not the user: each rule in eslint.config.ts is proven to report the code it
-// is meant to stop, at the right line and with its fix, and to leave alone the places it exempts. A
-// rule that silently stops matching lets the next agent copy the pattern it was meant to stop.
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const fixtures = path.join(repoRoot, 'tests', 'tooling', 'fixtures', 'lint');

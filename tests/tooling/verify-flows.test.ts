@@ -1,13 +1,10 @@
-// Guards the developer, not the user.
-// The recorded regression flows of the verify skill and the feature map that names them: the E2E
-// workflow finds every flow without a second fixed list, and each feature file names exactly the
-// flows covering it, so picking flows by feature never leaves one out.
+// Guards the developer, not the user: picking flows by feature leaves a flow out when the feature map and the
+// recorded flows disagree.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FEATURES_DIR, findFeature, readFeatures, readMarkdown } from '../../.claude/skills/verify/scripts/lib/features.mjs';
 import { listFlows, selectFlows } from '../../.claude/skills/verify/scripts/lib/flows.mjs';
 
-/** The fields of a recorded flow and a parsed feature file these checks read. */
 interface RecordedFlow { name: string; covers: string[]; desktop: boolean; visibleScenarios: string[] }
 interface FeatureFile { file: string; subFeatures: string[]; listed: Record<string, string[]> }
 

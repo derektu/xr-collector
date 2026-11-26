@@ -1,7 +1,5 @@
-// Guards the developer, not the user.
-// The judgments the recorded subscription flows make: the statuses a subscription row shows, in the
-// order the status model allows, the Jobs page sections a job passes through, and which collection
-// check belongs to a failed job. A wrong judgment here passes or fails the flow for the wrong reason.
+// Guards the developer, not the user: a wrong judgment here passes or fails a recorded subscription flow for
+// the wrong reason.
 import { describe, expect, it } from 'vitest';
 import { checkRecordForJob } from '../../.claude/skills/verify/flows/subscription-failures.mjs';
 import { distinct, jobSectionChecks, subscriptionPhase, subscriptionSequenceChecks } from '../../.claude/skills/verify/flows/lib/status-sequence.mjs';

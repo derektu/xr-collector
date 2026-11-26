@@ -2,8 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-/** Words the UI, server messages and the Skill must not use. */
-const BANNED = ['來源', '追蹤中', '自動收集', '背景收集中', '訂閱時間', '活動'];
+const RETIRED_WORDS = ['來源', '追蹤中', '自動收集', '背景收集中', '訂閱時間', '活動'];
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -22,7 +21,7 @@ describe('terminology (N75-T11)', () => {
     for (const file of files) {
       const lines = (await readFile(file, 'utf8')).split('\n');
       lines.forEach((line, index) => {
-        for (const word of BANNED) if (line.includes(word)) found.push(`${path.relative(process.cwd(), file)}:${index + 1} ${word}`);
+        for (const word of RETIRED_WORDS) if (line.includes(word)) found.push(`${path.relative(process.cwd(), file)}:${index + 1} ${word}`);
       });
     }
     expect(found).toEqual([]);
