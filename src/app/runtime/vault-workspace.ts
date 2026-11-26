@@ -25,6 +25,7 @@ import type { SourcePlugin } from '../../shared/sources/source-contract.js';
 import type { Timers } from '../../shared/lib/time.js';
 import { ActivityLog } from '../../domain/activity/index.js';
 import { startSearchRuntime, type SearchRuntime } from '../../domain/search/index.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 interface Bundle {
   vault: OpenedVault;
@@ -42,6 +43,7 @@ export interface WorkspaceOptions {
   machineName?: string;
   createdBy: string;
   sources: SourceRegistry;
+  log: LogWriter;
   plugins: readonly SourcePlugin[];
   searchBinary: string;
   searchLexicon: string;
@@ -94,11 +96,11 @@ export class VaultWorkspace {
   private readonly jobStore: JobStore;
 
   private constructor(private readonly options: WorkspaceOptions) {
-    this.jobStore = options.jobStore ?? JobStore.memory(options.sources, ActivityLog.memory());
+    this.jobStore = options.jobStore ?? JobStore.memory(options.sources, ActivityLog.memory({ log: options.log }), options.log);
     this.operations = new VaultOperations({
       sources: options.sources, selection: options.selection,
       exportFolder: options.exportFolder, backupFolder: options.backupFolder, createdBy: options.createdBy,
-      noteChange: this.noteChange,
+      noteChange: this.noteChange, log: options.log,
       ...(options.machineName ? { machineName: options.machineName } : {}),
       ...(options.fixedLocation ? { fixedLocation: options.fixedLocation } : {}),
     }, {
@@ -145,9 +147,9 @@ export class VaultWorkspace {
   private async prepare(root: string) {
     const candidate = await this.makeBundle(root);
     const discard = async () => {
-      await step('Candidate schedule shutdown failed', () => candidate.schedule.close());
-      await step('Candidate jobs shutdown failed', () => candidate.jobs.close());
-      await step('Candidate search shutdown failed', () => candidate.runtime.close());
+      await this.step('Candidate schedule shutdown failed', () => candidate.schedule.close());
+      await this.step('Candidate jobs shutdown failed', () => candidate.jobs.close());
+      await this.step('Candidate search shutdown failed', () => candidate.runtime.close());
     };
     try {
       await candidate.runtime.search.rebuild();
@@ -168,11 +170,11 @@ export class VaultWorkspace {
 
   private async switchFrom(previous: Bundle, reason: string): Promise<{ interruptedJobs: number; resumedJobs: number }> {
     const interruptedJobs = previous.jobs.unfinishedCount();
-    await step('Previous schedule shutdown failed', () => previous.schedule.close());
-    await step('Previous jobs shutdown failed', () => previous.jobs.close(reason, 'vault_switch'));
-    await step('Previous search shutdown failed', () => previous.runtime.close());
-    await step('Resuming jobs failed', () => this.current.jobs.resume());
-    await step('Schedule start failed', () => this.current.schedule.start());
+    await this.step('Previous schedule shutdown failed', () => previous.schedule.close());
+    await this.step('Previous jobs shutdown failed', () => previous.jobs.close(reason, 'vault_switch'));
+    await this.step('Previous search shutdown failed', () => previous.runtime.close());
+    await this.step('Resuming jobs failed', () => this.current.jobs.resume());
+    await this.step('Schedule start failed', () => this.current.schedule.start());
     return { interruptedJobs, resumedJobs: this.current.jobs.unfinishedCount() };
   }
 
@@ -185,11 +187,11 @@ export class VaultWorkspace {
   }
 
   private async makeBundle(root: string, port?: number): Promise<Bundle> {
-    const vault = await openVault(root, this.options.sources);
+    const vault = await openVault(root, this.options.sources, this.options.log);
     const searchChanged = () => this.noteChange({ kind: 'search' });
     const runtime = this.options.createSearch ? await this.options.createSearch(root, searchChanged) : await startSearchRuntime({
       vault: vault.documents, sources: this.options.sources, binaryPath: this.options.searchBinary,
-      lexiconPath: this.options.searchLexicon, searchData: this.options.searchData, vaultRoot: root,
+      lexiconPath: this.options.searchLexicon, searchData: this.options.searchData, vaultRoot: root, log: this.options.log,
       ...(port ? { port } : {}),
       statusChanged: searchChanged,
     });
@@ -206,6 +208,7 @@ export class VaultWorkspace {
       sources: this.options.sources,
       plugins,
       documents: collector,
+      log: this.options.log,
       subscriptions: forwardingPort(() => bundle.subscriptions),
       ...(this.options.jobLimits ? { limits: this.options.jobLimits } : {}),
       ...(this.options.jobRetry ? { retry: this.options.jobRetry } : {}),
@@ -220,6 +223,7 @@ export class VaultWorkspace {
       const login = plugin.login;
       return new SubscriptionService(plugin.id, store, jobs, {
         sources: this.options.sources,
+        log: this.options.log,
         autoCollection,
         resolveTarget: async (url, signal) => {
           const target = await plugin.resolveTarget!(url, { priority: 'interactive', signal });
@@ -241,8 +245,12 @@ export class VaultWorkspace {
     return bundle;
   }
 
+  private async step(label: string, work: () => Promise<unknown>): Promise<void> {
+    try { await work(); } catch (error) { this.options.log.write({ level: 'error', source: 'runtime', message: label, error }); }
+  }
+
   async close(): Promise<void> {
-    await step('Data exchange shutdown failed', () => this.operations.finished());
+    await this.step('Data exchange shutdown failed', () => this.operations.finished());
     this.operations.dropPreview();
     const drained = await Promise.allSettled([
       this.current.schedule.close(),
@@ -254,14 +262,11 @@ export class VaultWorkspace {
   }
 }
 
-async function step(label: string, work: () => Promise<unknown>): Promise<void> {
-  try { await work(); } catch (error) { console.error(label, error); }
-}
-
 function makeScheduler(
-  bundle: Pick<Bundle, 'vault' | 'subscriptions' | 'jobs'>, { pause, scheduleTimer }: Pick<WorkspaceOptions, 'pause' | 'scheduleTimer'>, noteChange: NoteChange,
+  bundle: Pick<Bundle, 'vault' | 'subscriptions' | 'jobs'>, { pause, scheduleTimer, log }: Pick<WorkspaceOptions, 'pause' | 'scheduleTimer' | 'log'>, noteChange: NoteChange,
 ): CollectionScheduler {
   return new CollectionScheduler(bundle.subscriptions.all(), new JsonScheduleStore(bundle.vault.files, noteChange), {
+    log,
     recordEvent: (entry) => bundle.jobs.recordEvent(entry),
     ...(pause ? { pause } : {}),
     ...(scheduleTimer ? { setTimer: scheduleTimer } : {}),

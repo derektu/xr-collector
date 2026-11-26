@@ -1,6 +1,7 @@
 import type { SavedDocument } from '../../shared/documents/document-types.js';
 import type { SearchQuery, SearchResponse, SearchState, SearchStatus, TranscriptSearch } from '../../shared/api/search-types.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface SearchBackend {
   initialize(): Promise<void>;
@@ -38,6 +39,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
   constructor(
     private readonly backend: SearchBackend,
     private readonly loadDocuments: () => Promise<SavedDocument[]>,
+    private readonly log: LogWriter,
     private readonly stateStore?: SearchStateStore,
     private readonly now: () => Date = () => new Date(),
     private readonly statusChanged?: () => void,
@@ -153,7 +155,7 @@ export class ManagedTranscriptSearch implements TranscriptSearch {
     const lastRebuiltAt = this.now().toISOString();
     this.currentStatus = { ...this.currentStatus, lastRebuiltAt };
     await this.stateStore?.save({ lastRebuiltAt }).catch((error: unknown) => {
-      console.warn('Unable to record the search rebuild time', error);
+      this.log.write({ level: 'warn', source: 'search', message: 'Unable to record the search rebuild time', error });
     });
   }
 

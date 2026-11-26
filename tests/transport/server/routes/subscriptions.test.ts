@@ -24,6 +24,7 @@ import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
 import { stoppedTimers } from '../../../support/timers.js';
+import { recordingLog } from '../../../support/log.js';
 
 const SOURCES = productSourcesWith(FAKE);
 
@@ -58,19 +59,21 @@ async function world(connectivity?: ConnectivityAccess) {
   const youtube = new SyntheticYouTube();
   const fake = new FakeSource('fake');
   const gates = [
-    await PacingGate.open(YOUTUBE_PACING, { now, timers: stoppedTimers, statePath: null }),
-    await PacingGate.open(FAKE.pacing!, { now, timers: stoppedTimers, statePath: null }),
+    await PacingGate.open(YOUTUBE_PACING, { log: recordingLog(), now, timers: stoppedTimers, statePath: null }),
+    await PacingGate.open(FAKE.pacing!, { log: recordingLog(), now, timers: stoppedTimers, statePath: null }),
   ];
   const plugins = [youtubePlugin(youtube), createFakePlugin(FAKE, fake, gates[1])];
-  const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));
+  const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }), undefined, { log: recordingLog() });
   const stores = { youtube: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'youtube', now), fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now) };
   const jobs: JobManager = new JobManager({
+    log: recordingLog(),
     sources: SOURCES,
-    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(SOURCES, { now }).jobs, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(SOURCES, { log: recordingLog(), now }).jobs, plugins, documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(SOURCES, services)), now,
     pacing: gates, limits: { discovery: 1, capture: 2 }, retry: { maxAttempts: 1 },
   });
   let scheduler!: CollectionScheduler;
   const service = (type: 'youtube' | 'fake') => new SubscriptionService(type, stores[type], jobs, {
+    log: recordingLog(),
     sources: SOURCES,
     autoCollection: () => scheduler.isEnabled(),
     resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
@@ -79,7 +82,7 @@ async function world(connectivity?: ConnectivityAccess) {
     now,
   });
   const services = [service('youtube'), service('fake')];
-  scheduler = new CollectionScheduler(services, new MemoryScheduleStore(), { now, pollIntervalMs: 24 * 60 * 60_000 });
+  scheduler = new CollectionScheduler(services, new MemoryScheduleStore(), { log: recordingLog(), now, pollIntervalMs: 24 * 60 * 60_000 });
   const options = { sources: SOURCES, collector, jobs, subscriptions: services, schedule: scheduler, pacing: gates, ...(connectivity ? { connectivity } : {}) };
   const ui = await createHttpApp(options);
   const agent = await createHttpApp({ ...options, agentAuthorize: acceptsBearer(TOKEN) });

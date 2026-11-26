@@ -11,6 +11,7 @@ import type { CheckEnd } from '../../../src/domain/jobs/subscription-port.js';
 import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { SubscriptionRecorder } from '../../support/subscription-recorder.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/order';
 const VAULT_ID = 'vault-id';
@@ -48,15 +49,16 @@ const emptyVault: DocumentVault = {
 
 describe('a check ending', () => {
   it('reads as finished only once its subscription recorded the end', async () => {
-    const changes = new ChangeFeed({ defer: () => undefined });
+    const changes = new ChangeFeed({ log: recordingLog(), defer: () => undefined });
     const batches: ChangeBatch[] = [];
     changes.subscribe((batch) => batches.push(batch));
-    const records = memoryJobRecords(PRODUCT_SOURCES, { noteChange: changes.note });
+    const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), noteChange: changes.note });
     const store = records.jobs;
     const subs = new SlowEnd(changes);
     const manager = new JobManager({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
-      vaultPath: VAULT, vaultId: VAULT_ID, store, subscriptions: subs, documents: new Collector(emptyVault),
+      vaultPath: VAULT, vaultId: VAULT_ID, store, subscriptions: subs, documents: new Collector(emptyVault, undefined, { log: recordingLog() }),
       plugins: [youtubePlugin({
         resolveChannel: async () => CHANNEL, discover: async () => [], capture: async () => { throw new Error('no capture'); },
       })],

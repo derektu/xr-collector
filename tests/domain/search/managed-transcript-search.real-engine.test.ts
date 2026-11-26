@@ -15,6 +15,7 @@ import {
 } from '../../../src/domain/search/meilisearch-process.js';
 import { bundledMeilisearch, REAL_ENGINE_TAG } from '../../support/real-engine.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 const running = new Set<RunningMeilisearch>();
@@ -64,6 +65,7 @@ async function withSearch<T>(
     const search = new ManagedTranscriptSearch(
       new MeilisearchBackend({ sources: PRODUCT_SOURCES, baseUrl: engine.url, apiKey: engine.apiKey, lexicon }),
       async () => documents(),
+      recordingLog(),
       { load: async () => ({ lastRebuiltAt: null }), save: async () => { rebuilds += 1; } },
     );
     await search.start();

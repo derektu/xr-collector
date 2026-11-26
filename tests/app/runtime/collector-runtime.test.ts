@@ -26,6 +26,7 @@ import { portBelowEphemeralRange } from '../../support/ports.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { apiRouteLines } from '../../support/api-routes.js';
+import { recordingLog } from '../../support/log.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -57,6 +58,7 @@ async function options(
     vaultPath,
     value: {
       profilePath,
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       explicitVaultPath: vaultPath,
       workspace: withYouTube({
@@ -86,6 +88,7 @@ describe('CollectorRuntime', () => {
       update: async (enabled: boolean) => { loginEnabled = enabled; return loginStartup.status(); },
     };
     const runtime = await startCollectorServer({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       profilePath: root, workspace: null, agentSettingsFile,
       skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0, loginStartup,
@@ -187,7 +190,7 @@ describe('CollectorRuntime', () => {
     });
   });
 
-  it('serves the same routes on the UI and Agent listeners', async () => {
+  it('serves the same routes on the UI and Agent listeners, except the page log only the UI writes', async () => {
     const setup = await options({ capture: vi.fn() });
     const runtime = await startCollectorServer(setup.value);
     cleanups.push(() => runtime.close());
@@ -196,7 +199,8 @@ describe('CollectorRuntime', () => {
     const agent = apiRouteLines(runtime.listeners.agent!.app.printRoutes({ commonPrefix: false }));
     expect(ui).toContain('/api/subscriptions/:type/:id (PATCH, DELETE, GET, HEAD)');
     expect(ui).toContain('/api/jobs/:id/retry (POST)');
-    expect(agent).toEqual(ui);
+    expect(ui).toContain('/api/device/log (POST)');
+    expect(agent).toEqual(ui.filter((line) => line !== '/api/device/log (POST)'));
   });
 
   it('shares one workspace with UI and Agent and keeps accepted collection alive after client disconnect', async () => {

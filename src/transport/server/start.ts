@@ -9,9 +9,12 @@ import type { TranscriptSearch } from '../../shared/api/search-types.js';
 import type { CollectorRuntimeStatus } from '../../shared/api/device-types.js';
 import { createHttpApp } from './app.js';
 import type { UpdateAccess } from '../../domain/updates/index.js';
+import type { LogReader, LogWriter } from '../../shared/log/log-types.js';
 
 export interface StartServerOptions {
   sources: SourceRegistry;
+  log?: LogWriter & LogReader;
+  pageLog?: LogWriter;
   buildInfo?: BuildInfo;
   changes?: ChangeFeed;
   collector?: Collector;
@@ -46,6 +49,8 @@ export interface RunningServer {
 export async function startServer(options: StartServerOptions): Promise<RunningServer> {
   const app = await createHttpApp({
     sources: options.sources,
+    ...(options.log ? { log: options.log } : {}),
+    ...(options.pageLog ? { pageLog: options.pageLog } : {}),
     ...(options.buildInfo ? { buildInfo: options.buildInfo } : {}),
     ...(options.changes ? { changes: options.changes } : {}),
     ...(options.collector ? { collector: options.collector } : {}),

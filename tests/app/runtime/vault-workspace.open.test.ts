@@ -3,7 +3,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { TranscriptSearch } from '../../../src/shared/api/search-types.js';
 import { openJobRecords, type JobRecords } from '../../../src/app/runtime/job-records.js';
@@ -19,6 +19,7 @@ import { transcriptDocument } from '../../../src/domain/sources/youtube/server.j
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -105,11 +106,11 @@ async function setup(sourceName = 'Vault'): Promise<Setup> {
 }
 
 async function open(context: Setup, overrides: Partial<WorkspaceOptions> & YouTubeTestSources = {}, track = true): Promise<VaultWorkspace> {
-  const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
+  const records = overrides.jobStore ? null : await openJobRecords(context.jobsDir, PRODUCT_SOURCES, { log: recordingLog() });
   const jobStore = overrides.jobStore ?? records!.jobs;
   if (track && records) stores.push(records);
   const workspace = await VaultWorkspace.open(workspaceWithYouTube({
-    sources: PRODUCT_SOURCES, root: await context.selection.read() ?? context.source, selection: context.selection,
+    sources: PRODUCT_SOURCES, log: recordingLog(), root: await context.selection.read() ?? context.source, selection: context.selection,
     createdBy: 'XR Collector test', capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchLexicon: '', searchData: path.join(context.profile, 'search'), exportFolder: path.join(context.root, 'exports'), backupFolder: path.join(context.root, 'backups'),
@@ -127,7 +128,7 @@ describe('opening another Vault (A-13)', () => {
     const { root, source: a } = context;
     const b = path.join(root, 'B');
     await seed(b);
-    const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES);
+    const records = await openJobRecords(context.jobsDir, PRODUCT_SOURCES, { log: recordingLog() });
     const jobStore = records.jobs;
     stores.push(records);
     const bGate = gatedCapture(new Set([IDS[2]!]));
@@ -170,28 +171,23 @@ it('reports the switch unfinished while the job records it changed cannot be wri
   const context = await setup('A');
   const b = path.join(context.root, 'B');
   await seed(b);
-  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-  try {
-    const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES, { event: () => undefined });
-    const gate = gatedCapture(new Set([IDS[0]!]));
-    const workspace = await open(context, { jobStore, capture: gate.capture });
-    await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
-    await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
-    await eventually(() => expect(gate.started.length).toBe(1));
-    await jobStore.flush();
-    await rm(context.jobsDir, { recursive: true });
-    await writeFile(context.jobsDir, '');
-    await workspace.operations.openOther(b);
-    gate.open();
-    await expect(workspace.operations.finished()).rejects.toMatchObject({ code: 'jobs_write_failed' });
+  const jobStore = await JobStore.open(context.jobsDir, PRODUCT_SOURCES, { event: () => undefined }, recordingLog());
+  const gate = gatedCapture(new Set([IDS[0]!]));
+  const workspace = await open(context, { jobStore, capture: gate.capture });
+  await workspace.jobs.submitItem('youtube', urlOf(IDS[0]!));
+  await workspace.jobs.submitItem('youtube', urlOf(IDS[1]!));
+  await eventually(() => expect(gate.started.length).toBe(1));
+  await jobStore.flush();
+  await rm(context.jobsDir, { recursive: true });
+  await writeFile(context.jobsDir, '');
+  await workspace.operations.openOther(b);
+  gate.open();
+  await expect(workspace.operations.finished()).rejects.toMatchObject({ code: 'jobs_write_failed' });
 
-    await rm(context.jobsDir);
-    await mkdir(context.jobsDir);
-    await workspace.operations.finished();
-    expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: b });
-  } finally {
-    error.mockRestore();
-  }
+  await rm(context.jobsDir);
+  await mkdir(context.jobsDir);
+  await workspace.operations.finished();
+  expect(workspace.operations.status()).toMatchObject({ state: 'completed', operation: 'open', vaultPath: b });
 });
 
 it('creates a new Vault while one is active, switches to it and leaves the previous Vault as it was', async () => {

@@ -21,6 +21,7 @@ import { cleanUp, importFile, machine, open, seed, temp, type Machine } from '..
 import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
+import { recordingLog } from '../../../support/log.js';
 
 let feeds: SyntheticFeeds;
 beforeEach(async () => { feeds = await SyntheticFeeds.start(); });
@@ -147,11 +148,11 @@ describe('a site that limits requests', () => {
   it('fails that feed\'s check and counts it, while another feed checked at the same time completes and RSS never cools down', async () => {
     feeds.set('/a.xml', { body: rss2('【合成】A 站', BLOG.slice(0, 1)) });
     feeds.set('/b.xml', { body: rss2('【合成】B 站', BLOG.slice(1, 2)) });
-    const gate = await PacingGate.open(rssDefinition.pacing!, { waitRangeMs: { min: 0, max: 0 }, statePath: null });
+    const gate = await PacingGate.open(rssDefinition.pacing!, { log: recordingLog(), waitRangeMs: { min: 0, max: 0 }, statePath: null });
     const events: PacingEvent[] = [];
     gate.subscribe((event) => events.push(event));
     const rss = createRssPlugin({ gate: () => gate } as unknown as PluginRuntime) as unknown as SourcePlugin;
-    const records = memoryJobRecords(PRODUCT_SOURCES);
+    const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() });
     const jobStore = records.jobs;
     const a = await machine('A', await temp());
     await seed(a.vault);
@@ -263,7 +264,7 @@ describe('exchanging a Vault with YouTube and RSS (R11-T7)', () => {
     reader.close();
     const ids = async (vault: string) => (await new MarkdownVault(new VaultFileWriter(vault, PRODUCT_SOURCES)).list()).map((document) => document.id).sort();
 
-    const created = await importNewVault({ sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, createdBy: 'XR Collector test' });
+    const created = await importNewVault({ log: recordingLog(), sources: PRODUCT_SOURCES, packageFile: file, folder: b.vault, createdBy: 'XR Collector test' });
     await new VaultSelection(b.profile).write(created);
     expect(await ids(created)).toEqual(await ids(a.vault));
 

@@ -11,6 +11,7 @@ import {
 import { indexKey, MeilisearchBackend } from '../../../src/domain/search/meilisearch-backend.js';
 import { loadSearchLexicon } from '../../../src/domain/search/search-lexicon.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const documents: SavedDocument[] = [
   {
@@ -75,7 +76,7 @@ describe('ManagedTranscriptSearch', () => {
     const search = new ManagedTranscriptSearch(
       fakeBackend(false, rebuilt),
       async () => documents,
-      store,
+      recordingLog(), store,
       () => new Date('2026-10-15T01:02:03.000Z'),
     );
 
@@ -95,7 +96,7 @@ describe('ManagedTranscriptSearch', () => {
     const search = new ManagedTranscriptSearch(
       fakeBackend(true, rebuilt),
       async () => documents,
-      memoryStateStore('2026-10-01T00:00:00.000Z'),
+      recordingLog(), memoryStateStore('2026-10-01T00:00:00.000Z'),
     );
 
     await search.start();
@@ -107,7 +108,7 @@ describe('ManagedTranscriptSearch', () => {
   it('reports a failed rebuild with its reason and keeps the previous rebuild time', async () => {
     const store = memoryStateStore('2026-10-01T00:00:00.000Z');
     const backend = { ...fakeBackend(true, []), replaceAll: async () => { throw new Error('engine down'); } };
-    const search = new ManagedTranscriptSearch(backend, async () => documents, store);
+    const search = new ManagedTranscriptSearch(backend, async () => documents, recordingLog(), store);
     await search.start();
 
     await expect(search.rebuild()).rejects.toThrow('engine down');
@@ -179,7 +180,7 @@ describe('ManagedTranscriptSearch', () => {
       apiKey: 'test-master-key-at-least-16-bytes',
       fetch: fakeFetch,
     });
-    const search = new ManagedTranscriptSearch(backend, async () => documents);
+    const search = new ManagedTranscriptSearch(backend, async () => documents, recordingLog());
     await search.start();
 
     const settings = requests.find(({ url, method }) => url.endsWith('/settings') && method === 'PATCH')?.body as Record<string, unknown>;
@@ -324,7 +325,7 @@ describe('removing deleted documents from search (A3)', () => {
   it('excludes a document whose removal failed and removes it with the next index change', async () => {
     let vault = [...documents];
     const engine = recordingBackend(documents);
-    const search = new ManagedTranscriptSearch(engine.backend, async () => vault);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => vault, recordingLog());
     await search.start();
     const [first, second] = documents as [SavedDocument, SavedDocument];
 
@@ -352,7 +353,7 @@ describe('removing deleted documents from search (A3)', () => {
     }));
     let vault = [...many];
     const engine = recordingBackend(many);
-    const search = new ManagedTranscriptSearch(engine.backend, async () => vault);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => vault, recordingLog());
     await search.start();
     engine.setRemoveFails(true);
 
@@ -376,7 +377,7 @@ describe('removing deleted documents from search (A3)', () => {
 
   it('rebuilds at the next start when a removal never reached the index', async () => {
     const engine = recordingBackend(documents);
-    const search = new ManagedTranscriptSearch(engine.backend, async () => [documents[1]!]);
+    const search = new ManagedTranscriptSearch(engine.backend, async () => [documents[1]!], recordingLog());
     await search.start();
     expect(engine.calls.rebuilds).toBe(1);
     expect([...engine.held.keys()]).toEqual([documents[1]!.id]);

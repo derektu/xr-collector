@@ -9,6 +9,7 @@ import { CollectorError } from '../../shared/lib/collector-error.js';
 import { deadline } from '../../shared/lib/time.js';
 import type { ChannelJobTrigger, JobView, JobError, JobSubmission, SkipReason } from '../../shared/jobs/job-types.js';
 import type { DocumentMetadata } from '../../shared/documents/document-types.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 import type {
   CheckFailures,
   ItemFailureEntry,
@@ -33,6 +34,7 @@ export interface SubscriptionRemovalResult {
 
 export interface SubscriptionServiceOptions {
   sources: SourceRegistry;
+  log: LogWriter;
   autoCollection: () => Promise<boolean>;
   resolveTarget: (url: string, signal: AbortSignal) => Promise<SubscriptionTarget>;
   documents: () => Promise<DocumentMetadata[]>;
@@ -233,13 +235,13 @@ export class SubscriptionService {
     try {
       if (removing === 'delete' && deleteDocument) {
         for (const document of await this.subscriptionDocuments(id)) {
-          const outcome = await deleteQuietly(deleteDocument, document.id);
+          const outcome = await deleteQuietly(deleteDocument, document.id, this.options.log);
           if (outcome === 'deleted') deleted += 1;
           else if (outcome === 'failed') failed += 1;
         }
       }
     } catch (error) {
-      console.error('Deleting the documents of a removed subscription failed', error);
+      this.options.log.write({ level: 'error', source: 'subscriptions', message: 'Deleting the documents of a removed subscription failed', error });
       incomplete = true;
     }
     const kept = await this.subscriptionDocuments(id).then((documents) => documents.length, () => failed);
@@ -373,7 +375,7 @@ export class SubscriptionService {
       errorCode: paused.error.code, ...this.subject(id, record.title),
     });
     try { await this.options.onAutoPaused?.(record); }
-    catch (error) { console.warn('Unable to send auto-pause notification', error); }
+    catch (error) { this.options.log.write({ level: 'warn', source: 'subscriptions', message: 'Unable to send auto-pause notification', error }); }
   }
 
   async itemCollected(id: string, itemKey: string): Promise<void> {
@@ -484,13 +486,15 @@ export function checkStatus(
   return { state: 'scheduled', nextCheckAt: next };
 }
 
-async function deleteQuietly(deleteDocument: (id: string) => Promise<unknown>, id: string): Promise<'deleted' | 'gone' | 'failed'> {
+async function deleteQuietly(
+  deleteDocument: (id: string) => Promise<unknown>, id: string, log: LogWriter,
+): Promise<'deleted' | 'gone' | 'failed'> {
   try {
     await deleteDocument(id);
     return 'deleted';
   } catch (error) {
     if (error instanceof CollectorError && (error.code === 'document_deleted' || error.code === 'document_not_found')) return 'gone';
-    console.error('Document deletion failed', error);
+    log.write({ level: 'error', source: 'subscriptions', message: 'Document deletion failed', error });
     return 'failed';
   }
 }

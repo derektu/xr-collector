@@ -6,6 +6,7 @@ import type { CollectionJob, JobError, SkipReason } from '../../shared/jobs/job-
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { INTERRUPTED_REPEATEDLY } from './job-recovery.js';
 import type { CheckEnd, SubscriptionPort } from './subscription-port.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 const STOP_REASONS: ReadonlySet<SkipReason> = new Set(['subscription_paused', 'subscription_removed']);
 const NOT_SOURCE_FAILURES: ReadonlySet<string> = new Set([INTERRUPTED_REPEATEDLY, 'jobs_write_failed']);
@@ -16,6 +17,7 @@ function isSourceFailure(error: JobError): boolean {
 
 export interface ReportHost {
   sources: SourceDeclarations;
+  log: LogWriter;
   port(): SubscriptionPort;
   parentOf(id: string): CollectionJob | undefined;
   classify(job: CollectionJob, error: { code: string }): FailureClass;
@@ -42,13 +44,13 @@ export class SubscriptionReports {
   async collected(item: CollectionJob): Promise<void> {
     const target = this.checkItemOf(item);
     if (!target) return;
-    await nullOnWriteFailure(() => this.host.port().itemCollected(target.type, target.subscriptionId, target.key));
+    await nullOnWriteFailure(this.host.log, () => this.host.port().itemCollected(target.type, target.subscriptionId, target.key));
   }
 
   async failed(item: CollectionJob, error: JobError, failureClass: FailureClass): Promise<void> {
     const target = this.checkItemOf(item);
     if (!target || !isSourceFailure(error)) return;
-    const recorded = await nullOnWriteFailure(() => this.host.port().itemFailed(target.type, target.subscriptionId, {
+    const recorded = await nullOnWriteFailure(this.host.log, () => this.host.port().itemFailed(target.type, target.subscriptionId, {
       key: target.key, title: item.source.title, url: item.source.url,
     }, error, failureClass));
     if (!recorded) return;
@@ -83,11 +85,11 @@ export class SubscriptionReports {
   }
 }
 
-async function nullOnWriteFailure<T>(write: () => Promise<T>): Promise<T | null> {
+async function nullOnWriteFailure<T>(log: LogWriter, write: () => Promise<T>): Promise<T | null> {
   try {
     return await write();
   } catch (error) {
-    console.error('Subscription failure record update failed', error);
+    log.write({ level: 'error', source: 'jobs', message: 'Subscription failure record update failed', error });
     return null;
   }
 }

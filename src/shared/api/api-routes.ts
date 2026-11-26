@@ -34,6 +34,7 @@ import type { JobOverview, JobSubmission, PacingStatus, JobPage, JobSummary, Job
 import type { DocumentDeletion, DocumentPage, DocumentSources, DocumentStatus, SavedDocument } from '../documents/document-types.js';
 import type { SearchResponse, SearchStatusReport } from './search-types.js';
 import type { SourceTypeInfo, UrlRecognition } from '../sources/source-info-types.js';
+import type { LogPage, PageLogEntry } from '../log/log-types.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -108,6 +109,7 @@ export interface ActivityParameters {
   view?: 'raw' | 'summary'; severity?: string; eventType?: string; jobId?: string; subscriptionId?: string;
   sourceType?: string; since?: string; until?: string; cursor?: string; limit?: number;
 }
+export interface LogParameters { level?: string; since?: string; until?: string; limit?: number; cursor?: string }
 export interface ActivityGroupQuery { limit?: number; cursor?: string; severity?: string }
 export interface SubscriptionChange { enabled?: boolean; settings?: Partial<SubscriptionSettings> }
 export interface SubscriptionRemoval { removed: true; documentsKept: number; documentsDeleted: number; documentsFailed: number }
@@ -117,6 +119,8 @@ export const API_ROUTES = {
   changes: json<ChangesResponse, undefined, ChangesQuery>()({ method: 'GET', path: '/api/changes', access: 'device-data' }),
   health: json<HealthResponse>()({ method: 'GET', path: '/api/health', access: 'device-data' }),
   pacing: json<{ groups: PacingGroupStatus[] }>()({ method: 'GET', path: '/api/pacing', access: 'device-data' }),
+  logs: json<LogPage, undefined, LogParameters>()({ method: 'GET', path: '/api/device/logs', access: 'device-data' }),
+  writePageLog: json<Record<string, never>, PageLogEntry>()({ method: 'POST', path: '/api/device/log', access: 'device-data', status: 202 }),
 
   buildInfo: json<{ buildInfo: BuildInfo }>()({ method: 'GET', path: '/api/device/build-info', access: 'device-data' }),
   notifications: json<{ notifications: NotificationState }>()({ method: 'GET', path: '/api/device/notifications', access: 'device-data' }),

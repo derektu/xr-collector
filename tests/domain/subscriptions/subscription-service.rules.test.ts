@@ -2,7 +2,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
@@ -20,6 +20,7 @@ import { readEventFiles } from '../../support/event-files.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { stoppedTimers } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const SOURCES = productSourcesWith(FAKE, FAKE2);
 
@@ -48,18 +49,21 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
   const sources = { fake: new FakeSource('fake'), fake2: new FakeSource('fake2') };
   const plugins = [createFakePlugin(FAKE, sources.fake), createFakePlugin(FAKE2, sources.fake2)];
   const scheduleStore = new MemoryScheduleStore();
+  const log = recordingLog();
   const build = async () => {
-    const records = await openJobRecords(jobsDirectory, SOURCES, { now });
+    const records = await openJobRecords(jobsDirectory, SOURCES, { log: recordingLog(), now });
     const store = records.jobs;
-    const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }));
+    const collector = new Collector(new MarkdownVault(new VaultFileWriter(root, SOURCES), { now }), undefined, { log: recordingLog() });
     const stores = { fake: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake', now), fake2: new JsonSubscriptionStore(new VaultFileWriter(root, SOURCES), 'fake2', now) };
     let services!: SubscriptionServices;
     const jobs: JobManager = new JobManager({
+      log: recordingLog(),
       sources: SOURCES,
       vaultPath: root, vaultId: 'vault-id', store, plugins, documents: collector, subscriptions: forwardingPort(() => services), now,
       limits: { discovery: 1, capture: 1 }, retry: { maxAttempts: 1 }, timers: stoppedTimers,
     });
     const service = (type: FakeType) => new SubscriptionService(type, stores[type], jobs, {
+      log,
       sources: SOURCES,
       autoCollection: async () => true,
       resolveTarget: (url, signal) => plugins.find((plugin) => plugin.id === type)!.resolveTarget!(url, { priority: 'interactive', signal }),
@@ -68,12 +72,12 @@ async function world(onAutoPaused?: (type: FakeType, subscription: SubscriptionR
       ...(onAutoPaused ? { onAutoPaused: (subscription: SubscriptionRecord) => onAutoPaused(type, subscription) } : {}),
     });
     services = new SubscriptionServices(SOURCES, [service('fake'), service('fake2')]);
-    const scheduler = new CollectionScheduler(services.all(), scheduleStore, { now, pollIntervalMs: DAY });
+    const scheduler = new CollectionScheduler(services.all(), scheduleStore, { log: recordingLog(), now, pollIntervalMs: DAY });
     return { records, store, jobs, services, stores, scheduler };
   };
   let current = await build();
   return {
-    clock, sources,
+    clock, sources, log,
     async events() {
       await current.records.activity.flush();
       return readEventFiles(jobsDirectory);
@@ -402,7 +406,6 @@ describe('failed checks in a row', () => {
 
   it('pauses itself despite a notification that fails to send, then resumes and checks', async () => {
     const autoPauses: Array<{ type: FakeType; subscription: SubscriptionRecord }> = [];
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const w = await world(async (type, subscription) => {
       autoPauses.push({ type, subscription });
       throw new Error('system notification failed');
@@ -428,8 +431,9 @@ describe('failed checks in a row', () => {
     expect(autoPauses).toEqual([{ type: 'fake', subscription: expect.objectContaining({
       id: 'f', enabled: false, autoPausedAt: fifth.finishedAt, checkFailures: expect.objectContaining({ count: 5 }),
     }) }]);
-    expect(warning).toHaveBeenCalledWith('Unable to send auto-pause notification', expect.objectContaining({ message: 'system notification failed' }));
-    warning.mockRestore();
+    expect(w.log.records).toEqual([expect.objectContaining({
+      level: 'warn', message: 'Unable to send auto-pause notification', error: expect.objectContaining({ message: 'system notification failed' }),
+    })]);
     await expect(service.checkNow('f')).rejects.toMatchObject({ code: 'subscription_paused' });
 
     const resumed = await service.setEnabled('f', true);

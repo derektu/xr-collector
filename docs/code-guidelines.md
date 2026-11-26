@@ -61,6 +61,13 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | `useFloatingPosition`、`menuPlace`（`floating-position.ts`） | 以視窗座標放置浮動元素，捲動或縮放視窗時跟著錨點移動 |
 | `useWindowEvent`、`useDesktopNavigation`、`useUnmountSignal`、`useFocusAfterChange`（`lifecycle.ts`） | 視窗事件、桌面端導覽通知、卸載時中止 event handler 啟動的工作、換頁後移動焦點 |
 
+## Log
+
+| 規則 | 強制 |
+|---|---|
+| `src` 裡只有 log 模組（`src/domain/log`）用 `console`（含經 `globalThis`、`window`、`global`、`self`）。其他程式從呼叫端拿 `LogWriter`（`src/shared/log/log-types.ts`）並呼叫 `write`，由組裝處（`src/transport/server/main.ts`、`src/desktop/electron/main.ts`）傳入；log 模組把每筆同時印到 stdout／stderr。畫面經 `src/transport/web/api/page-log.ts` 的 `logPageProblem` 寫 | lint；log 模組是 `eslint.config.ts` 裡的例外 |
+| 測試傳入 `tests/support/log.ts` 的 `recordingLog()`，檢查 `records`，不攔 `console` | review |
+
 ## Comment
 
 | 規則 | 強制 |

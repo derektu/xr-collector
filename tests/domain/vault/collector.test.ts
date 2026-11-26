@@ -9,6 +9,7 @@ import type { CapturedTranscript } from '../../../src/domain/sources/youtube/ada
 import { transcriptDocument } from '../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const captureResult: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -67,12 +68,16 @@ describe('Collector', () => {
   it('keeps a newly saved document when its search-index update fails', async () => {
     const vault = new MemoryVault();
     let indexAttempted = false;
-    const collector = new Collector(vault, {
+    const collector = new Collector(
+  vault,
+  {
       index: async () => {
         indexAttempted = true;
         throw new Error('index unavailable');
       },
-    });
+    },
+  { log: recordingLog() },
+);
 
     const { document } = await collector.save(transcriptDocument(captureResult));
     const outcome = await collector.index(document);
@@ -84,7 +89,7 @@ describe('Collector', () => {
 
   it('finds an existing document by its YouTube ID', async () => {
     const vault = new MemoryVault();
-    const collector = new Collector(vault, { index: async () => undefined });
+    const collector = new Collector(vault, { index: async () => undefined }, { log: recordingLog() });
     expect(await collector.findExisting({ sourceType: 'youtube', sourceId: 'dQw4w9WgXcQ' })).toBeNull();
     const { document } = await collector.save(transcriptDocument(captureResult));
     expect(await collector.findExisting({ sourceType: 'youtube', sourceId: 'dQw4w9WgXcQ' })).toEqual(document);

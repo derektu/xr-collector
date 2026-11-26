@@ -7,13 +7,14 @@ import type { SubscriptionPreview } from '../../../../src/shared/subscriptions/s
 import { createHttpApp, type SubscriptionCollection } from '../../../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { stoppedTimers } from '../../../support/timers.js';
+import { recordingLog } from '../../../support/log.js';
 
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 
 describe('YouTube pacing over HTTP (P-T7)', () => {
   it('reports the request channel and refuses a preview during a cooldown', async () => {
     let now = T0;
-    const gate = await PacingGate.open(YOUTUBE_PACING, { now: () => new Date(now), timers: stoppedTimers });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { log: recordingLog(), now: () => new Date(now), timers: stoppedTimers });
     await gate.run('background', async () => { throw new CollectorError('rate_limited', 'YouTube 暫時限制連線。'); }).catch(() => undefined);
     const until = new Date(T0 + 5 * 60_000).toISOString();
     const channels = {
@@ -38,7 +39,7 @@ describe('YouTube pacing over HTTP (P-T7)', () => {
   });
 
   it('reads the request channels while the Vault is not ready', async () => {
-    const gate = await PacingGate.open(YOUTUBE_PACING, { now: () => new Date(T0), timers: stoppedTimers });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { log: recordingLog(), now: () => new Date(T0), timers: stoppedTimers });
     const app = await createHttpApp({ sources: PRODUCT_SOURCES, pacing: [gate], notReady: () => '尚未設定知識庫。' });
     const pacing = await app.inject({ method: 'GET', url: '/api/pacing' });
     expect(pacing.statusCode).toBe(200);

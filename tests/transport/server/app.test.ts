@@ -3,7 +3,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
@@ -21,6 +21,7 @@ import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { transcriptOf } from '../../support/youtube-documents.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { subscriptionCollection } from '../../support/subscription-collection.js';
+import { recordingLog } from '../../support/log.js';
 
 const captured: CapturedTranscript = {
   videoId: 'dQw4w9WgXcQ',
@@ -40,7 +41,7 @@ function makeCollector(): Collector {
 }
 
 function makeServices(
-  captureFailure?: CollectorError, captureGate?: Promise<void>, store: JobStore = memoryJobRecords(PRODUCT_SOURCES).jobs,
+  captureFailure?: CollectorError, captureGate?: Promise<void>, store: JobStore = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() }).jobs,
 ): { collector: Collector; jobs: JobManager } {
   let saved: SavedDocument | null = null;
   const vault: DocumentVault = {
@@ -67,8 +68,9 @@ function makeServices(
     read: async () => saved,
     ...withoutDocumentChanges(),
   };
-  const collector = new Collector(vault, { index: async () => undefined });
+  const collector = new Collector(vault, { index: async () => undefined }, { log: recordingLog() });
   const jobs = new JobManager({
+    log: recordingLog(),
     vaultPath: '/vault', vaultId: 'vault-id',
     store,
     sources: PRODUCT_SOURCES,
@@ -95,6 +97,19 @@ async function settledJob(app: FastifyInstance, id: string) {
 }
 
 describe('HTTP app', () => {
+  it('records an unexpected error with the request it answered in the program log, and answers 500 internal_error', async () => {
+    const log = recordingLog();
+    const failing = { group: 'youtube', status: () => { throw new Error('disk failure'); } };
+    const app = await createHttpApp({ sources: PRODUCT_SOURCES, log, pacing: [failing as never] });
+    const response = await app.inject({ method: 'GET', url: '/api/pacing' });
+    expect(response.statusCode).toBe(500);
+    expect(response.json().error.code).toBe('internal_error');
+    expect(log.records).toEqual([expect.objectContaining({
+      level: 'error', source: 'server', message: 'Unexpected error answering GET /api/pacing', error: expect.objectContaining({ message: 'disk failure' }),
+    })]);
+    await app.close();
+  });
+
   it('reads the schedule summary and switches automatic collection through HTTP', async () => {
     const calls: unknown[] = [];
     const scheduleValue = {
@@ -451,9 +466,8 @@ describe('HTTP app', () => {
   it('answers a submit with an error rather than 202 when the job cannot be written', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-http-jobs-'));
     const directory = path.join(root, 'jobs');
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      const store = await JobStore.open(directory, PRODUCT_SOURCES, { event: () => undefined });
+      const store = await JobStore.open(directory, PRODUCT_SOURCES, { event: () => undefined }, recordingLog());
       await writeFile(directory, '');
       const { collector, jobs } = makeServices(undefined, undefined, store);
       const app = await createHttpApp({ sources: PRODUCT_SOURCES, collector, jobs });
@@ -463,7 +477,6 @@ describe('HTTP app', () => {
       await jobs.close();
       await app.close();
     } finally {
-      error.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

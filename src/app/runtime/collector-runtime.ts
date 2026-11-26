@@ -29,13 +29,15 @@ import type { CollectionScheduler, SubscriptionService } from '../../domain/subs
 import { NotificationCenter, type SystemNotificationAdapter } from '../../domain/notifications/index.js';
 import type { EventType } from '../../shared/activity/event-catalog.js';
 import type { CollectorRuntimeState, CollectorRuntimeStatus, NotificationAccess } from '../../shared/api/device-types.js';
+import type { LogReader, LogWriter } from '../../shared/log/log-types.js';
 
 
-export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'pause' | 'connectivity' | 'sources'>;
+export type VaultServiceOptions = Omit<WorkspaceOptions, 'root' | 'selection' | 'createdBy' | 'pause' | 'connectivity' | 'sources' | 'log'>;
 
 export interface CollectorRuntimeOptions {
   buildInfo?: BuildInfo;
   profilePath: string;
+  log: LogWriter & LogReader;
   sources: SourceRegistry;
   /** Null starts no Vault services, job records or activity log, and Vault setup is refused. */
   workspace: VaultServiceOptions | null;
@@ -55,6 +57,7 @@ export interface CollectorRuntimeOptions {
 
 export interface RuntimeServices {
   sources: SourceRegistry;
+  log: LogWriter & LogReader;
   buildInfo: BuildInfo;
   changes: ChangeFeed;
   connectivity: Connectivity;
@@ -143,7 +146,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     const sources = options.sources;
     const instanceId = randomUUID();
     const vaults = new DeviceVaults({
-      profilePath: options.profilePath, sources, createdBy: options.createdBy ?? 'XR Collector',
+      profilePath: options.profilePath, sources, createdBy: options.createdBy ?? 'XR Collector', log: options.log,
     });
     let initial: Opening = { workspace: null, failure: null, message: NOT_SET_MESSAGE };
     let agentConnection: OpenedAgentConnection | null = null;
@@ -158,14 +161,15 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       state: 'starting', instanceId, profilePath: path.resolve(options.profilePath),
       vaultPath: initial.workspace?.operations.status().vaultPath ?? null, message: '服務啟動中。',
     };
-    const changes = new ChangeFeed();
-    const records = options.workspace ? await openJobRecords(path.join(options.profilePath, 'jobs'), sources, { noteChange: changes.note }) : null;
+    const log = options.log;
+    const changes = new ChangeFeed({ log });
+    const records = options.workspace ? await openJobRecords(path.join(options.profilePath, 'jobs'), sources, { log, noteChange: changes.note }) : null;
     const deviceEvent = (severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string) =>
       recordDeviceEvent(records, severity, eventType, message, errorCode);
     if (options.startedAtLogin) deviceEvent('info', 'device.login_startup_launched', 'XR Collector 由電腦登入自動啟動，並在背景執行。');
     const pause = options.pause ?? new CollectionPause();
     const connectivity = new Connectivity({ ...options.connectivity, pause });
-    const notifications = await NotificationCenter.open(options.profilePath, options.systemNotifications);
+    const notifications = await NotificationCenter.open(options.profilePath, log, options.systemNotifications);
     const following = [
       pause.subscribe(() => changes.note({ kind: 'connectivity' })),
       ...(options.workspace?.pacing ?? []).map((gate) => gate.subscribe(() => changes.note({ kind: 'pacing', group: gate.group }))),
@@ -173,7 +177,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
     ];
     const stopFollowing = () => { for (const stop of following) stop(); };
     const workspaceServices: WorkspaceServices | null = options.workspace && records ? {
-      ...options.workspace, sources, jobStore: records.jobs, pause, connectivity, noteChange: changes.note,
+      ...options.workspace, sources, log, jobStore: records.jobs, pause, connectivity, noteChange: changes.note,
       onAutoPaused: async (vaultId, sourceType, record) => {
         await notifications.recordAutoPause(vaultId, sourceType, record);
         changes.note({ kind: 'notifications' });
@@ -216,7 +220,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
       read: notificationState,
       update: async (enabled: boolean) => { await notifications.update(enabled); changes.note({ kind: 'notifications' }); return notificationState(); },
     };
-    const shared = { ...services, sources, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
+    const shared = { ...services, sources, log, changes, notifications: notificationAccess, buildInfo: options.buildInfo ?? await loadBuildInfo(), connectivity,
       ...(loginStartup ? { loginStartup } : {}), ...(options.updates ? { updates: options.updates } : {}) };
     const vaultSetup: VaultSetup = {
       status: () => runtime!.vaultStatus(),
@@ -349,7 +353,7 @@ export class CollectorRuntime<L extends RuntimeListeners = RuntimeListeners> {
   }
 }
 
-type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'sources' | 'jobStore' | 'pause' | 'connectivity'>>;
+type WorkspaceServices = VaultServiceOptions & Required<Pick<WorkspaceOptions, 'sources' | 'log' | 'jobStore' | 'pause' | 'connectivity'>>;
 
 function recordDeviceEvent(records: JobRecords | null, severity: 'info' | 'warning' | 'error', eventType: EventType, message: string, errorCode?: string): void {
   records?.activity.event({ severity, eventType, message, vaultPath: null, jobId: null, ...(errorCode ? { errorCode } : {}) });

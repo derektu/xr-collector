@@ -1,6 +1,7 @@
 // Broken, the tray shows stale state, or reads the App's state on every change.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeBatch } from '../../../src/shared/api/changes.js';
+import { recordingLog } from '../../support/log.js';
 
 vi.mock('electron', () => ({
   Tray: class { on() {} setImage() {} setToolTip() {} setContextMenu() {} destroy() {} },
@@ -41,7 +42,7 @@ function changes() {
   };
 }
 
-const create = (feed: ReturnType<typeof changes>['feed']) => new AppTray({ platform: 'darwin', serverUrl: 'http://127.0.0.1:1', iconFolder: '/icons', changes: feed, show() {}, quit() {} });
+const create = (feed: ReturnType<typeof changes>['feed']) => new AppTray({ log: recordingLog(), platform: 'darwin', serverUrl: 'http://127.0.0.1:1', iconFolder: '/icons', changes: feed, show() {}, quit() {} });
 
 describe('tray reads', () => {
   const timeZone = process.env.TZ;

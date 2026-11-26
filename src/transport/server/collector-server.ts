@@ -32,7 +32,7 @@ async function startHttpListeners(services: RuntimeServices, ui: { port: number;
   const agent = await startAgentListener(agentConnection, shared);
   let server: RunningServer;
   try {
-    server = await startServer({ ...shared, ...ui, agentConnection: access });
+    server = await startServer({ ...shared, ...ui, agentConnection: access, pageLog: shared.log });
   } catch (error) {
     await access.close().catch(() => undefined);
     throw error;

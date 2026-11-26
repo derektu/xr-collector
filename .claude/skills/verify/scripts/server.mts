@@ -54,6 +54,7 @@ const { publishedSince } = await load('src/shared/documents/published.ts');
 const { startCollectorServer } = await load('src/transport/server/collector-server.ts');
 const { bundledResources } = await load('src/app/runtime/bundled-resources.ts');
 const { PacingGate } = await load('src/domain/pacing/pacing-gate.ts');
+const { openCollectorLog } = await load('src/domain/log/index.ts');
 const { youtubeSource } = await load('src/domain/sources/youtube/adapter.ts');
 const { youtubePlugin, YOUTUBE_PACING } = await load('src/domain/sources/youtube/server.ts');
 const { createRssPlugin, rssDefinition } = await load('src/domain/sources/rss/server.ts');
@@ -66,6 +67,7 @@ const { backgroundTimers, systemTimers } = await load('src/shared/lib/time.ts');
 const { parse: parseYaml, stringify: stringifyYaml } = await import('yaml');
 
 const profilePath = path.join(run, 'profile');
+const log = openCollectorLog({ folder: path.join(profilePath, 'logs') });
 const vaultPath = path.join(run, 'vault');
 const catalogPath = path.join(run, 'catalog.json');
 const loginStartupFixturePath = path.join(run, 'login-startup-fixture.json');
@@ -250,7 +252,7 @@ function syntheticFeedServer() {
 }
 
 async function syntheticSources() {
-  const fast = { statePath: null, waitRangeMs: { min: 100, max: 250 } };
+  const fast = { log, statePath: null, waitRangeMs: { min: 100, max: 250 } };
   // A YouTube cooldown lasts until the flow ends it (youtube.endCooldown). Its timer is the gate's
   // only one longer than a minute; the gap between two requests stays a plain timer.
   const youtubeGate = await PacingGate.open(YOUTUBE_PACING, {
@@ -334,7 +336,7 @@ async function syntheticSources() {
 const feeds = data === 'synthetic' ? await syntheticFeedServer() : null;
 const sources = data === 'synthetic'
   ? await syntheticSources()
-  : await createSourcePlugins({ profilePath, env: process.env, program });
+  : await createSourcePlugins({ profilePath, env: process.env, program, log });
 const updateService = updateEnabled() ? await UpdateService.open({
   updater: fixtureUpdater(`http://127.0.0.1:${port('FEEDS')}/updates/`),
   currentVersion,
@@ -365,6 +367,7 @@ const syntheticConnectivity = {
 const schedulerPolls = new Set<() => Promise<void>>();
 const runtime = await startCollectorServer({
   profilePath,
+  log,
   sources: sources.registry,
   ...(updateService ? { buildInfo: fixtureBuildInfo, updates: updateService } : {}),
   ...(data === 'synthetic' ? { connectivity: syntheticConnectivity } : {}),

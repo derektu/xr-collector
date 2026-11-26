@@ -10,6 +10,7 @@ import { startServer, type RunningServer } from '../../../src/transport/server/s
 import type { SubscriptionCollection } from '../../../src/transport/server/app.js';
 import { eventually } from '../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const info: BuildInfo = {
   schemaVersion: 1, kind: 'packaged', version: '0.7.0', builtAt: '2026-10-25T09:00:00.000Z',
@@ -145,7 +146,7 @@ describe('HTTP server close', () => {
   });
 
   it('closes while event streams and waiting change reads are open', async () => {
-    const changes = new ChangeFeed();
+    const changes = new ChangeFeed({ log: recordingLog() });
     const running = await startServer({ sources: PRODUCT_SOURCES, buildInfo: info, port: 0, changes });
     const stream = await fetch(`${running.url}/api/events`);
     expect(stream.status).toBe(200);

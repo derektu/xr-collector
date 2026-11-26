@@ -7,6 +7,7 @@ import type { SourceRegistry } from '../../shared/sources/source-registry.js';
 import { VaultFileWriter } from './vault-files.js';
 import { checkPackageContent, openPackage, unpackPackage, type PackageReader } from './vault-package.js';
 import type { FileChanges } from './vault-merge.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 const IMPORT_STAGING_PREFIX = '.xr-collector-import-';
 
@@ -14,7 +15,9 @@ interface StagedImport {
   place(progress: (done: number, total: number) => void): Promise<void>;
 }
 
-export async function stageImport(root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges): Promise<StagedImport> {
+export async function stageImport(
+  root: string, sources: SourceRegistry, reader: PackageReader, changes: FileChanges, log: LogWriter,
+): Promise<StagedImport> {
   const staging = path.join(root, `${IMPORT_STAGING_PREFIX}${randomUUID()}`);
   await mkdir(staging, { mode: 0o700 });
   const entries: { path: string; staged: string | null }[] = [];
@@ -27,7 +30,7 @@ export async function stageImport(root: string, sources: SourceRegistry, reader:
       entries.push({ path: file, staged });
     }
   } catch (error) {
-    await removeStaging(staging);
+    await removeStaging(staging, log);
     throw error;
   }
   return {
@@ -40,20 +43,20 @@ export async function stageImport(root: string, sources: SourceRegistry, reader:
           progress(index + 1, entries.length);
         }
       } finally {
-        await removeStaging(staging);
+        await removeStaging(staging, log);
       }
     },
   };
 }
 
-export async function removeImportStaging(root: string): Promise<void> {
+export async function removeImportStaging(root: string, log: LogWriter): Promise<void> {
   for (const name of await readdir(root)) {
-    if (name.startsWith(IMPORT_STAGING_PREFIX)) await removeStaging(path.join(root, name));
+    if (name.startsWith(IMPORT_STAGING_PREFIX)) await removeStaging(path.join(root, name), log);
   }
 }
 
 export async function importNewVault(options: {
-  packageFile: unknown; folder: unknown; createdBy: string; sources: SourceRegistry;
+  packageFile: unknown; folder: unknown; createdBy: string; sources: SourceRegistry; log: LogWriter;
 }): Promise<string> {
   const target = await checkImportFolder(options.folder);
   const reader = await openPackage(await checkPackageFile(options.packageFile), options.sources);
@@ -66,13 +69,14 @@ export async function importNewVault(options: {
     await rename(staging, target);
     return target;
   } catch (error) {
-    await removeStaging(staging);
+    await removeStaging(staging, options.log);
     throw error;
   } finally {
     reader.close();
   }
 }
 
-async function removeStaging(staging: string): Promise<void> {
-  await rm(staging, { recursive: true, force: true }).catch((error: unknown) => console.error('Removing an import staging folder failed', error));
+async function removeStaging(staging: string, log: LogWriter): Promise<void> {
+  await rm(staging, { recursive: true, force: true })
+    .catch((error: unknown) => log.write({ level: 'error', source: 'vault', message: 'Removing an import staging folder failed', error }));
 }

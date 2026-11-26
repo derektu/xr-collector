@@ -19,6 +19,7 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { stoppedTimers } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const MINUTE = 60_000;
 const roots: string[] = [];
@@ -48,19 +49,21 @@ async function world(options: { maxAttempts?: number; capture?: number } = {}) {
   const now = () => clock.now;
   const source = new SyntheticYouTube();
   const documents = new MemoryDocuments(now);
-  const collector = new Collector(documents);
+  const collector = new Collector(documents, undefined, { log: recordingLog() });
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
   const pacing = new ScriptedPacing();
   let autoCheck = true;
   const jobs: JobManager = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
-    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { now }).jobs, plugins: [youtubePlugin(source)], documents: collector,
+    vaultPath: root, vaultId: 'vault-id', store: memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now }).jobs, plugins: [youtubePlugin(source)], documents: collector,
     subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now, pacing: [pacing],
     limits: { discovery: 1, capture: options.capture ?? 4 },
     retry: { maxAttempts: options.maxAttempts ?? 1, delaysMs: [5 * MINUTE] },
     timers: stoppedTimers,
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     autoCollection: async () => autoCheck, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
   });

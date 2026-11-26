@@ -11,6 +11,7 @@ import type { JobEvent } from '../../../src/shared/activity/activity-types.js';
 import { readEventFiles } from '../../support/event-files.js';
 import { stoppedTimers, timersAfter } from '../../support/timers.js';
 import { eventually } from '../../support/wait.js';
+import { recordingLog } from '../../support/log.js';
 
 const DAY = 86_400_000;
 const VAULT = '/vaults/a';
@@ -64,7 +65,7 @@ describe('activity log files (A-T1)', () => {
     const old = [event('2026-10-14T01:00:00.000Z', { jobId: 'job-video', eventType: 'job.accepted' }), event('2026-10-14T02:00:00.000Z')];
     await mkdir(path.join(directory, 'events'), { recursive: true });
     await writeFile(path.join(directory, 'events', '2026-10-14.jsonl'), `${lines(old)}not json\n{"eventId":"x"}\n{"eventId":"half","timest`);
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     const titles: Record<string, string> = { 'job-video': '影片標題', 'job-channel': '頻道' };
     const views = new ActivityViews(log, { sourceTitle: (id) => titles[id] });
     log.record(event('2026-10-15T05:00:00.000Z', { eventType: 'job.completed' }));
@@ -86,6 +87,7 @@ describe('activity log files (A-T1)', () => {
     const timers = new ManualTimers();
     let appends = 0;
     const log = await ActivityLog.open(directory, {
+      log: recordingLog(),
       now: () => new Date('2026-10-15T06:00:00.000Z'), timers: timers.timers,
       append: async (file, data) => { appends += 1; await appendFile(file, data); },
     });
@@ -104,7 +106,7 @@ describe('activity log files (A-T1)', () => {
   it('writes each event to the file of its UTC day', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T23:30:00.000Z'));
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     log.record(event('2026-10-15T23:59:59.999Z'));
     log.record(event('2026-10-16T00:00:00.000Z'));
     await log.flush();
@@ -115,11 +117,11 @@ describe('activity log files (A-T1)', () => {
   it('persists DEBUG unchanged and returns it only when the query includes it (L1, L4)', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    let log = await ActivityLog.open(directory, { now: () => clock.now });
+    let log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     log.record(event('2026-10-15T05:00:00.000Z', { severity: 'debug', eventType: 'job.accepted' }));
     log.record(event('2026-10-15T05:01:00.000Z', { severity: 'info', eventType: 'job.started' }));
     await log.close();
-    log = await ActivityLog.open(directory, { now: () => clock.now });
+    log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     expect((await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info', 'debug']);
     expect((await new ActivityViews(log).query({ severity: ['info', 'warning', 'error'] }, { vaultPath: VAULT })).events.map((entry) => entry.severity)).toEqual(['info']);
     expect(JSON.stringify(await readEventFiles(directory))).toContain('"severity":"debug"');
@@ -139,7 +141,7 @@ describe('retention (A-T2)', () => {
     await writeFile(path.join(segments, `${daysAgo(30).slice(0, 10)}.jsonl`), lines([event(daysAgo(30, 5), { message: '邊界前' }), event(daysAgo(30, 7), { message: '邊界後' })]));
     await writeFile(path.join(segments, `${daysAgo(29).slice(0, 10)}.jsonl`), lines([event(daysAgo(29), { message: '29 天前' })]));
 
-    const log = await ActivityLog.open(directory, { now: () => clock.now, timers: timers.timers });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now, timers: timers.timers });
     expect((await readdir(segments)).sort()).toEqual([`${daysAgo(30).slice(0, 10)}.jsonl`, `${daysAgo(29).slice(0, 10)}.jsonl`]);
     let messages = (await new ActivityViews(log).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message);
     expect(messages).toEqual(['29 天前', '邊界後']);
@@ -156,7 +158,7 @@ describe('retention (A-T2)', () => {
   it('counts local days across a UTC day boundary when the page asks for today', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-14T16:30:00.000Z'));
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     log.record(event('2026-10-14T15:59:00.000Z', { message: '本機昨天 23:59' }));
     log.record(event('2026-10-14T16:01:00.000Z', { message: '本機今天 00:01' }));
     log.record(event('2026-10-15T01:00:00.000Z', { message: '本機今天 09:00' }));
@@ -174,7 +176,7 @@ describe('cursor pages (A-T4)', () => {
   it('pages newest first without repeats or gaps while events are added and old files removed', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     const stamps: string[] = [];
     for (let index = 0; index < 250; index += 1) {
       const at = new Date(Date.UTC(2026, 9, 1, 0, 0, Math.floor(index / 2))).toISOString();
@@ -208,7 +210,7 @@ describe('cursor pages (A-T4)', () => {
   it('keeps a cursor valid after the files before it are removed', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     for (const day of [14, 15]) for (let hour = 0; hour < 3; hour += 1) log.record(event(new Date(Date.UTC(2026, 9, 10 + day - 14, hour)).toISOString()));
     for (let hour = 0; hour < 3; hour += 1) log.record(event(new Date(Date.UTC(2026, 8, 15, hour)).toISOString()));
     await log.flush();
@@ -228,7 +230,7 @@ describe('filters (A-T5)', () => {
       channel: { id: 'channel', kind: 'youtube.channel', parentId: null, source: { type: 'youtube', id: 'UC1', url: 'u', title: '頻道一' } } as CollectionJob,
       child: { id: 'child', kind: 'youtube.video', parentId: 'channel', source: { type: 'youtube', id: 'v1', url: 'u', title: '影片一' } } as CollectionJob,
     };
-    const log = ActivityLog.memory({ now: () => clock.now });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => clock.now });
     const views = new ActivityViews(log, { sourceTitle: (id) => jobs[id]?.source.title ?? undefined });
     log.record(event('2026-10-15T01:00:00.000Z', { jobId: 'channel', severity: 'debug', eventType: 'job.accepted', subscriptionId: 'UC1' }));
     log.record(event('2026-10-15T01:01:00.000Z', { jobId: 'child', parentJobId: 'channel', subscriptionId: 'UC1', eventType: 'document.saved', documentId: 'youtube:v1' }));
@@ -264,7 +266,7 @@ describe('masking (A-T6)', () => {
     const secretMessage = `請求失敗 Authorization: Bearer sk-live-123 Cookie: SID=abc; HSID=def https://x.test/v?id=1&token=t0p&sig=s1g agent ${token}`;
     await mkdir(path.join(directory, 'events'), { recursive: true });
     await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines([event('2026-10-15T01:00:00.000Z', { message: `stored agent ${token}` })]));
-    const log = await ActivityLog.open(directory, { now: () => clock.now });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     protectSecret(token);
     log.record(event('2026-10-15T02:00:00.000Z', { severity: 'error', message: secretMessage, detail: `${'x'.repeat(10_000)}\nERROR: cookie=SECRET; Authorization: Basic Zm9vOmJhcg== ${token}` }));
     log.record(event('2026-10-15T03:00:00.000Z', { message: '長'.repeat(2000) }));
@@ -297,38 +299,35 @@ describe('write failures (A-T7)', () => {
   it('drops a batch whose write fails, counts what it dropped, and writes the events after it', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const programLog = recordingLog();
     let failing = true;
     const log = await ActivityLog.open(directory, {
+      log: programLog,
       now: () => clock.now, timers: stoppedTimers,
       append: async (file, data) => {
         if (failing) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
         await appendFile(file, data);
       },
     });
-    try {
-      log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
-      log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
-      await log.flush();
-      expect(log.health()).toMatchObject({ dropped: 2, lastFailureAt: clock.now.toISOString(), lastError: 'EACCES: permission denied' });
-      expect(errors).toHaveBeenCalledTimes(1);
+    log.record(event('2026-10-15T05:00:00.000Z', { message: '第一筆' }));
+    log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
+    await log.flush();
+    expect(log.health()).toMatchObject({ dropped: 2, lastFailureAt: clock.now.toISOString(), lastError: 'EACCES: permission denied' });
+    expect(programLog.records).toHaveLength(1);
 
-      failing = false;
-      log.record(event('2026-10-15T05:00:02.000Z', { message: '第三筆' }));
-      await log.flush();
-      expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第三筆']);
-      expect(log.health()).toMatchObject({ dropped: 2 });
-      await log.close();
-    } finally {
-      errors.mockRestore();
-    }
+    failing = false;
+    log.record(event('2026-10-15T05:00:02.000Z', { message: '第三筆' }));
+    await log.flush();
+    expect((await readEventFiles(directory)).map((entry) => entry.message)).toEqual(['第三筆']);
+    expect(log.health()).toMatchObject({ dropped: 2 });
+    await log.close();
   });
 
   it('keeps a half-written batch from joining the events written after it', async () => {
     const directory = await tempDirectory();
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let partial = true;
     const log = await ActivityLog.open(directory, {
+      log: recordingLog(),
       now: () => new Date('2026-10-15T06:00:00.000Z'), timers: stoppedTimers,
       append: async (file, data) => {
         if (partial) {
@@ -343,11 +342,10 @@ describe('write failures (A-T7)', () => {
     await log.flush();
     log.record(event('2026-10-15T05:00:01.000Z', { message: '第二筆' }));
     await log.close();
-    errors.mockRestore();
 
     const lines = (await readFile(path.join(directory, 'events', '2026-10-15.jsonl'), 'utf8')).split('\n').filter(Boolean);
     expect(lines).toHaveLength(2);
-    const reopened = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z'), timers: stoppedTimers });
+    const reopened = await ActivityLog.open(directory, { log: recordingLog(), now: () => new Date('2026-10-15T06:00:00.000Z'), timers: stoppedTimers });
     expect((await new ActivityViews(reopened).query({}, { vaultPath: VAULT })).events.map((entry) => entry.message)).toEqual(['第二筆']);
     expect(reopened.health().skippedLines).toBe(1);
     await reopened.close();
@@ -361,13 +359,13 @@ describe('event IDs and kinds (#262)', () => {
   it('continues the sequence after a restart without repeating or skipping a number, even after the clock went back', async () => {
     const directory = await tempDirectory();
     const clock = new Clock(new Date('2026-10-15T06:00:00.000Z'));
-    let log = await ActivityLog.open(directory, { now: () => clock.now });
+    let log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     for (let index = 0; index < 3; index += 1) { log.event({ ...recorded, eventType: 'job.started' }); clock.advance(1_000); }
     clock.advance(-60 * 60_000);
     log.event({ ...recorded, eventType: 'job.completed' });
     await log.close();
 
-    log = await ActivityLog.open(directory, { now: () => clock.now });
+    log = await ActivityLog.open(directory, { log: recordingLog(), now: () => clock.now });
     log.event({ ...recorded, eventType: 'job.started' });
     log.event({ ...recorded, eventType: 'job.completed' });
     await log.close();
@@ -377,7 +375,7 @@ describe('event IDs and kinds (#262)', () => {
   });
 
   it('records an event without a severity at its kind\'s default, and keeps a severity the emitter gives', async () => {
-    const log = ActivityLog.memory({ now: () => new Date('2026-10-15T06:00:00.000Z') });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date('2026-10-15T06:00:00.000Z') });
     log.event({ ...recorded, eventType: 'schedule.dispatched' });
     log.event({ ...recorded, eventType: 'fake.rate_limited' });
     log.event({ ...recorded, eventType: 'job.started', severity: 'debug' });
@@ -392,7 +390,7 @@ describe('event IDs and kinds (#262)', () => {
     await mkdir(path.join(directory, 'events'), { recursive: true });
     const stored = [event('2026-10-15T01:00:00.000Z'), event('2026-10-15T02:00:00.000Z', { eventType: 'job.archived' as JobEvent['eventType'] })];
     await writeFile(path.join(directory, 'events', '2026-10-15.jsonl'), lines(stored));
-    const log = await ActivityLog.open(directory, { now: () => new Date('2026-10-15T06:00:00.000Z') });
+    const log = await ActivityLog.open(directory, { log: recordingLog(), now: () => new Date('2026-10-15T06:00:00.000Z') });
     const page = await new ActivityViews(log).query({}, { vaultPath: VAULT });
     expect(page.events.map((entry) => entry.eventType)).toEqual(['job.started']);
     expect(page.log.skippedLines).toBe(1);

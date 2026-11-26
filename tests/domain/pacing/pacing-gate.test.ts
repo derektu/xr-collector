@@ -18,6 +18,7 @@ import { SubscriptionService } from '../../../src/domain/subscriptions/subscript
 import type { SubscriptionStore } from '../../../src/domain/subscriptions/subscription-store.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const T0 = Date.parse('2026-10-15T06:00:00.000Z');
 const MINUTE = 60_000;
@@ -29,6 +30,7 @@ function harness() {
   let now = T0;
   const timers: Timer[] = [];
   const options: PacingGateOptions = {
+    log: recordingLog(),
     waitRangeMs: { min: 4_000, max: 12_000 },
     now: () => new Date(now),
     random: () => MIDDLE_OF_RANGE,
@@ -167,12 +169,13 @@ describe('YouTube request channel (P-T3)', () => {
     { reason: 'times out', previewTimeoutMs: 50, cancel: () => undefined, code: 'network_error' },
     { reason: 'is cancelled', previewTimeoutMs: 60_000, cancel: (abort: AbortController) => abort.abort(new CollectorError('vault_busy', 'stopping')), code: 'vault_busy' },
   ])('drops a channel preview that $reason while it waits for its turn, so it is never sent', async ({ previewTimeoutMs, cancel, code }) => {
-    const gate = await PacingGate.open(YOUTUBE_PACING, { waitRangeMs: { min: 0, max: 0 } });
+    const gate = await PacingGate.open(YOUTUBE_PACING, { log: recordingLog(), waitRangeMs: { min: 0, max: 0 } });
     let finishRunning!: () => void;
     const running = gate.run('background', () => new Promise<void>((resolve) => { finishRunning = resolve; }));
     let previewRequests = 0;
     const store = { list: async () => [] } as unknown as SubscriptionStore;
     const subscriptions = new SubscriptionService('youtube', store, {} as never, {
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       autoCollection: async () => true,
       documents: async () => [],

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { ChangeFeed } from '../../src/app/runtime/change-feed.js';
 import { createHttpApp, type HttpAppOptions } from '../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
+import { recordingLog } from './log.js';
 
 export interface ApiRoute { method: string; url: string }
 
@@ -44,9 +45,10 @@ export function anyService(fields: Record<string, unknown> = {}): never {
 export function appWithEveryRoute(overrides: Partial<HttpAppOptions> = {}): Promise<FastifyInstance> {
   return createHttpApp({
     sources: PRODUCT_SOURCES,
-    changes: new ChangeFeed(),
+    changes: new ChangeFeed({ log: recordingLog() }),
     collector: anyService(), jobs: anyService(), activity: anyService(), transfer: anyService(), schedule: anyService(),
     search: anyService(), vaultSetup: anyService(), loginStartup: anyService(), updates: anyService(),
+    log: anyService(), pageLog: anyService(),
     notifications: anyService(), agentConnection: anyService({ download: async () => Buffer.from('zip') }),
     subscriptions: [anyService({ type: 'youtube' })],
     pacing: [anyService({ group: 'youtube' })],

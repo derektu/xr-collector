@@ -28,6 +28,7 @@ import type { Pacing, PacingEvent } from '../pacing/index.js';
 import type { FailureClass, ItemRef, SourcePlugin, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
 import { systemTimers, type Timers } from '../../shared/lib/time.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 import { failedJobs, jobOverview, workStatus } from './job-board.js';
 import type { JobStore } from './job-store.js';
 import type { SubscriptionPort } from './subscription-port.js';
@@ -64,6 +65,7 @@ export interface JobManagerOptions {
   sources: SourceDeclarations;
   plugins: readonly SourcePlugin[];
   documents: DocumentCollector;
+  log: LogWriter;
   subscriptions?: SubscriptionPort;
   limits?: Partial<JobLimits>;
   retry?: Partial<RetryPolicy>;
@@ -153,6 +155,7 @@ export class JobManager {
     });
     this.reports = new SubscriptionReports({
       sources: options.sources,
+      log: options.log,
       port: () => this.subscriptions,
       parentOf: (id) => this.parentOf(id),
       classify: (job, error) => this.classify(job, error),
@@ -416,7 +419,7 @@ export class JobManager {
       }
     }
     this.releaseEndingCheckKeys(type, id);
-    void this.options.store.flush().catch((error: unknown) => console.error('Job store flush failed', error));
+    void this.options.store.flush().catch((error: unknown) => this.options.log.write({ level: 'error', source: 'jobs', message: 'Job store flush failed', error }));
   }
 
   async retry(id: string): Promise<JobSubmission> {
@@ -583,6 +586,7 @@ export class JobManager {
     try {
       await resumeInterrupted({
         sources: this.options.sources,
+        log: this.options.log,
         stored: () => this.options.store.list(this.options.vaultPath, this.vaultId),
         runs: (type) => this.plugin(type) !== undefined,
         stopped: (type, id) => this.subscriptions.stopped(type, id),
@@ -592,7 +596,7 @@ export class JobManager {
         },
         restore: (job) => this.restore(job),
       });
-      await this.options.store.flush().catch((error: unknown) => console.error('Resumed jobs are not written', error));
+      await this.options.store.flush().catch((error: unknown) => this.options.log.write({ level: 'error', source: 'jobs', message: 'Resumed jobs are not written', error }));
     } finally {
       this.resuming = false;
     }
@@ -640,7 +644,7 @@ export class JobManager {
       this.notifySettled(this.requireStored(job.id));
     }
     this.queue.clear();
-    await this.options.store.flush().catch((error: unknown) => console.error('Interrupted jobs are not written', error));
+    await this.options.store.flush().catch((error: unknown) => this.options.log.write({ level: 'error', source: 'jobs', message: 'Interrupted jobs are not written', error }));
   }
 
   private enqueueItem(
@@ -1053,7 +1057,7 @@ export class JobManager {
     this.endingChecks.set(job.id, job);
     this.track(Promise.resolve()
       .then(() => this.subscriptions.checkEnded(job.source.type, job.source.id!, end))
-      .catch((reason: unknown) => console.error('Subscription check record update failed', reason))
+      .catch((reason: unknown) => this.options.log.write({ level: 'error', source: 'jobs', message: 'Subscription check record update failed', error: reason }))
       .then(() => {
         this.endingChecks.delete(job.id);
         this.settle(job, state, result, error, finishedAt, detail);

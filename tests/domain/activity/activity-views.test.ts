@@ -12,6 +12,7 @@ import type { EventType } from '../../../src/shared/activity/event-catalog.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { Subscription } from '../../../src/shared/subscriptions/subscription-types.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vault/activity-summary';
 const VAULT_ID = 'vault-id';
@@ -49,7 +50,7 @@ const scope = { vaultPath: VAULT };
 
 describe('activity check summaries (#96 A1-A5)', () => {
   it('groups twelve scheduled empty checks once and never counts retry events as checks (A1)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     for (let index = 0; index < 12; index += 1) {
       log.record({ ...terminal(`check-${index}`, at(index), { existing: 5 }), eventId: `done-${index}` });
@@ -63,7 +64,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('keeps empty, network errors with different messages, then empty as exactly three runs (A2)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     const results = [...Array(3).fill('empty'), ...Array(2).fill('network_error'), ...Array(4).fill('empty')] as Array<'empty' | 'network_error'>;
     results.forEach((result, index) => log.record(terminal(`c${index}`, at(index), { result, message: index === 3 ? '逾時。' : '無法連線。' })));
@@ -72,7 +73,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('uses per-source subscription chronology and treats manual/content/skipped checks as boundaries (A3)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     log.record(terminal('a1', at(1)));
     log.record(terminal('b1', at(2), { subscription: 'sub-b' }));
@@ -98,7 +99,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('returns exact group membership and complete root/child events while raw remains unchanged (A4)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     log.record({ ...checkless(terminal('c1', at(2))), eventId: 'c1-start', timestamp: at(1), eventType: 'job.started' });
     log.record({ ...checkless(terminal('child', at(2), { result: 'other' })), eventId: 'child-skip', jobId: 'item-1', parentJobId: 'c1', eventType: 'subscription.item_skipped' });
@@ -115,7 +116,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('projects one readable lifecycle while raw retains subscription and job diagnostics (F3)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     const event = (eventId: string, minute: number, eventType: EventType, jobId: string, jobRole: 'add' | 'check' | 'item'): JobEvent => ({
       eventId, timestamp: at(minute), severity: 'info', eventType, message: eventType,
@@ -156,7 +157,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('applies severity only after result boundaries (A5)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     log.record({ ...checkless(terminal('old', at(1))), eventId: 'system', jobId: null, eventType: 'collection.resumed' });
     log.record(terminal('e1', at(2), { result: 'network_error' }));
@@ -168,7 +169,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
   });
 
   it('applies document and level filters after grouping without exposing check rows (L4-L5)', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     log.record(terminal('empty-a', at(1)));
     log.record({ ...checkless(terminal('empty-a', at(1))), eventId: 'saved', jobId: 'item-a', parentJobId: 'empty-a',
@@ -187,7 +188,7 @@ describe('activity check summaries (#96 A1-A5)', () => {
 
 describe('summary pages', () => {
   it('continues after the last row of the previous page by time, unmoved by newer checks', async () => {
-    const log = ActivityLog.memory({ now: () => new Date(at(59)) });
+    const log = ActivityLog.memory({ log: recordingLog(), now: () => new Date(at(59)) });
     const views = new ActivityViews(log);
     for (const [index, subscription] of ['sub-a', 'sub-b', 'sub-c'].entries()) {
       log.record(terminal(`manual-${subscription}`, at(index), { subscription, trigger: 'manual', created: 1, result: 'other' }));
@@ -226,11 +227,11 @@ describe('durable summary retention (#96 A6)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-summary-'));
     roots.push(root);
     let now = new Date(Date.UTC(2026, 9, 20, 9));
-    let records = await openJobRecords(root, PRODUCT_SOURCES, { now: () => now });
+    let records = await openJobRecords(root, PRODUCT_SOURCES, { log: recordingLog(), now: () => now });
     for (let index = 0; index < 1005; index += 1) records.jobs.put(finishedJob(`f${index}`, at(index % 60)));
     for (let index = 0; index < 12; index += 1) records.activity.record(terminal(`durable-${index}`, at(index)));
     await records.close();
-    records = await openJobRecords(root, PRODUCT_SOURCES, { now: () => now });
+    records = await openJobRecords(root, PRODUCT_SOURCES, { log: recordingLog(), now: () => now });
     expect(records.jobs.list(VAULT, VAULT_ID)).toHaveLength(1000);
     let page = await records.views.summary({ view: 'summary' }, scope);
     const group = page.entries.find((entry) => entry.kind === 'check')!;

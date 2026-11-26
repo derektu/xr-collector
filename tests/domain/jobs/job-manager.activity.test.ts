@@ -32,6 +32,7 @@ import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
 import { PRODUCT_DECLARATIONS, PRODUCT_SOURCES } from '../../support/product-sources.js';
 import { timersAfter } from '../../support/timers.js';
+import { recordingLog } from '../../support/log.js';
 
 const VAULT = '/vaults/activity';
 const VAULT_ID = 'vault-id';
@@ -118,8 +119,9 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
   const timers: Array<() => void> = [];
   let sequence = 0;
   const manager = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
-    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }), subscriptions,
+    vaultPath: VAULT, vaultId: VAULT_ID, store, plugins: [youtubePlugin(source)], documents: new Collector(vault, { index: async () => undefined }, { log: recordingLog() }), subscriptions,
     now: clock, createId: () => `job-${++sequence}`, limits,
     timers: timersAfter((_ms, callback) => { timers.push(callback); return () => undefined; }),
   });
@@ -132,7 +134,7 @@ function build(subscriptions: SubscriptionPort, records: JobRecords, limits: { c
   return { manager, store, records, source, vault, runTimers, runNextTimers, events };
 }
 
-function setup(records: JobRecords = memoryJobRecords(PRODUCT_SOURCES, { now: clock }), limits: { capture?: number } = {}) {
+function setup(records: JobRecords = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now: clock }), limits: { capture?: number } = {}) {
   const subs = new SubscriptionRecorder();
   const world = build(subs, records, limits);
   subs.attach(world.manager);
@@ -144,8 +146,9 @@ async function setupWithService() {
   directories.push(root);
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', clock);
   let service: SubscriptionService | null = null;
-  const world = build(forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [service!])), memoryJobRecords(PRODUCT_SOURCES, { now: clock }));
+  const world = build(forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [service!])), memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now: clock }));
   service = new SubscriptionService('youtube', channelStore, world.manager, {
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => world.source.resolveChannel(url), documents: async () => [], now: clock,
   });
@@ -437,7 +440,7 @@ describe('retention leaves job records alone (A-T3)', () => {
   it('keeps real check summaries and detail after their jobs are pruned and the store restarts (#96 A6)', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-summary-jobs-'));
     directories.push(directory);
-    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: clock });
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog(), now: clock });
     const store = records.jobs;
     const first = setup(records);
     const channel = subscribe(first.subs, 'UC-summary');
@@ -449,7 +452,7 @@ describe('retention leaves job records alone (A-T3)', () => {
     await first.manager.close();
     await records.close();
 
-    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: clock });
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog(), now: clock });
     const reopened = reopenedRecords.jobs;
     expect(reopened.list(VAULT, VAULT_ID).some((job) => job.kind === 'youtube.channel')).toBe(false);
     const summary = await reopenedRecords.views.summary({ view: 'summary', sourceType: 'youtube', subscriptionId: 'UC-summary' }, { vaultPath: VAULT });
@@ -463,7 +466,7 @@ describe('retention leaves job records alone (A-T3)', () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'xr-activity-jobs-'));
     directories.push(directory);
     let now = T0;
-    const records = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => now });
+    const records = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog(), now: () => now });
     const store = records.jobs;
     const first = setup(records);
     first.source.hold.add('jjjjjjjjjjj');
@@ -471,7 +474,7 @@ describe('retention leaves job records alone (A-T3)', () => {
     await first.source.holds.started('jjjjjjjjjjj');
     await store.flush();
     now = new Date(T0.getTime() + 40 * 86_400_000);
-    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { now: () => now });
+    const reopenedRecords = await openJobRecords(directory, PRODUCT_SOURCES, { log: recordingLog(), now: () => now });
     const reopened = reopenedRecords.jobs;
     await reopenedRecords.activity.purge();
     const before = await readFile(path.join(directory, 'jobs.json'), 'utf8');

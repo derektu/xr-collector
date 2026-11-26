@@ -8,6 +8,7 @@ import { protectSecret } from '../../../src/shared/lib/redact.js';
 import { createHttpApp } from '../../../src/transport/server/app.js';
 import { anyService, appWithEveryRoute } from '../../support/api-routes.js';
 import { PRODUCT_SOURCES } from '../../support/product-sources.js';
+import { recordingLog } from '../../support/log.js';
 
 const SECRET = 'response-masking-secret-296';
 protectSecret(SECRET);
@@ -17,7 +18,7 @@ afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
 });
 
-async function start(changes = new ChangeFeed()): Promise<FastifyInstance> {
+async function start(changes = new ChangeFeed({ log: recordingLog() })): Promise<FastifyInstance> {
   const app = await appWithEveryRoute({
     changes,
     transfer: anyService({ enter: () => () => undefined }),
@@ -97,7 +98,7 @@ describe('HTTP answers', () => {
   });
 
   it('mask the changes a waiting read and the event stream send', async () => {
-    const changes = new ChangeFeed({ defer: () => undefined });
+    const changes = new ChangeFeed({ log: recordingLog(), defer: () => undefined });
     const app = await start(changes);
     const origin = formatCursor({ epoch: changes.epoch, number: 0 });
     changes.note({ kind: 'pacing', group: `group ${SECRET}` });

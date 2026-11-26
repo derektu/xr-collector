@@ -37,6 +37,7 @@ import type {
   AgentPortSetting,
 } from '../../../shared/api/device-types.js';
 import { API_ROUTES, routePath, type ApiRoute, type BodyOf, type PathParams, type QueryOf, type ResponseOf, type SubscriptionKey, type ActivityParameters } from '../../../shared/api/api-routes.js';
+import type { PageLogEntry } from '../../../shared/log/log-types.js';
 import { pageOfView } from './activity-view.js';
 import { ApiError } from './api-error.js';
 
@@ -104,6 +105,9 @@ export const api = {
   },
   async buildInfo(signal?: AbortSignal): Promise<BuildInfo> {
     return (await call(API_ROUTES.buildInfo, { signal })).buildInfo;
+  },
+  async writePageLog(entry: PageLogEntry): Promise<void> {
+    await call(API_ROUTES.writePageLog, { body: entry });
   },
 
   async getLoginStartup(signal?: AbortSignal): Promise<LoginStartupStatus> {

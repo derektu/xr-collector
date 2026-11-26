@@ -10,24 +10,24 @@ export interface JobRecords {
   close(): Promise<void>;
 }
 
-export interface JobRecordsOptions extends Pick<ActivityLogOptions, 'timers' | 'append'> {
+export interface JobRecordsOptions extends Pick<ActivityLogOptions, 'log' | 'timers' | 'append'> {
   now?: () => Date;
   noteChange?: NoteChange;
 }
 
-export async function openJobRecords(directory: string, sources: SourceDeclarations, options: JobRecordsOptions = {}): Promise<JobRecords> {
+export async function openJobRecords(directory: string, sources: SourceDeclarations, options: JobRecordsOptions): Promise<JobRecords> {
   const activity = await ActivityLog.open(directory, activityOptions(options));
-  return records(await JobStore.open(directory, sources, activity, options.now, options.noteChange), activity);
+  return records(await JobStore.open(directory, sources, activity, options.log, options.now, options.noteChange), activity);
 }
 
-export function memoryJobRecords(sources: SourceDeclarations, options: Pick<JobRecordsOptions, 'now' | 'noteChange'> = {}): JobRecords {
+export function memoryJobRecords(sources: SourceDeclarations, options: Pick<JobRecordsOptions, 'log' | 'now' | 'noteChange'>): JobRecords {
   const activity = ActivityLog.memory(activityOptions(options));
-  return records(JobStore.memory(sources, activity, options.now, options.noteChange), activity);
+  return records(JobStore.memory(sources, activity, options.log, options.now, options.noteChange), activity);
 }
 
 function activityOptions(options: JobRecordsOptions): ActivityLogOptions {
-  const { noteChange, ...log } = options;
-  return { ...log, onRecorded: () => noteChange?.({ kind: 'activity' }) };
+  const { noteChange, ...activity } = options;
+  return { ...activity, onRecorded: () => noteChange?.({ kind: 'activity' }) };
 }
 
 function records(jobs: JobStore, activity: ActivityLog): JobRecords {

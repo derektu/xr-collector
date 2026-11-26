@@ -1,4 +1,5 @@
 import { readJsonFile, writeJsonFile } from '../../shared/lib/json-file.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface StillRunningHint {
   title: string;
@@ -9,6 +10,7 @@ export interface CloseHintOptions {
   platform: NodeJS.Platform;
   record: Pick<CloseHintRecord, 'shown' | 'markShown'>;
   notify: (hint: StillRunningHint) => void;
+  log: LogWriter;
 }
 
 const STILL_RUNNING_HINT: StillRunningHint = {
@@ -21,13 +23,13 @@ function recordsHintShown(value: unknown): value is { closeHintShown: true } {
 }
 
 export class CloseHintRecord {
-  constructor(private readonly file: string) {}
+  constructor(private readonly file: string, private readonly log: LogWriter) {}
 
   async shown(): Promise<boolean> {
     try {
       return recordsHintShown(await readJsonFile(this.file));
     } catch (error: unknown) {
-      console.warn('Unable to read the close hint record', error);
+      this.log.write({ level: 'warn', source: 'desktop', message: 'Unable to read the close hint record', error });
       return false;
     }
   }
@@ -37,8 +39,8 @@ export class CloseHintRecord {
   }
 }
 
-export async function hintStillRunning({ platform, record, notify }: CloseHintOptions): Promise<void> {
+export async function hintStillRunning({ platform, record, notify, log }: CloseHintOptions): Promise<void> {
   if (platform !== 'win32' || await record.shown()) return;
   notify(STILL_RUNNING_HINT);
-  await record.markShown().catch((error: unknown) => console.warn('Unable to save the close hint record', error));
+  await record.markShown().catch((error: unknown) => log.write({ level: 'warn', source: 'desktop', message: 'Unable to save the close hint record', error }));
 }

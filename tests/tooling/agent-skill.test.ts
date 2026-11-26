@@ -7,7 +7,9 @@ import { apiRoutes, appWithEveryRoute, type ApiRoute } from '../support/api-rout
 
 const skillPath = path.resolve('skills/xr-collector-agent/SKILL.md');
 
-const UI_ONLY: ReadonlyArray<ApiRoute & { reason: string }> = [];
+const UI_ONLY: ReadonlyArray<ApiRoute & { reason: string }> = [
+  { method: 'POST', url: '/api/device/log', reason: 'The page writes its own problems to the device log; the Agent listener does not register it.' },
+];
 
 const key = (route: ApiRoute): string => `${route.method} ${route.url}`;
 

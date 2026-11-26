@@ -1,7 +1,7 @@
 import type { OpenedAgentConnection } from '../../app/runtime/index.js';
 import { startServer, type RunningServer, type StartServerOptions } from './start.js';
 
-export type AgentServerOptions = Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection'>;
+export type AgentServerOptions = Omit<StartServerOptions, 'port' | 'agentAuthorize' | 'agentConnection' | 'pageLog'>;
 
 export async function startAgentListener(connection: OpenedAgentConnection, options: AgentServerOptions): Promise<RunningServer | null> {
   const { access, listener } = connection;

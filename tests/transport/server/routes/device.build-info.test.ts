@@ -9,6 +9,7 @@ import type { BuildInfo } from '../../../../src/shared/api/update-types.js';
 import { createHttpApp } from '../../../../src/transport/server/app.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
+import { recordingLog } from '../../../support/log.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
@@ -39,7 +40,7 @@ describe('build information HTTP contract', () => {
 
   it('forwards one identity through the real UI and Agent listeners with existing Host and token guards', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-build-http-'));
-    const runtime = await startCollectorServer({ sources: PRODUCT_SOURCES, buildInfo: info, profilePath: root, workspace: null,
+    const runtime = await startCollectorServer({ log: recordingLog(), sources: PRODUCT_SOURCES, buildInfo: info, profilePath: root, workspace: null,
       agentSettingsFile: path.join(root, 'agent-settings.json'), skillPath: path.resolve('skills/xr-collector-agent'), uiPort: 0,
     });
     try {

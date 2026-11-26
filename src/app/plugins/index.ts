@@ -5,6 +5,7 @@ import type { SourceDefinition, SourceEntry, SourcePlugin, SourcePluginDeclarati
 import { SOURCE_DECLARATIONS } from './declarations.js';
 import { subscriptionFileExchange } from '../../domain/subscriptions/index.js';
 import { createRssPlugin, rssDefinition, createYouTubePlugin, youtubeDefinition } from '../../domain/sources/server-entries.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 const SERVER_ENTRIES: Readonly<Record<string, SourceEntry>> = {
   youtube: { definition: youtubeDefinition, create: createYouTubePlugin },
@@ -54,6 +55,7 @@ export interface SourcePluginsOptions {
   profilePath: string;
   env: NodeJS.ProcessEnv;
   program: ProgramLocator;
+  log: LogWriter;
 }
 
 /** The registry of the assembled plugins, the plugins, and one request channel per pacing group they declare. */
@@ -70,6 +72,7 @@ export async function createSourcePlugins(options: SourcePluginsOptions): Promis
     const pacing = definition.pacing;
     if (!pacing || gates.has(pacing.group)) continue;
     gates.set(pacing.group, await PacingGate.open(pacing, {
+      log: options.log,
       statePath: path.join(options.profilePath, pacingStateFile(pacing.group)),
       ...pacingOptionsFromEnv(pacing, options.env),
     }));

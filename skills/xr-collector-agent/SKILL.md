@@ -86,7 +86,7 @@ Content-Type: application/json
 - Read 使用 browse/search 回傳的穩定 `id`，取得 `document.bodyMarkdown` 全文與上述欄位。根據全文回答並附 `sourceUrl`；未知日期維持未知，不以收集時間替代發布時間。
 - 發布與改回草稿：`PUT /api/documents/:id/status` body `{"status":"published"}` 發布、`{"status":"draft"}` 改回草稿，回傳 200 `{"document":{...}}`（不含 `excerpt`）。只改 frontmatter 的 `status` 並更新修改時間，正文與其他欄位不變；回應時搜尋已反映新狀態，UI 也會跟著更新。文件已是該狀態時不寫檔、不更新修改時間，也不記錄事件。已刪除回 404 `document_deleted`，不存在回 404 `document_not_found`，`status` 不是這兩個值回 400 `invalid_request`。狀態變更記為 `document.status_changed`，`detail` 是新狀態。
 - 刪除文件：先向使用者確認，再以 `DELETE /api/documents/:id` 刪除，回傳 200 `{"deleted":{"id","sourceType","sourceId","title","deletedAt"},"indexed":true|false}`。刪除後 browse、read、search、頻道統計與文件數都不再包含這份文件，訂閱不受影響。`indexed: true` 表示搜尋已排除這份文件，索引項目在背景移除，不需要重建；`indexed: false` 表示搜尋服務沒有執行，下次啟動搜尋時會排除它。刪除紀錄保存在 Vault：之後的排程、立即檢查、恢復後的檢查、頻道工作的失敗重試都不收這支影片，對應影片工作結束為 `skipped`，`skipReason` 為 `deleted`。只有在刪除之後以單支網址明確收集（`POST /api/submissions` 或 `POST /api/items` 帶影片網址，或重試單支影片的工作）並保存成功，才會解除刪除紀錄；同一支影片的工作還在進行時再次送出會併入那個工作，以它建立的時間為準；那個工作建立於刪除之前時會以 `skipped`（`deleted`）結束，等它結束後再送一次即可重新收集。收集失敗時刪除紀錄保留。刪除之前接受的工作，即使在重啟後接續，也不會讓文件回來。
-- `GET /api/search/status` 回傳 `status`：`state`、`indexedDocuments`（索引內篇數）、`vaultDocuments`（Vault 篇數）、`lastRebuiltAt`（上次從 Vault 全量重建的時間，含啟動時的重建；未曾重建為 null）及錯誤時的 `message`。`starting`、`updating`、`rebuilding`、`error` 或 `unavailable` 時，搜尋會回報 503 `search_unavailable`，不代表知識庫沒有資料；此時 browse/read 仍可使用。需要搜尋時稍後重試，持續 `error` 請使用者在 UI 檢查或重建。`unavailable` 表示搜尋引擎無法啟動，重建沒有作用，告知使用者搜尋目前無法使用；原因只寫在程式記錄。
+- `GET /api/search/status` 回傳 `status`：`state`、`indexedDocuments`（索引內篇數）、`vaultDocuments`（Vault 篇數）、`lastRebuiltAt`（上次從 Vault 全量重建的時間，含啟動時的重建；未曾重建為 null）及錯誤時的 `message`。`starting`、`updating`、`rebuilding`、`error` 或 `unavailable` 時，搜尋會回報 503 `search_unavailable`，不代表知識庫沒有資料；此時 browse/read 仍可使用。需要搜尋時稍後重試，持續 `error` 請使用者在 UI 檢查或重建。`unavailable` 表示搜尋引擎無法啟動，重建沒有作用，告知使用者搜尋目前無法使用；原因寫在程式 log，見「讀程式 log」。
 - 收集是背景工作。`POST /api/submissions` `{"url":"..."}` 依網址決定類型與做法：單篇網址建立收集單篇的工作；可訂閱的網址建立新增訂閱的工作，解析後訂閱，再以 `result.followUpJobId` 指向的檢查工作做首次檢查（見「訂閱與自動檢查」），`result.subscriptionId` 是訂閱的 ID；已在訂閱清單時結果為 `existing`，不另外收集，也不改變暫停狀態。YouTube 的影片網址（含帶 `list` 參數的觀看網址，只收該支影片）是單篇，工作種類為 `youtube.video`；頻道網址或 `@handle` 是訂閱，新增與檢查的工作種類為 `youtube.channel-add` 與 `youtube.channel`。純播放清單網址回 400 `unsupported_url`；沒有任何類型接受的網址回 400 `unsupported_url`，不是網址的文字回 400 `invalid_url`。`POST /api/items` 只接受單篇網址，`POST /api/subscriptions` 只接受可訂閱的網址，結果形狀相同。
 - 提交回傳 202 `{"job":{...},"deduplicated":false}`，表示工作已持久接受，不代表已完成。同一 Vault 中同一影片或頻道已有排隊／執行中的工作時，回傳該工作並標示 `deduplicated: true`，不會重複擷取。等待工作結束用 `GET /api/changes`（見「等待變動」），收到該工作的 `completed` 或 `failed` 變動後讀 `GET /api/jobs/:id`；不要以固定間隔反覆查詢。訂閱的檢查工作讀到 `completed` 或 `failed` 時，該訂閱的 `lastCheckedAt` 已經寫入。
 - 工作欄位：`kind`；`state`（`queued`／`running`／`completed`／`failed`／`interrupted`）；執行中的 `phase`（`resolve`、`discover`、`capture`、`save`、`index`）；`source`（`id`、`url`、`title`）；`result.outcome`（`created`、`existing`、`partial`、`failed`、`empty`、`skipped`）；失敗或中斷時的 `error`。影片結果以 `result.saved` 與 `result.indexed` 分開表示保存與搜尋索引：`saved: true, indexed: false` 表示文件已在 Vault 可讀，只是搜尋尚未更新，可呼叫重建索引，不需重新收集。頻道工作的 `items` 列出發現的影片及其 `jobId`、狀態（影片工作執行中時為 `running`）、`outcome`（`created`／`existing`／`skipped`）與錯誤，`progress` 是 `total`／`done`／`created`／`existing`／`failed`／`skipped` 計數。`skipped` 是刻意不收，原因在 `skipReason`：`out_of_range`（精確發布時間早於收集範圍）、`subscription_paused`、`subscription_removed`、`deleted`（使用者刪除過這份文件）。頻道工作的 `scope.trigger` 說明工作為何執行（`subscribe`、`resume`、`scheduled`、`manual`）；收集範圍在開始探索時依訂閱當時的設定與時間決定，不記在 `scope`。
@@ -237,6 +237,15 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 - 例：送出收集後，以提交回應的 `XR-Revision` 為 `after`，帶 `kind=job&id=<job-id>&wait=30` 等待，收到 `state` 為 `completed` 或 `failed` 時讀取工作；沒有收到就以回應的 `revision` 再等一次。
 - `GET /api/events` 以 Server-Sent Events 提供同一串變動，供能長時間讀取回應的用戶端使用：開頭的 `hello` 事件帶目前 revision，之後每批一個 `change` 事件。重新連線不補期間的變動：以斷線前最後的 revision 呼叫 `GET /api/changes?after=<revision>` 取得期間的變動，或直接重新讀取需要的資料。同時開啟的事件連線最多 16 條，超過回 503 `too_many_streams`。
 
+## 讀程式 log
+
+程式內部的錯誤與警告（例如搜尋引擎無法啟動、`jobs.json` 寫不進去、畫面存不了主題）不進記錄（`GET /api/activity`），寫在這台電腦的程式 log。使用者問「為什麼失敗」而記錄與錯誤回應說不出原因時，讀 `GET /api/device/logs`。
+
+- 回傳 `records`（新到舊）與 `nextCursor`（沒有下一頁時為 null）。每筆有 `time`（ISO 時間）、`level`（`debug`、`info`、`warn`、`error`）、`source`（`desktop`、`server`、`runtime`、`jobs`、`subscriptions`、`vault`、`search`、`pacing`、`activity`、`notifications`、`page`；`page` 是畫面寫的）、`message`，錯誤帶 `stack`。
+- query：`level`（逗號多選，不指定時全部）、`since`／`until`（帶時區的 ISO 時間，`until` 不含）、`limit`（1–100，預設 50）、`cursor`（上一頁的 `nextCursor`）。參數不合法回 400 `invalid_request`。
+- 範圍是目前的 log 檔與上一份：檔案超過 5 MB 時換新檔，更早的紀錄不在了。訊息裡的金鑰與憑證已遮蔽。
+- 屬於裝置資料，Vault 尚未設定或正在匯入時也能讀；不隨匯出交換。
+
 ## HTTP 契約
 
 所有 Agent 請求都需 `Authorization: Bearer <token>`，只監聽 `127.0.0.1`。JSON request 使用 `Content-Type: application/json`；匯出檔一律以本機路徑指定。
@@ -244,6 +253,7 @@ Collector 在資料變動時發布變動，每一批有一個 revision，格式�
 | Method 與 path | 輸入／結果 |
 | --- | --- |
 | `GET /api/device/build-info` | 唯讀 `buildInfo`：版本、建置時間、commit、buildId、平台與原始碼狀態；Vault 未就緒／鎖定時可讀 |
+| `GET /api/device/logs` | 程式 log：query `level`、`since`、`until`、`limit`、`cursor`；回傳新到舊的 `records` 與 `nextCursor`，見「讀程式 log」 |
 | `GET /api/device/updates` | 唯讀更新狀態；Vault 未就緒／鎖定時可讀 |
 | `POST /api/device/updates/check` | 檢查最新的穩定版，不下載；回傳 `update` |
 | `POST /api/device/updates/download` | 經使用者確認後送 `{"version":"..."}`，與 `offer.version` 相同；下載並驗證 |

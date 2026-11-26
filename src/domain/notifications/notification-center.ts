@@ -5,6 +5,7 @@ import type { AutoPauseNotification, NotificationAvailability, NotificationState
 import type { CheckFailures, SubscriptionRecord } from '../../shared/subscriptions/subscription-types.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
 import { replaceFile } from '../../shared/lib/json-file.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface SystemNotificationAdapter {
   availability(): { state: NotificationAvailability; message: string | null };
@@ -20,14 +21,16 @@ export class NotificationCenter {
   private writes: Promise<void> = Promise.resolve();
   private constructor(private readonly file: string, private readonly adapter?: SystemNotificationAdapter) {}
 
-  static async open(profilePath: string, adapter?: SystemNotificationAdapter): Promise<NotificationCenter> {
+  static async open(profilePath: string, log: LogWriter, adapter?: SystemNotificationAdapter): Promise<NotificationCenter> {
     const center = new NotificationCenter(path.join(profilePath, 'notifications.json'), adapter);
     try {
       const value = JSON.parse(await readFile(center.file, 'utf8')) as Partial<StoredState>;
       if (value.version === 1 && typeof value.enabled === 'boolean') center.state = { version: 1, enabled: value.enabled };
-      else console.warn('Ignoring an unreadable notification profile');
+      else log.write({ level: 'warn', source: 'notifications', message: 'Ignoring an unreadable notification profile' });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('Ignoring unreadable notification profile', error);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.write({ level: 'warn', source: 'notifications', message: 'Ignoring an unreadable notification profile', error });
+      }
     }
     return center;
   }

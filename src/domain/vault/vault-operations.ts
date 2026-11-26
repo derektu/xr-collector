@@ -26,6 +26,7 @@ import {
 } from './vault-package.js';
 import type { VaultSelection } from './vault-selection.js';
 import { errorCode } from './errno.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface PreparedVault {
   activate(): ReplacedVault;
@@ -57,6 +58,7 @@ export interface VaultOperationsOptions {
   machineName?: string;
   fixedLocation?: boolean;
   noteChange: NoteChange;
+  log: LogWriter;
 }
 
 interface Preview { value: ImportPreview; comparison: Comparison; file: string }
@@ -228,23 +230,23 @@ export class VaultOperations {
       reporter.progress('exporting', '正在匯出目前的內容…');
       const backup = await this.backUp(reporter);
       reporter.progress('extracting', '正在套用匯入的內容…', { completed: 0, total: plan.changes.size });
-      const staged = await stageImport(root, this.options.sources, reader, plan.changes);
+      const staged = await stageImport(root, this.options.sources, reader, plan.changes, this.options.log);
       try {
         await staged.place((done, total) => reporter.files(done, total));
       } catch (error) {
-        await this.host.reloadSchedule().catch((again: unknown) => console.error('Reloading the schedule after a partial import failed', again));
+        await this.host.reloadSchedule().catch((again: unknown) => this.options.log.write({ level: 'error', source: 'vault', message: 'Reloading the schedule after a partial import failed', error: again }));
         throw new PartialImport(mode, backup, error);
       }
       reporter.progress('indexing', '正在更新搜尋索引…');
       try {
         await this.indexChanged(plan.changes);
       } catch (error) {
-        console.error('Updating the search index after an import failed', error);
+        this.options.log.write({ level: 'error', source: 'vault', message: 'Updating the search index after an import failed', error });
       }
       try {
         await this.host.reloadSchedule();
       } catch (error) {
-        console.error('Reloading the schedule after an import failed', error);
+        this.options.log.write({ level: 'error', source: 'vault', message: 'Reloading the schedule after an import failed', error });
       }
       const summary = changeSummary(counts);
       const how = mode === 'replace' ? '已完全以匯入內容取代' : '匯入完成';
@@ -299,7 +301,7 @@ export class VaultOperations {
         return await this.openOnce(root, reporter, 'created');
       } catch (error) {
         if (this.host.current().vault.root !== root) {
-          await rm(root, { recursive: true, force: true }).catch((cleanup: unknown) => console.error('Removing the new Vault failed', cleanup));
+          await rm(root, { recursive: true, force: true }).catch((cleanup: unknown) => this.options.log.write({ level: 'error', source: 'vault', message: 'Removing the new Vault failed', error: cleanup }));
         }
         throw error;
       }
@@ -317,7 +319,7 @@ export class VaultOperations {
       previous = candidate.activate();
       candidate = null;
     } catch (error) {
-      if (!(error instanceof CollectorError)) console.error('Opening another Vault failed', error);
+      if (!(error instanceof CollectorError)) this.options.log.write({ level: 'error', source: 'vault', message: 'Opening another Vault failed', error });
       const failure = error instanceof CollectorError ? error
         : new CollectorError('vault_invalid', `無法開啟 ${root}，請確認資料夾與搜尋服務後重試。目前的知識庫不變。`);
       if (candidate) await candidate.discard();

@@ -18,6 +18,7 @@ import { eventually } from '../../../support/wait.js';
 import { VaultFileWriter } from '../../../../src/domain/vault/vault-files.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
+import { recordingLog } from '../../../support/log.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))); });
@@ -28,17 +29,19 @@ async function world(options: { failDeleting?: (id: string) => boolean } = {}) {
   const clock = { now: new Date('2026-10-15T04:00:00.000Z') };
   const now = () => clock.now;
   const source = new SyntheticYouTube();
-  const records = memoryJobRecords(PRODUCT_SOURCES, { now });
+  const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog(), now });
   const store = records.jobs;
   const search = { index: async () => undefined, remove: async () => undefined };
-  const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now }), search, { recordEvent: (entry) => jobs.recordEvent(entry) });
+  const collector: Collector = new Collector(new MarkdownVault(new VaultFileWriter(root, PRODUCT_SOURCES), { now }), search, { log: recordingLog(), recordEvent: (entry) => jobs.recordEvent(entry) });
   const channelStore = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', now);
   const jobs: JobManager = new JobManager({
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     vaultPath: root, vaultId: 'vault-id', store, plugins: [youtubePlugin(source)], documents: collector, subscriptions: forwardingPort(() => new SubscriptionServices(PRODUCT_SOURCES, [channels])), now,
     limits: { discovery: 1, capture: 4 }, retry: { maxAttempts: 1 },
   });
   const channels = new SubscriptionService('youtube', channelStore, jobs, {
+    log: recordingLog(),
     sources: PRODUCT_SOURCES,
     autoCollection: async () => true, resolveTarget: (url) => source.resolveChannel(url), documents: () => collector.list(), now,
     deleteDocument: async (id) => {

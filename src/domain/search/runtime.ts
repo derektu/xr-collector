@@ -15,6 +15,7 @@ import { loadSearchLexicon } from './search-lexicon.js';
 import { prepareSearchDatabase } from './search-projection.js';
 import { replaceFile } from '../../shared/lib/json-file.js';
 import { limitText, redact } from '../../shared/lib/redact.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 interface StartSearchRuntimeOptions {
   vault: DocumentVault;
@@ -23,6 +24,7 @@ interface StartSearchRuntimeOptions {
   lexiconPath: string;
   searchData: string;
   vaultRoot: string;
+  log: LogWriter;
   port?: number;
   statusChanged?: () => void;
 }
@@ -51,6 +53,7 @@ export async function startSearchRuntime(
         lexicon,
       }),
       () => loadAllDocuments(options.vault),
+      options.log,
       fileSearchStateStore(`${databasePath}-state.json`),
       () => new Date(),
       options.statusChanged,
@@ -65,7 +68,7 @@ export async function startSearchRuntime(
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`Search engine failed to start: ${limitText(redact(detail), 500, 'head')}`);
+    options.log.write({ level: 'error', source: 'search', message: `Search engine failed to start: ${limitText(redact(detail), 500, 'head')}` });
     return {
       search: new UnavailableTranscriptSearch('無法啟動搜尋引擎。'),
       close: async () => undefined,

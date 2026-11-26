@@ -17,6 +17,7 @@ Vault 是正式資料，Meilisearch 是可重建的搜尋投影。本文件描�
 | active Vault 選址 | profile 的 `vault-selection.json`；裝置資料 |
 | 通知開關 | profile 的 `notifications.json`，只存開關；裝置資料，不納入匯出檔。通知送出就算數，不記錄發送結果；目前需處理的自動暫停由使用中 Vault 裡自動暫停的訂閱算出 |
 | 收集工作與記錄 | profile 的 `jobs/jobs.json` 與 `jobs/events/<UTC 日期>.jsonl`；`jobs.json` 每次整份寫到暫存檔再改名取代；已完成與失敗的工作超過 `FINISHED_JOB_LIMIT` 筆時刪除最舊的，其他狀態的工作不刪；記錄保留 30 天；裝置資料，不納入匯出檔 |
+| 程式 log | profile 的 `logs/collector.jsonl`，一行一筆 JSON（時間、等級、來源、訊息、錯誤的 stack）；超過 5 MB 時改名為 `collector.1.jsonl`，取代原本那份，只留一份舊檔；裝置資料，不納入匯出檔 |
 | 匯入的暫存資料夾 | Vault 內的 `.xr-collector-import-<UUID>/`，套用匯入期間存在；開啟 Vault 時刪除留下的暫存資料夾 |
 | 匯出檔 | 預設匯出目錄（`<文件>/XR Collector 匯出`，可由 `XR_COLLECTOR_EXPORT_DIR` 指定）或使用者選的位置；不屬於任何 Vault |
 | 匯入前備份 | 備份目錄（`<文件>/XR Collector 備份`，可由 `XR_COLLECTOR_BACKUP_DIR` 指定）；不屬於任何 Vault |
@@ -117,7 +118,7 @@ Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` �
 
 ## 開啟其他知識庫
 
-開啟其他知識庫的切換以裝置選址 `vault-selection.json`（暫存檔加改名）為唯一提交點。選址寫入前，目前的 Vault 保持使用且不被改動；寫入後切換不回退。切換時停止原 Vault 的排程，把它未完成的工作記為中斷（原因為切換），關閉它的搜尋，再接續新 Vault 未完成的工作並啟動排程；原 Vault 在操作開始時停下的收集不再恢復，隨它的服務一起關閉。收尾步驟各自失敗只記在程式記錄，切換仍算完成。
+開啟其他知識庫的切換以裝置選址 `vault-selection.json`（暫存檔加改名）為唯一提交點。選址寫入前，目前的 Vault 保持使用且不被改動；寫入後切換不回退。切換時停止原 Vault 的排程，把它未完成的工作記為中斷（原因為切換），關閉它的搜尋，再接續新 Vault 未完成的工作並啟動排程；原 Vault 在操作開始時停下的收集不再恢復，隨它的服務一起關閉。收尾步驟各自失敗只記在程式 log，切換仍算完成。
 
 開啟其他知識庫只接受既有的 Vault；目前的 Vault（以 realpath 比對，不分大小寫的磁碟上換個大小寫寫法也算同一個）、空資料夾與無法辨識的資料夾都拒絕。原 Vault 留在原處，它的工作在下次開啟它時接續。以 `XR_COLLECTOR_VAULT` 啟動時，下次啟動仍開啟那個位置，所以建立或開啟其他知識庫都回 409 `vault_location_fixed`。
 
@@ -182,7 +183,7 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 ## 搜尋投影
 
-收集先保存 Markdown，再更新索引。索引失敗不刪除已保存文件；列表與全文可從 Vault 讀取，搜尋依索引狀態回報結果或錯誤。匯入（合併與完全取代）只對寫入或移除的文件更新索引。匯入的檔案都已到位後，更新索引或重新載入訂閱失敗時只寫入程式記錄，匯入照樣完成；匯入在放到位階段失敗時也不另外更新索引。這兩種情況下索引與 Vault 不一致，由下次啟動時的比對重建。從匯出檔建立的 Vault 開啟時建立自己的索引。
+收集先保存 Markdown，再更新索引。索引失敗不刪除已保存文件；列表與全文可從 Vault 讀取，搜尋依索引狀態回報結果或錯誤。匯入（合併與完全取代）只對寫入或移除的文件更新索引。匯入的檔案都已到位後，更新索引或重新載入訂閱失敗時只寫入程式 log，匯入照樣完成；匯入在放到位階段失敗時也不另外更新索引。這兩種情況下索引與 Vault 不一致，由下次啟動時的比對重建。從匯出檔建立的 Vault 開啟時建立自己的索引。
 
 索引名稱是 `documents`。每筆索引文件的 key 是完整文件 ID 的 base64url 編碼，不同來源類型即使來源內 ID 相同也不會互相覆寫。來源篩選使用 `sourceType` 與 `publisherId`；頻道名稱只供顯示與搜尋，不作篩選條件。狀態篩選使用索引文件的 `status`（`draft`／`published`）。搜尋同時回傳套用狀態以外所有條件時各狀態的篇數：Latin 查詢由引擎的 `status` facet 計算，中文片段查詢由篩選前的命中 ID 集合計算，兩者都與不篩狀態時的總數相同。變更文件狀態寫入 Vault 後立即更新該筆索引，回應時搜尋已反映新狀態。
 
@@ -192,7 +193,7 @@ YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `ch
 
 ### 索引版本
 
-每個 Vault 的搜尋資料放在裝置的搜尋資料目錄旁：`<搜尋資料目錄>-<Vault 路徑雜湊>-v<索引版本>`，同名加上 `-state.json` 是重建時間，加上 `.pid` 是執行中引擎的程序編號。索引版本是 `src/domain/search/search-projection.ts` 的 `SEARCH_INDEX_VERSION`，目前為 1。版本不同就是另一個目錄：新版本的目錄一開始是空的，啟動時的比對發現索引與 Vault 不一致，從 Vault 全量重建。啟動時刪除同一個 Vault 其他版本的目錄與它們的 state、pid 檔；刪不掉時只寫入程式記錄，搜尋照常啟動。
+每個 Vault 的搜尋資料放在裝置的搜尋資料目錄旁：`<搜尋資料目錄>-<Vault 路徑雜湊>-v<索引版本>`，同名加上 `-state.json` 是重建時間，加上 `.pid` 是執行中引擎的程序編號。索引版本是 `src/domain/search/search-projection.ts` 的 `SEARCH_INDEX_VERSION`，目前為 1。版本不同就是另一個目錄：新版本的目錄一開始是空的，啟動時的比對發現索引與 Vault 不一致，從 Vault 全量重建。啟動時刪除同一個 Vault 其他版本的目錄與它們的 state、pid 檔；刪不掉時只寫入程式 log，搜尋照常啟動。
 
 下列任一項改變時，把 `SEARCH_INDEX_VERSION` 加 1，裝置上的索引才會換到新目錄、從 Vault 重建：
 

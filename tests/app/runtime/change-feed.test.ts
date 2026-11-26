@@ -2,10 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { ChangeFeed } from '../../../src/app/runtime/change-feed.js';
 import { parseCursor, type ChangeBatch } from '../../../src/shared/api/changes.js';
+import { recordingLog } from '../../support/log.js';
 
 function manual(options: { keepBatches?: number; keepMs?: number; now?: () => Date } = {}) {
   const deferred: Array<() => void> = [];
-  const feed = new ChangeFeed({ epoch: 'abc', defer: (publish) => deferred.push(publish), ...options });
+  const feed = new ChangeFeed({ log: recordingLog(), epoch: 'abc', defer: (publish) => deferred.push(publish), ...options });
   const batches: ChangeBatch[] = [];
   feed.subscribe((batch) => batches.push(batch));
   return { feed, batches, turn: () => { for (const publish of deferred.splice(0)) publish(); } };

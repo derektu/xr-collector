@@ -18,6 +18,7 @@ import { transcriptDocument } from '../../src/domain/sources/youtube/server.js';
 import { VaultFileWriter } from '../../src/domain/vault/vault-files.js';
 import type { SourceRegistry } from '../../src/shared/sources/source-registry.js';
 import { PRODUCT_SOURCES } from './product-sources.js';
+import { recordingLog } from './log.js';
 
 const roots: string[] = [];
 const workspaces: VaultWorkspace[] = [];
@@ -110,7 +111,7 @@ export async function open(at: Machine, overrides: OpenOverrides = {}, track = t
     ...overrides,
   };
   const workspace = await VaultWorkspace.open(workspaceWithYouTube({
-    sources, root: selected ?? at.vault, selection, createdBy: 'XR Collector test', machineName: at.name,
+    sources, log: recordingLog(), root: selected ?? at.vault, selection, createdBy: 'XR Collector test', machineName: at.name,
     exportFolder: at.exports, backupFolder: at.backups, capture: { capture: async (target) => video(target.videoId) },
     channelSource: { resolve: async () => ({ id: 'UC123', title: '測試頻道', url: 'https://www.youtube.com/channel/UC123' }), listVideos: async () => [] },
     searchBinary: '', searchLexicon: '', searchData: path.join(at.profile, 'search'),

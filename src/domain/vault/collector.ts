@@ -21,6 +21,7 @@ import { documentId } from '../../shared/documents/document-id.js';
 import type { NewJobEvent } from '../../shared/activity/activity-types.js';
 import { NO_PUBLISHER_ID, type DocumentVault } from '../../shared/documents/document-vault.js';
 import type { DocumentCollector, IndexOutcome, SaveIntent } from '../../shared/documents/document-collector.js';
+import type { LogWriter } from '../../shared/log/log-types.js';
 
 export interface TypeSubscriptions {
   subscriptions: SubscriptionRecord[];
@@ -28,6 +29,7 @@ export interface TypeSubscriptions {
 }
 
 export interface CollectorOptions {
+  log: LogWriter;
   recordEvent?: (entry: Omit<NewJobEvent, 'vaultPath' | 'jobId'>) => void;
   noteChange?: NoteChange;
 }
@@ -37,8 +39,8 @@ export class Collector implements DocumentCollector {
 
   constructor(
     private readonly vault: DocumentVault,
-    private readonly search?: Pick<TranscriptSearch, 'index'> & Partial<Pick<TranscriptSearch, 'remove'>>,
-    private readonly options: CollectorOptions = {},
+    private readonly search: (Pick<TranscriptSearch, 'index'> & Partial<Pick<TranscriptSearch, 'remove'>>) | undefined,
+    private readonly options: CollectorOptions,
   ) {}
 
   findExisting(key: DocumentKey): Promise<SavedDocument | null> {
@@ -87,7 +89,7 @@ export class Collector implements DocumentCollector {
         this.noted(current.id);
         return { indexed: true };
       } catch (error) {
-        console.error('Search index update failed', error);
+        this.options.log.write({ level: 'error', source: 'vault', message: 'Search index update failed', error });
         return { indexed: false, message: '搜尋索引更新失敗，可稍後重建索引。' };
       }
     });
@@ -109,7 +111,7 @@ export class Collector implements DocumentCollector {
       try {
         await this.vault.remove(id);
       } catch (error) {
-        console.error('Document file removal failed', error);
+        this.options.log.write({ level: 'error', source: 'vault', message: 'Document file removal failed', error });
         this.options.recordEvent?.({
           eventType: 'document.delete_failed', ...event,
           message: `「${document.title}」已標記為刪除，但檔案無法移除。`,
@@ -122,7 +124,7 @@ export class Collector implements DocumentCollector {
         indexMessage = '搜尋服務尚未啟用；下次啟動搜尋時會排除這份文件。';
       } else {
         void this.search.remove(id).catch((error: unknown) => {
-          console.error('Search index removal failed', error);
+          this.options.log.write({ level: 'error', source: 'vault', message: 'Search index removal failed', error });
           this.options.recordEvent?.({
             eventType: 'document.index_remove_failed', ...event,
             message: `「${document.title}」已刪除，搜尋索引稍後更新；搜尋結果已排除這份文件。`,
@@ -149,7 +151,7 @@ export class Collector implements DocumentCollector {
         try {
           await this.search.index(document);
         } catch (error) {
-          console.error('Search index update failed', error);
+          this.options.log.write({ level: 'error', source: 'vault', message: 'Search index update failed', error });
           this.options.recordEvent?.({
             eventType: 'document.index_failed', ...event,
             message: `「${document.title}」的狀態已變更，搜尋索引更新失敗，可稍後重建索引。`,

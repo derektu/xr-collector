@@ -20,6 +20,7 @@ import { withYouTube } from '../../../support/youtube-sources.js';
 import { eventually } from '../../../support/wait.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 import { acceptsBearer } from '../../../support/agent-access.js';
+import { recordingLog } from '../../../support/log.js';
 
 const VAULT = '/vaults/http';
 const VAULT_ID = 'vault-id';
@@ -47,10 +48,11 @@ function services(failures: CollectorError[] = []) {
     read: async () => saved,
     ...withoutDocumentChanges(),
   };
-  const records = memoryJobRecords(PRODUCT_SOURCES);
+  const records = memoryJobRecords(PRODUCT_SOURCES, { log: recordingLog() });
   const store = records.jobs;
-  const collector = new Collector(vault, { index: async () => undefined });
+  const collector = new Collector(vault, { index: async () => undefined }, { log: recordingLog() });
   const jobs = new JobManager({
+    log: recordingLog(),
     vaultPath: VAULT, vaultId: VAULT_ID, store, sources: PRODUCT_SOURCES, documents: collector,
     plugins: [youtubePlugin({
       resolveChannel: async () => { throw new CollectorError('invalid_subscription', '無法辨認'); },
@@ -183,6 +185,7 @@ describe('activity and job routes (A-T8, A-T10)', () => {
     const root = await mkdtemp(path.join(tmpdir(), 'xr-activity-runtime-'));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const runtime = await startCollectorServer({
+      log: recordingLog(),
       sources: PRODUCT_SOURCES,
       profilePath: root,
       workspace: withYouTube({
