@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { withOwnedDirectoryLock } from '../../../scripts/lib/owned-directory-lock.mjs';
 import { runOwnedProcess, UnsafeProcessTreeError } from '../../../scripts/lib/owned-process.mjs';
+import { itOnPosix } from '../../support/platform.js';
 import { eventually } from '../../support/wait.js';
 
 const roots: string[] = [];
@@ -120,8 +121,7 @@ it('reports a lock directory that never received an owner record once its creati
   const ownerGraceMs = 60_000;
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
     .rejects.toThrow(/^busy$/u);
-  // External: a directory's time can read up to a clock tick ahead of Date.now(), most visibly on
-  // Windows, so a lock created just now can still count as within a 0 ms grace.
+  // External: a directory's time can read up to a clock tick ahead of Date.now(), most visibly on Windows.
   const created = new Date(Date.now() - 2 * ownerGraceMs);
   await utimes(lock, created, created);
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), ownerGraceMs }))
@@ -148,8 +148,7 @@ it('quotes the PowerShell delete command, including the typographic quotes Power
     .rejects.toThrow(`Remove-Item -LiteralPath '${lock.replace(quotes, "it''s-\u2018\u2018\u2019\u2019\u201A\u201A\u201B\u201B")}' -Recurse`);
 });
 
-// External: a Windows directory carries no owner-only permission bits, which the POSIX lock checks.
-it.skipIf(process.platform === 'win32')('quotes the POSIX delete command', async () => {
+itOnPosix('quotes the POSIX delete command', async () => {
   const lock = await staleLock(await lockRoot(`xr-owned-lock-${quotes}-`), 'lock');
   await expect(withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', async () => null), platform: 'darwin' }))
     .rejects.toThrow(`rm -r '${lock.replace(quotes, "it'\\''s-\u2018\u2019\u201A\u201B")}'`);
@@ -181,8 +180,7 @@ it('waits out a bounded number of Windows pending-delete EPERM failures', async 
   expect(persistent).toHaveLength(50);
 });
 
-// External: a Windows directory carries no owner-only permission bits, which the POSIX lock checks.
-it.skipIf(process.platform === 'win32')('fails on EPERM at once outside Windows', async () => {
+itOnPosix('fails on EPERM at once outside Windows', async () => {
   const root = await lockRoot('xr-owned-lock-pending-delete-');
   const delays: number[] = [];
   await expect(withOwnedDirectoryLock(await staleLock(root, 'posix'), async () => 'acquired',
@@ -237,7 +235,7 @@ it('reports busy for a dead holder whose normally recorded child group is still 
   await expect(stat(path.join(lock, 'owner-a1.json'))).resolves.toBeDefined();
 });
 
-it.skipIf(process.platform === 'win32')('fails closed on legacy files and symlink locks without touching their targets', async () => {
+itOnPosix('fails closed on legacy files and symlink locks without touching their targets', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-lock-path-'));
   roots.push(root);
   const legacy = path.join(root, 'legacy.lock');
@@ -262,7 +260,7 @@ it.skipIf(process.platform === 'win32')('fails closed on legacy files and symlin
   expect(await readFile(path.join(external, 'owner-b2.json'), 'utf8')).toBe('outside');
 });
 
-it.skipIf(process.platform === 'win32')('rejects and preserves its lock when normal child close cannot inspect the process group', async () => {
+itOnPosix('rejects and preserves its lock when normal child close cannot inspect the process group', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'xr-owned-process-probe-'));
   roots.push(root);
   const lock = path.join(root, 'lock');
