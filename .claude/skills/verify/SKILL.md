@@ -151,6 +151,7 @@ node $V flows run --desktop --visible --issue 91 --label visible     # 有 visib
 - **版本**：收錄流程與函式庫一律來自執行指令的 checkout（票的 worktree），`--checkout` 決定受測的 checkout：它的 `src/`、Web UI 與合成 verification server。
 - **證據**：`--label`（預設 `flows`）決定這次執行的新資料夾，規則與 `launch` 相同：`<issue>/<label>-<本地時間>/`。每支流程寫進其中的 `<流程名>/`：`results.json`、截圖與 server.log；`results.json` 另記 `flow`。流程還沒建立 recorder 就失敗（啟動 server 或瀏覽器失敗）時，照樣寫出 `passed: false` 的 `results.json`，沒跑成的流程不會從結果中消失。任一支流程失敗時 exit code 為 1。
 - **同時執行**：`--jobs <N>`（預設 1，最多等於 slot 數 10）讓最多 N 支流程同時跑，每支仍是自己的 instance 與 slot，依列出順序開始；Desktop 流程獨自執行，前面的流程結束才開始，後面的等它結束。一支失敗或中途丟出例外不影響其他流程跑完。N 大於 1 時每行 log 以 `[<流程名>]` 開頭。slot 被其他 run 佔滿時，流程等 slot 空出來。結束時印出通過的支數與失敗的流程名。
+- **時間上限**：整個 `flows run` 有時間上限，超過時結束還在跑的流程與它們啟動的 server、Electron、Meilisearch，exit code 為 1；上限、收拾範圍與已知限制見 [專案驗證設定](../../../docs/project-validation.md#自動檢查)。
 - **核心旅程**：`core-journey` 一次走過訂閱、文件頁新增單支影片、來源篩選與搜尋、閱讀、列表暫停與恢復、閱讀頁刪除確認；`subscription-remove` 是移除訂閱保留文件的資料安全代表。其他流程不重複斷言它們已斷言的操作。
 - **內容操作**：`workspace-content` 串接訂閱入口的類型切換、失敗工作重試／移除、RSS 設定、RSS 刪除與最後一頁刪除回退、搜尋不可用；從空的合成 instance 執行，文件數足以驗到第二頁。
 - **斷言讀什麼**：比對 API 的值與產品元素的 `data-*`（例如狀態的 `data-phase`、文件摘要的 `data-mode`／`data-total`、檢查紀錄的 `data-job`），不比對整句中文；文字與排版規則放在下層的單元測試。外觀（焦點框、置中、背景延伸、tooltip 位置、窄視窗換行）不在流程裡斷言。
@@ -336,7 +337,7 @@ node .claude/skills/verify/scripts/verify.mjs stop --run <runDir> --keep   # 同
 
 本 skill 的機制只留防止「說通過，其實沒驗」的部分，自測也只測這些：
 
-- **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯或頁面有未捕捉例外的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
+- **`.claude/skills/verify/tests/`**（`npm run test:verify-skill`）：recorder 的判定（沒有 check 的 scenario、沒有 scenario 的 run、收尾出錯或頁面有未捕捉例外的 run 都不算通過）、啟動失敗也寫出失敗的 `results.json`、並行池（不超過上限、Desktop 流程獨自跑、一支失敗不影響其他）、`check` 的比對與完整性、每次 run 的新證據資料夾與 `--evidence` 必須是空的、slot 範圍與 lock 的接手、`stop` 只結束 run 自己的程序群組並拒絕不帶 marker 的 PID、`flows run` 超過上限時結束流程程序與它啟動的 run、`state` 依格式讀取不寫入、機密遮蔽、停止的 run 不讀 API、文件分頁，以及開發版 Electron 的 build 比原始碼舊與打包版架構不符時拒絕啟動。不在 `npm test` 裡；CI 的 Mac job 只在改動碰到 `.claude/skills/verify/scripts/` 或這個資料夾時跑它。改 `scripts/` 時在本機也跑一次，並以 `flows run core-journey` 跑一次整條串起來的流程。在 Windows 執行：`npm run test:verify-skill`。
 - **`tests/tooling/verify-flows.test.ts`**（在 `npm test` 裡）：動態找出每一支流程、功能地圖每個功能檔列出的流程與流程的 `covers` 一致。改流程或功能地圖都會影響 E2E 會跑哪些流程，所以每個 PR 都跑。流程判斷訂閱狀態序列與工作頁分區的邏輯在 `tests/tooling/status-sequence.test.ts`。
 - **startup**（`scripts/startup.mjs`，見「打包版」）：改 `lib/electron.mjs`、`lib/target.mjs`、`lib/platform.mjs` 或 `stop` 時，兩個平台的開發版與打包版各跑一次；nightly 每天在兩個平台跑。
 

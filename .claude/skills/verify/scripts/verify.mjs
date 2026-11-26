@@ -5,6 +5,7 @@
 //   node .claude/skills/verify/scripts/verify.mjs <command> [options]
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { checkEvidence, resultFiles } from './lib/check.mjs';
 import { attach, launchWeb, stopRun } from './lib/instance.mjs';
@@ -13,6 +14,7 @@ import { waitFor } from './lib/wait.mjs';
 import { collect, idle, subscribe } from './lib/seed.mjs';
 import { findFeature, readFeatures } from './lib/features.mjs';
 import { apiState, readState } from './lib/state.mjs';
+import { superviseFlows, supervised } from './lib/supervise.mjs';
 import { REAL } from './lib/synthetic.mjs';
 // Playwright takes about a second of CPU to load, so only the commands that use it load it: snapshot
 // and flows.
@@ -38,7 +40,9 @@ const USAGE = `verify.mjs <command>
            once (default 1, at most one per verify slot; a Desktop flow always runs alone); the flows and
            this library come from the checkout the command runs in, --checkout picks the checkout under
            test; evidence goes to a new folder .local/ticket-artifacts/<N>/<label>-<local time>/<flow>/
-           (label defaults to flows); exit code 1 when any flow fails
+           (label defaults to flows); exit code 1 when any flow fails; the whole run has a time limit
+           (scripts/lib/time-limits.mjs of the checkout the command runs in), past which it ends the
+           flows still running with the instances they launched and exits with code 1
   check    [--issue <N>] [--platform darwin|win32]... [--scenario <ID>]... [<results.json or folder>...]
            whether the evidence proves the code as it is now: results.json files (those of issue N's
            evidence, and of the folders given) count while their checkout still has the recorded commit
@@ -114,6 +118,10 @@ async function main() {
   if (command === 'stop') return print(await stopRun(need('run'), { keep: o.keep }));
   if (command === 'check') return check();
   if (command === 'flows') {
+    if (positionals[1] === 'run' && !supervised()) {
+      process.exitCode = await superviseFlows([fileURLToPath(import.meta.url), ...process.argv.slice(2)]);
+      return;
+    }
     const { listFlows, runFlows, selectFlows } = await import('./lib/flows.mjs');
     if (positionals[1] === 'list') {
       const listed = selectFlows(await listFlows(), { feature: o.feature === undefined ? undefined : findFeature(readFeatures(), o.feature) });

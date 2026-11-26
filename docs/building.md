@@ -93,7 +93,7 @@ App 隨程式附帶 runtime 程式（Meilisearch、yt-dlp、Deno）、搜尋詞�
 | `npm run lint` | ESLint，規則見 `eslint.config.ts` 與 [程式規範](code-guidelines.md) |
 | `npm run typecheck` | 產品程式 typecheck；`build` 先跑它 |
 | `npm run typecheck:tests` | 測試（`tests/`）、lint 規則（`tooling/`）與 `eslint.config.ts` 的 typecheck；不在 `build` 裡，測試還沒跟上產品簽章時仍能 build 與啟動 |
-| `npm run verify` | lint、Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build；PR 前必跑，CI 執行同一個指令 |
+| `npm run verify` | lint、Vitest、測試 typecheck、產品程式 typecheck 與 Node／Web build，每個步驟有[時間上限](project-validation.md#自動檢查)；PR 前必跑，CI 執行同一個指令 |
 
 `npm run build` 的輸出在 `dist/`：`build:node` 先清空 `dist/node` 再以 `tsc` 編譯，Vite 也先清空 `dist/web`。`tsc` 不會刪除對不到 src 檔的輸出，先清空讓 `dist/` 只有這次 build 的檔案，打包收進的 `dist/node/**` 因此不含舊檔。
 

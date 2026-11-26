@@ -24,7 +24,7 @@
     "lint": "eslint --max-warnings 0 .",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "verify": "npm run lint && npm test && npm run typecheck:tests && npm run build",
+    "verify": "node scripts/verify.mjs",
     "download:runtime:win": "node scripts/runtime/prepare-runtime.mjs win",
     "package:win": "node scripts/package/package-app.mjs --target win32-x64",
     "release:upload": "node scripts/package/release-upload.mjs",
