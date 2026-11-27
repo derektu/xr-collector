@@ -59,7 +59,7 @@ describe('port slots', () => {
 
     for (const { slot } of DEV_POOL.slots) DEV_POOL.hold(slot, `/elsewhere/${slot}`, process.pid);
     const started = Date.now();
-    await expect(DEV_POOL.claim(worktree)).rejects.toThrow(/All 6 dev slots are busy/u);
+    await expect(DEV_POOL.claim(worktree)).rejects.toThrow(/a free dev slot \(all 6 are busy\)/u);
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

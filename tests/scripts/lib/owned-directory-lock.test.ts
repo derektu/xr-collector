@@ -25,7 +25,6 @@ function lockOptions(token: string, inspectOwner: (pid: number) => Promise<unkno
     ownerIdentity: async () => ({ pid: process.pid, uid, startedAt: 'current' }),
     inspectOwner,
     inspectUnsafeTree: async () => false,
-    waitForBusy: false,
     busyMessage: 'busy',
     randomToken: () => token,
   };
@@ -58,7 +57,6 @@ const contenderScript = `
       ownerIdentity: async () => ({ pid: process.pid, uid, startedAt: 'contender' }),
       inspectOwner: async (pid) => alive(pid) ? { pid, uid, startedAt: 'contender' } : null,
       inspectUnsafeTree: async () => false,
-      waitForBusy: false,
       busyMessage: 'busy',
     });
   } catch (error) { console.log(error.message); }
@@ -154,38 +152,59 @@ itOnPosix('quotes the POSIX delete command', async () => {
     .rejects.toThrow(`rm -r '${lock.replace(quotes, "it'\\''s-\u2018\u2019\u201A\u201B")}'`);
 });
 
-function pendingDeleteOptions(platform: string, failures: number, delays: number[]) {
-  let inspected = 0;
+function pendingDeleteOptions(platform: string, failures: number) {
+  const inspections = { count: 0 };
   return {
-    ...lockOptions('b2', async () => {
-      inspected += 1;
-      if (inspected <= failures) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
-      return null;
-    }),
-    platform,
-    delay: async (milliseconds: number) => { delays.push(milliseconds); },
+    inspections,
+    options: {
+      ...lockOptions('b2', async () => {
+        inspections.count += 1;
+        if (inspections.count <= failures) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        return null;
+      }),
+      platform,
+    },
   };
 }
 
-it('waits out a bounded number of Windows pending-delete EPERM failures', async () => {
+it('waits out Windows pending-delete EPERM failures for a bounded time, then lets the error stand', async () => {
   const root = await lockRoot('xr-owned-lock-pending-delete-');
-  const recovered: number[] = [];
-  await expect(withOwnedDirectoryLock(await staleLock(root, 'recovers'), async () => 'acquired',
-    pendingDeleteOptions('win32', 3, recovered))).rejects.toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND' });
-  expect(recovered).toEqual([10, 10, 10]);
+  const recovers = pendingDeleteOptions('win32', 3);
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'recovers'), async () => 'acquired', recovers.options))
+    .rejects.toMatchObject({ code: 'OWNED_LOCK_LEFT_BEHIND' });
+  expect(recovers.inspections.count).toBe(4);
 
-  const persistent: number[] = [];
-  await expect(withOwnedDirectoryLock(await staleLock(root, 'persistent'), async () => 'acquired',
-    pendingDeleteOptions('win32', Infinity, persistent))).rejects.toMatchObject({ code: 'EPERM' });
-  expect(persistent).toHaveLength(50);
+  const persistent = pendingDeleteOptions('win32', Infinity);
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'persistent'), async () => 'acquired', persistent.options))
+    .rejects.toMatchObject({ code: 'EPERM' });
+  expect(persistent.inspections.count).toBeGreaterThan(1);
 });
 
 itOnPosix('fails on EPERM at once outside Windows', async () => {
   const root = await lockRoot('xr-owned-lock-pending-delete-');
-  const delays: number[] = [];
-  await expect(withOwnedDirectoryLock(await staleLock(root, 'posix'), async () => 'acquired',
-    pendingDeleteOptions('darwin', 1, delays))).rejects.toMatchObject({ code: 'EPERM' });
-  expect(delays).toEqual([]);
+  const posix = pendingDeleteOptions('darwin', 1);
+  await expect(withOwnedDirectoryLock(await staleLock(root, 'posix'), async () => 'acquired', posix.options))
+    .rejects.toMatchObject({ code: 'EPERM' });
+  expect(posix.inspections.count).toBe(1);
+});
+
+it.each([
+  { case: 'reports busy at once without a busy wait', busyWaitMs: undefined, releasedAfter: Infinity, result: 'busy', waited: false },
+  { case: 'reports busy once the busy wait runs out', busyWaitMs: 300, releasedAfter: Infinity, result: 'busy', waited: true },
+  { case: 'takes the lock its holder releases during the busy wait', busyWaitMs: 60_000, releasedAfter: 2, result: 'acquired', waited: true },
+])('$case', async ({ busyWaitMs, releasedAfter, result, waited }) => {
+  const root = await lockRoot('xr-owned-lock-busy-');
+  const lock = await staleLock(root, 'lock');
+  let inspected = 0;
+  const holderRuns = async (pid: number) => {
+    inspected += 1;
+    if (inspected >= releasedAfter) await rm(lock, { recursive: true });
+    return { pid, uid, startedAt: 'dead' };
+  };
+  const outcome = await withOwnedDirectoryLock(lock, async () => 'acquired', { ...lockOptions('b2', holderRuns), busyWaitMs })
+    .catch((error: Error) => error.message);
+  expect(outcome).toBe(result);
+  expect(inspected > 1).toBe(waited);
 });
 
 it('records an unverified process tree and reports busy while it may still write', async () => {
@@ -199,7 +218,6 @@ it('records an unverified process tree and reports busy while it may still write
     ownerIdentity: async () => ({ pid: 41, uid, startedAt: 'owner' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => true,
-    waitForBusy: false,
     busyMessage: 'busy',
     randomToken: () => 'a1',
   })).rejects.toBeInstanceOf(UnsafeProcessTreeError);
@@ -209,7 +227,6 @@ it('records an unverified process tree and reports busy while it may still write
     ownerIdentity: async () => ({ pid: 42, uid, startedAt: 'next' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => true,
-    waitForBusy: false,
     busyMessage: 'unsafe tree is still active',
     randomToken: () => 'b2',
   })).rejects.toThrow(/unsafe tree is still active/u);
@@ -228,7 +245,6 @@ it('reports busy for a dead holder whose normally recorded child group is still 
     ownerIdentity: async () => ({ pid: 42, uid, startedAt: 'next' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async (recorded: unknown) => { expect(recorded).toEqual(processTree); return true; },
-    waitForBusy: false,
     busyMessage: 'recorded writer remains active',
     randomToken: () => 'b2',
   })).rejects.toThrow(/recorded writer remains active/u);
@@ -244,7 +260,6 @@ itOnPosix('fails closed on plain files and symlink locks without touching their 
     ownerIdentity: async () => ({ pid: process.pid, uid: process.getuid!(), startedAt: 'current' }),
     inspectOwner: async () => null,
     inspectUnsafeTree: async () => false,
-    waitForBusy: false,
     busyMessage: 'busy',
     randomToken: () => 'a1',
   };
@@ -272,7 +287,6 @@ itOnPosix('rejects and preserves its lock when normal child close cannot inspect
     ownerIdentity: async () => ({ pid: process.pid, uid, startedAt: 'current' }),
     inspectOwner: async () => ({ pid: process.pid, uid, startedAt: 'current' }),
     inspectUnsafeTree: async () => null,
-    waitForBusy: false,
     busyMessage: 'busy',
     randomToken: () => 'a1',
   })).rejects.toMatchObject({ name: 'UnsafeProcessTreeError', preserveOwnedResources: true });

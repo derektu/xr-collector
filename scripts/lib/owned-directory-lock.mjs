@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { sleep as delay } from './wait.mjs';
+import { waitFor } from './wait.mjs';
 
 // Mutual exclusion rests on one atomic step: creating the lock directory succeeds for exactly one
 // process while the directory exists, and that process holds the lock. The only code that removes a
@@ -14,17 +14,21 @@ import { sleep as delay } from './wait.mjs';
 export const OWNED_LOCK_LEFT_BEHIND = 'OWNED_LOCK_LEFT_BEHIND';
 
 const OWNER_FILE = /^owner-([0-9a-f]+)\.json$/u;
-// Windows reports EPERM for a lock directory whose deletion its holder has begun but not finished
-// while another handle still has it open. That state clears within milliseconds, so the attempt
-// repeats up to this many times before the error stands.
-const PENDING_DELETE_ATTEMPTS = 50;
+// External: Windows RemoveDirectory marks a directory for deletion on close; the directory is not
+// removed until the last handle to it is closed.
+// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-removedirectorya
+const PENDING_DELETE_WAIT_MS = 500;
+const PENDING_DELETE_INTERVAL_MS = 10;
+const BUSY_INTERVAL_MS = 100;
+
+class LockBusy extends Error {}
 
 /**
  * Runs `work` while holding the directory lock at `lockPath`. A lock held by a live process, or by
- * an ended one whose recorded child processes may still run, reports `options.busyMessage` (after
- * waiting, when `options.waitForBusy`). A lock whose holder and recorded children have all ended
- * fails with an error that names the holder, the lock path and the command that deletes it once
- * no `options.holderDescription` is running.
+ * an ended one whose recorded child processes may still run, reports `options.busyMessage` once it
+ * has stayed busy for `options.busyWaitMs` (default 0, which reports at once). A lock whose holder
+ * and recorded children have all ended fails with an error that names the holder, the lock path
+ * and the command that deletes it once no `options.holderDescription` is running.
  */
 export async function withOwnedDirectoryLock(lockPath, work, options) {
   const token = (options.randomToken ?? (() => randomBytes(16).toString('hex')))();
@@ -65,28 +69,25 @@ export async function withOwnedDirectoryLock(lockPath, work, options) {
 }
 
 async function acquire(lockPath, owner, options) {
-  let busyAttempts = 0;
-  let pendingDeleteAttempts = 0;
-  const waitOutPendingDelete = async (error) => {
-    if ((options.platform ?? process.platform) !== 'win32' || (error?.code ?? error?.cause?.code) !== 'EPERM'
-      || ++pendingDeleteAttempts > PENDING_DELETE_ATTEMPTS) throw error;
-    await (options.delay ?? delay)(10);
-  };
-  for (;;) {
-    try {
-      await mkdir(lockPath, { mode: 0o700 });
-    } catch (error) {
-      if (error.code !== 'EEXIST') { await waitOutPendingDelete(error); continue; }
-      let state;
-      try { state = await inspectExisting(lockPath, options); }
-      catch (inspectError) { await waitOutPendingDelete(inspectError); continue; }
-      if (state === 'retry') continue;
-      if (!options.waitForBusy || busyAttempts >= (options.maxBusyAttempts ?? 0)) throw new Error(options.busyMessage);
-      busyAttempts += 1;
-      await (options.delay ?? delay)(options.retryDelayMs ?? 100);
-      continue;
-    }
-    return recordOwner(lockPath, owner);
+  const platform = options.platform ?? process.platform;
+  const pendingDelete = (error) => platform === 'win32' && (error?.code ?? error?.cause?.code) === 'EPERM';
+  const create = () => waitFor(() => createLockDirectory(lockPath, options), `lock ${lockPath} to settle`, {
+    timeout: PENDING_DELETE_WAIT_MS, interval: PENDING_DELETE_INTERVAL_MS, retryOn: pendingDelete,
+  });
+  await waitFor(create, `lock ${lockPath}`, {
+    timeout: options.busyWaitMs ?? 0, interval: BUSY_INTERVAL_MS, retryOn: (error) => error instanceof LockBusy,
+  });
+  return recordOwner(lockPath, owner);
+}
+
+async function createLockDirectory(lockPath, options) {
+  try {
+    await mkdir(lockPath, { mode: 0o700 });
+    return true;
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (await inspectExisting(lockPath, options) === 'retry') return null;
+    throw new LockBusy(options.busyMessage);
   }
 }
 

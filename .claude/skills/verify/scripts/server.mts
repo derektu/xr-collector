@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sleep } from './lib/wait.mjs';
+import { simulateLatency } from './lib/simulated-latency.mjs';
 
 const checkout = path.resolve(process.env.XR_VERIFY_CHECKOUT!);
 const run = path.resolve(process.env.XR_VERIFY_RUN!);
@@ -275,7 +275,7 @@ async function syntheticSources() {
   const channels = {
     resolve: (inputUrl: string, options: { priority?: string; signal?: AbortSignal } = {}) =>
       youtubeGate.run(options.priority ?? 'interactive', async () => {
-        await sleep(400);
+        await simulateLatency(400);
         cutOff();
         const url = new URL(inputUrl.startsWith('@') ? `https://www.youtube.com/${inputUrl}` : inputUrl);
         const parts = url.pathname.split('/').filter(Boolean);
@@ -286,7 +286,7 @@ async function syntheticSources() {
       }, options.signal),
     listVideos: (channel: { id: string }, listing: { offset: number; limit: number }, options: { priority?: string; signal?: AbortSignal } = {}) =>
       youtubeGate.run(options.priority ?? 'background', async () => {
-        await sleep(200);
+        await simulateLatency(200);
         cutOff();
         const current = youtube();
         if (current.failListing === channel.id) throw new CollectorError('network_error', '無法連線到 YouTube，請稍後再試。（合成錯誤）');
@@ -314,7 +314,7 @@ async function syntheticSources() {
         if (options.publishedNotBefore && !publishedSince(found.publishedAt, options.publishedNotBefore)) {
           throw new CollectorError('out_of_range', '這支影片的發布時間早於收集範圍。');
         }
-        await sleep(Number(current.youtube?.captureDelayMs ?? 600));
+        await simulateLatency(Number(current.youtube?.captureDelayMs ?? 600));
         // The network can drop while a capture is under way.
         cutOff();
         return {

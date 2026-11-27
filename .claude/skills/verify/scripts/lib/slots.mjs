@@ -10,7 +10,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { alive } from './platform.mjs';
-import { sleep } from './wait.mjs';
+import { waitFor } from './wait.mjs';
 
 /** Whether nothing listens on `port` at 127.0.0.1. */
 export function portFree(port) {
@@ -97,18 +97,16 @@ export function slotPool({ name, dir, slots, waitMs, busyHint }) {
    */
   async function claim(owner, { prefer } = {}) {
     const order = [...slots].sort((a, b) => (b.slot === prefer) - (a.slot === prefer));
-    const deadline = Date.now() + waitMs;
-    for (;;) {
+    const claimFree = async () => {
       for (const ports of order) {
         if (!tryLock(ports.slot, owner)) continue;
         if ((await Promise.all(portsOf(ports).map(portFree))).every(Boolean)) return ports;
         release(ports.slot, owner);
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`All ${slots.length} ${name} slots are busy. Each lock in ${dir} names its PID and owner; ${busyHint}`);
-      }
-      await sleep(1_000);
-    }
+      return null;
+    };
+    const freeSlot = `a free ${name} slot (all ${slots.length} are busy). Each lock in ${dir} names its PID and owner; ${busyHint}`;
+    return waitFor(claimFree, freeSlot, { timeout: waitMs, interval: 1_000, fatal: () => true });
   }
 
   return { name, dir, slots, tryLock, hold, holder, release, claim };
