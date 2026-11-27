@@ -38,7 +38,6 @@ function lockOptions(token: string, inspectOwner: (pid: number) => Promise<unkno
     ownerIdentity: async () => ({ pid: process.pid, uid, startedAt: 'current' }),
     inspectOwner,
     inspectUnsafeTree: async () => false,
-    waitForBusy: false,
     busyMessage: 'busy',
     randomToken: () => token,
   };

@@ -1,8 +1,4 @@
-/**
- * Resolves after `ms`. Only a retry loop that counts its attempts and lets its caller replace the
- * pause uses it; everything else waits for a state through `waitFor`.
- */
-export const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /** The error `waitFor` throws when the awaited state does not come in time. */
 export class WaitTimeout extends Error {}

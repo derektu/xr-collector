@@ -57,8 +57,8 @@ describe('timer rules', () => {
     expect(await lintFixture('timer-type.ts', 'src/domain/jobs/poll.ts')).toEqual([]);
   });
 
-  it('leave the time module, the UI infra folder, the test helpers and the two wait helpers alone', async () => {
-    for (const lintedAs of ['src/shared/lib/time.ts', 'src/transport/web/infra/use-timeout.ts', 'tests/support/wait.ts', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs', 'vite.config.ts']) {
+  it('leave the time module, the UI infra folder, the test helpers, the two wait helpers and the verify skill\'s simulated latency alone', async () => {
+    for (const lintedAs of ['src/shared/lib/time.ts', 'src/transport/web/infra/use-timeout.ts', 'tests/support/wait.ts', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/simulated-latency.mjs', 'vite.config.ts']) {
       expect(await lintFixture('timers.ts', lintedAs), lintedAs).toEqual([]);
       expect(await lintFixture('deadlines.ts', lintedAs), lintedAs).toEqual([]);
     }

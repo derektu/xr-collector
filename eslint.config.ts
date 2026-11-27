@@ -8,7 +8,7 @@ const ANY_MESSAGE =
   '`any` turns type checking off. Use `unknown` and narrow it with a type guard, or write the actual type. See docs/code-guidelines.md, section 型別.';
 
 const TIMER_FILES = ['src/**', 'tests/**', 'scripts/**', '.claude/skills/verify/**'];
-const TIMER_EXCEPTIONS = ['src/shared/lib/time.ts', 'src/transport/web/infra/**', 'tests/support/**', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs'];
+const TIMER_EXCEPTIONS = ['src/shared/lib/time.ts', 'src/transport/web/infra/**', 'tests/support/**', 'scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/wait.mjs', '.claude/skills/verify/scripts/lib/simulated-latency.mjs'];
 const UI_INFRA_FILES = ['src/transport/web/infra/**'];
 const LOG_MODULE_FILES = ['src/domain/log/**'];
 const CONSOLE_MESSAGE =

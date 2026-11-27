@@ -36,7 +36,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 測試的等待方式見 [專案驗證設定](project-validation.md#自動檢查) | lint 擋下睡眠；`tests/tooling/test-waits.test.ts` 擋下直接輪詢與個別上限 |
 | `scripts/` 經 `scripts/lib/wait.mjs` 的 `waitFor`、`deadline`、`raceWithTimeout` 等待；verify skill 的腳本經 `.claude/skills/verify/scripts/lib/wait.mjs`，證明一段時間內某件事沒有發生的觀察窗用其中具名的 `observeFor(ms)`。兩份 `wait.mjs` 各自獨立，不互相 import | lint |
 
-`eslint.config.ts` 為下列路徑保留直接計時的例外：`src/shared/lib/time.ts`、`src/transport/web/infra/`、`tests/support/`（測試替身模擬耗時）、`scripts/lib/wait.mjs` 與 verify 的 `scripts/lib/wait.mjs`。
+`eslint.config.ts` 為下列路徑保留直接計時的例外：`src/shared/lib/time.ts`、`src/transport/web/infra/`、`tests/support/`（測試替身模擬耗時）、`scripts/lib/wait.mjs`、verify 的 `scripts/lib/wait.mjs`，以及 verify 的 `scripts/lib/simulated-latency.mjs`（合成服務模擬回應耗時，跟測試替身同理）。兩份 `wait.mjs` 都不對外提供 sleep。
 
 用延遲閃過的時序問題是 bug：查出根因再修，不用延遲、重跑或拉長上限讓它消失。共享的狀態只有一個擁有者；時序問題要修成能保證正確，不靠計數或等待。
 
