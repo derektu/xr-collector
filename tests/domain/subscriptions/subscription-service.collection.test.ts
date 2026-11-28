@@ -309,13 +309,13 @@ describe('settings when discovery starts (S-T7, A3)', () => {
     const w = await world();
     const id = w.source.addChannel('chosen');
     w.source.publish(id, 'c', w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
-    const added = await w.jobs.whenSettled((await w.channels.add('@chosen', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 })).job.id);
+    const added = await w.jobs.whenSettled((await w.channels.add('@chosen', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'published' })).job.id);
     const first = await w.jobs.whenSettled(added.result!.followUpJobId!);
     expect(first.scope).toEqual({ trigger: 'subscribe' });
     expect(first.progress).toMatchObject({ total: 5 });
     expect(w.jobs.get(first.items![0]!.jobId!).publishedNotBefore).toBe('2026-10-01T04:00:00.000Z');
     expect((await w.channelStore.list())[0]).toMatchObject({
-      settings: { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 },
+      settings: { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'published' },
       lastDispatchedAt: '2026-10-15T04:00:00.000Z', nextCheckAt: '2026-10-15T05:00:00.000Z',
     });
     await expect(w.channels.add('@chosen', { intervalMinutes: 7 })).rejects.toMatchObject({ code: 'invalid_request' });

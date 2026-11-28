@@ -9,7 +9,8 @@ export const NO_PUBLISHER_ID = 'none';
 export interface DocumentVault {
   readonly sources: SourceDeclarations;
   getByKey(key: DocumentKey): Promise<SavedDocument | null>;
-  add(document: CapturedDocument, options?: { collectedAt?: Date }): Promise<SavedDocument>;
+  /** Saves a new document with `status`, `published` when omitted; an existing document is returned unchanged. */
+  add(document: CapturedDocument, options?: { status?: DocumentStatus; collectedAt?: Date }): Promise<SavedDocument>;
   list(): Promise<DocumentMetadata[]>;
   read(id: string): Promise<SavedDocument | null>;
   remove(id: string): Promise<void>;

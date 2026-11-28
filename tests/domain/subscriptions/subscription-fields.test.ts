@@ -13,7 +13,7 @@ const checkFailures = { count: 2, since: '2026-10-17T00:00:00.000Z', error: { co
 
 const record: Required<SubscriptionRecord> = {
   id: 'UCa', title: '頻道 A', url: 'https://www.youtube.com/channel/UCa', enabled: true, addedAt: '2026-09-01T00:00:00.000Z',
-  updatedAt: '2026-09-02T00:00:00.000Z', settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 },
+  updatedAt: '2026-09-02T00:00:00.000Z', settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' },
   nextCheckAt: '2026-10-20T00:00:00.000Z', lastDispatchedAt: '2026-10-19T00:00:00.000Z', lastCheckedAt: '2026-10-19T00:10:00.000Z',
   checkFailures, autoPausedAt: '2026-10-18T00:00:00.000Z',
   outOfRange: [{ videoId: 'aaaaaaaaaa1', before: '2026-09-01T00:00:00.000Z' }],
@@ -22,7 +22,7 @@ const record: Required<SubscriptionRecord> = {
 
 const other: Required<SubscriptionRecord> = {
   id: 'UCa', title: '頻道 A（改名）', url: 'https://www.youtube.com/channel/UCa/videos', enabled: false, addedAt: '2026-09-05T00:00:00.000Z',
-  updatedAt: '2026-10-21T00:00:00.000Z', settings: { intervalMinutes: 360, backfillDays: 7, backfillMaxItems: 5 },
+  updatedAt: '2026-10-21T00:00:00.000Z', settings: { intervalMinutes: 360, backfillDays: 7, backfillMaxItems: 5, documentStatus: 'published' },
   nextCheckAt: '2026-10-25T00:00:00.000Z', lastDispatchedAt: '2026-10-24T00:00:00.000Z', lastCheckedAt: '2026-10-24T00:10:00.000Z',
   checkFailures: { ...checkFailures, count: 4 }, autoPausedAt: '2026-10-24T00:20:00.000Z',
   outOfRange: [{ videoId: 'bbbbbbbbbb1', before: '2026-10-01T00:00:00.000Z' }],

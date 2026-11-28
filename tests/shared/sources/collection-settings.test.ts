@@ -6,12 +6,14 @@ import {
   rangeSettings,
   settingFieldError,
   settingsErrors,
+  withCommonSettings,
 } from '../../../src/shared/sources/collection-settings.js';
 import { publishedSince } from '../../../src/shared/documents/published.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 
 const { fields, subscription } = rangeSettings({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 }, { noun: '影片', measureWord: '支' });
 const field = (key: string) => fields.find((candidate) => candidate.key === key)!;
+const declared = { targetNoun: '頻道', ...subscription };
 
 function rejection(run: () => unknown): { code: string; message: string } {
   try {
@@ -32,7 +34,7 @@ describe('range settings fields', () => {
     for (const value of [1, 100]) expect(settingFieldError(field('backfillMaxItems'), value)).toBeNull();
     for (const value of [0, 101, 10.5, 'abc']) expect(settingFieldError(field('backfillMaxItems'), value)).toBe('數量上限必須是 1–100 的整數。');
     expect(settingFieldError(field('intervalMinutes'), 45)).toBe('檢查頻率必須是 15、30、60、180、360、720、1440 之一。');
-    expect(settingsErrors(fields, { intervalMinutes: 30, backfillDays: 0, backfillMaxItems: 'x' })).toEqual([
+    expect(settingsErrors(fields, { intervalMinutes: 30, backfillDays: 0, backfillMaxItems: 'x', documentStatus: 'published' })).toEqual([
       { key: 'backfillDays', message: '時間範圍必須是 1–60 的整數。' },
       { key: 'backfillMaxItems', message: '數量上限必須是 1–100 的整數。' },
     ]);
@@ -49,10 +51,39 @@ describe('range settings fields', () => {
   });
 
   it('treats stored settings as valid only when every field holds a valid value', () => {
-    expect(isValidSettings(fields, { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 100 })).toBe(true);
+    expect(isValidSettings(fields, { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 100, documentStatus: 'published' })).toBe(true);
     expect(isValidSettings(fields, { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 })).toBe(false);
-    expect(isValidSettings(fields, { intervalMinutes: 30, backfillDays: 61, backfillMaxItems: 10 })).toBe(false);
+    expect(isValidSettings(fields, { intervalMinutes: 30, backfillDays: 61, backfillMaxItems: 10, documentStatus: 'published' })).toBe(false);
     expect(isValidSettings(fields, null)).toBe(false);
+  });
+
+  it('gives every subscribing type a documentStatus field, starting as published, without the type declaring it', () => {
+    const common = withCommonSettings({ settings: fields, subscription: declared });
+    expect(fields.map((candidate) => candidate.key)).not.toContain('documentStatus');
+    expect(common.settings.map((candidate) => candidate.key)).toEqual([...fields.map((candidate) => candidate.key), 'documentStatus']);
+    expect(common.subscription?.defaults).toEqual({ ...subscription.defaults, documentStatus: 'published' });
+    expect(withCommonSettings({ settings: [] })).toEqual({ settings: [] });
+  });
+
+  it.each([
+    ['published', true],
+    ['draft', true],
+    ['final', false],
+    ['Draft', false],
+    [undefined, false],
+  ])('accepts only published or draft as documentStatus, so a subscription saves documents in a status the Vault knows: %s → %s', (value, valid) => {
+    const common = withCommonSettings({ settings: fields, subscription: declared }).subscription!;
+    expect(common.isValidSettings({ ...subscription.defaults, documentStatus: value })).toBe(valid);
+    if (valid) expect(common.parseSettingsPatch({ documentStatus: value })).toEqual({ documentStatus: value });
+    else expect(rejection(() => common.parseSettingsPatch({ documentStatus: value }))).toEqual({ code: 'invalid_request', message: '預設狀態必須是 published、draft 之一。' });
+  });
+
+  it('reads the type\'s own fields of a patch by the type, beside documentStatus', () => {
+    const common = withCommonSettings({ settings: fields, subscription: declared }).subscription!;
+    expect(common.parseSettingsPatch({ backfillDays: 14, documentStatus: 'draft' })).toEqual({ backfillDays: 14, documentStatus: 'draft' });
+    expect(rejection(() => common.parseSettingsPatch({ backfillDays: 61, documentStatus: 'draft' })).code).toBe('invalid_request');
+    expect(rejection(() => common.parseSettingsPatch({})).code).toBe('invalid_request');
+    expect(common.isValidSettings({ ...subscription.defaults, documentStatus: 'draft', backfillDays: 61 })).toBe(false);
   });
 
   it('reaches back the given number of whole days from the check and describes the range', () => {

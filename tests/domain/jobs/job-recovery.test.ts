@@ -7,7 +7,7 @@ import { Collector } from '../../../src/domain/vault/collector.js';
 import type { DocumentVault } from '../../../src/shared/documents/document-vault.js';
 import { NO_DELETIONS, unusedVaultWrite } from '../../support/document-vault-stubs.js';
 import { CollectorError } from '../../../src/shared/lib/collector-error.js';
-import type { DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
+import type { DocumentStatus, DocumentSummary, SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import { JobManager, type JobLimits, type RetryPolicy } from '../../../src/domain/jobs/job-manager.js';
 import { resumeInterrupted } from '../../../src/domain/jobs/job-recovery.js';
@@ -51,13 +51,13 @@ class MemoryVault implements DocumentVault {
   readonly documents = new Map<string, SavedDocument>();
   saves = 0;
   async getByKey({ sourceId }: DocumentKey) { return this.documents.get(sourceId) ?? null; }
-  async add(item: CapturedDocument) {
+  async add(item: CapturedDocument, options: { status?: DocumentStatus } = {}) {
     const capture = transcriptOf(item);
     this.saves += 1;
     const document: SavedDocument = {
       id: `youtube:${capture.videoId}`, type: 'Transcript', title: capture.title, sourceUrl: capture.sourceUrl,
       sourceType: 'youtube', sourceId: capture.videoId, publisher: { id: capture.channelId, name: capture.channelTitle },
-      publishedAt: null, collectedAt: T0.toISOString(), status: 'published',
+      publishedAt: null, collectedAt: T0.toISOString(), status: options.status ?? 'published',
       youtube: { languageCode: capture.languageCode, languageName: null, subtitleKind: 'manual' }, bodyMarkdown: capture.bodyMarkdown,
     };
     this.documents.set(capture.videoId, document);
@@ -223,7 +223,7 @@ async function world(options: { limits?: Partial<JobLimits>; retry?: Partial<Ret
 
 function subscribe(subs: SubscriptionRecorder, id: string): RecordedSubscription {
   return subs.add('youtube', { id, title: `頻道 ${id}`, url: `https://www.youtube.com/channel/${id}/videos` }, {
-    settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
+    settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50, documentStatus: 'published' },
   });
 }
 
@@ -261,6 +261,17 @@ describe('video jobs across restarts (R-T2)', () => {
       .toMatchObject({ severity: 'info', stopReason: 'crash', message: '服務異常結束後重新啟動，接續收集工作。' });
     expect(events.find((event) => event.jobId === first.job.id && event.eventType === 'job.interrupted'))
       .toMatchObject({ severity: 'warning' });
+  });
+
+  it('saves a video resumed after a restart with the status it was submitted with (#311)', async () => {
+    const w = await world();
+    const g1 = await w.boot((source) => { source.holdAllCaptures = true; });
+    const accepted = await g1.manager.submitItem('youtube', watchUrl(videoId(4)), 'draft');
+    await g1.source.holds.started(videoId(4));
+
+    const g2 = await w.crash(g1);
+    expect(await g2.manager.whenSettled(accepted.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
+    expect(w.vault.documents.get(videoId(4))?.status).toBe('draft');
   });
 
   it('only updates the index of a document saved before the restart', async () => {
@@ -301,7 +312,7 @@ describe('subscription requests across restarts start over (R-T3)', () => {
 
   it('subscribes with the settings chosen when the job was accepted', async () => {
     const w = await world();
-    const chosen = { intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5 };
+    const chosen = { intervalMinutes: 180, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'published' as const };
     const g1 = await w.boot((source) => { source.holdResolve = true; });
     const adding = await g1.manager.submitSubscriptionAdd('youtube', 'https://www.youtube.com/@chosen', chosen);
     expect(adding.job.scope).toEqual({ trigger: 'subscribe' });

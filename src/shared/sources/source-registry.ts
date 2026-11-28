@@ -1,14 +1,21 @@
 import type { SourceDefinition, SourcePluginDeclaration } from './source-contract.js';
 import type { SubscriptionExchange } from '../subscriptions/subscription-exchange.js';
 import type { JobRole } from '../jobs/job-types.js';
+import type { SubscriptionSettings } from '../subscriptions/subscription-types.js';
+import { withCommonSettings } from './collection-settings.js';
 
+/**
+ * The source types as the core uses them: each subscribing type's settings carry the settings every
+ * type has (`documentStatus`) besides the ones its plugin declares.
+ */
 export class SourceDeclarations {
-  readonly list: readonly SourcePluginDeclaration[];
-  private readonly byId: ReadonlyMap<string, SourcePluginDeclaration>;
+  readonly list: readonly SourcePluginDeclaration<SubscriptionSettings>[];
+  private readonly byId: ReadonlyMap<string, SourcePluginDeclaration<SubscriptionSettings>>;
 
-  constructor(list: readonly SourcePluginDeclaration[]) {
-    if (list.length === 0) throw new Error('No source types are given');
-    const byId = new Map<string, SourcePluginDeclaration>();
+  constructor(declared: readonly SourcePluginDeclaration[]) {
+    if (declared.length === 0) throw new Error('No source types are given');
+    const list = declared.map(withCommonSettings);
+    const byId = new Map<string, SourcePluginDeclaration<SubscriptionSettings>>();
     for (const declaration of list) {
       if (byId.has(declaration.id)) throw new Error(`Source type ${declaration.id} is given twice`);
       byId.set(declaration.id, declaration);
@@ -18,7 +25,7 @@ export class SourceDeclarations {
     if (new.target === SourceDeclarations) Object.freeze(this);
   }
 
-  get(type: string): SourcePluginDeclaration | undefined {
+  get(type: string): SourcePluginDeclaration<SubscriptionSettings> | undefined {
     return this.byId.get(type);
   }
 
@@ -41,19 +48,19 @@ export interface ScheduleFileInfo {
 }
 
 export class SourceRegistry extends SourceDeclarations {
-  readonly definitions: readonly SourceDefinition[];
-  readonly subscriptionDefinitions: readonly SourceDefinition[];
+  readonly definitions: readonly SourceDefinition<SubscriptionSettings>[];
+  readonly subscriptionDefinitions: readonly SourceDefinition<SubscriptionSettings>[];
   readonly schedule: Readonly<ScheduleFileInfo>;
   readonly exchange: SubscriptionExchange;
-  private readonly definitionById: ReadonlyMap<string, SourceDefinition>;
+  private readonly definitionById: ReadonlyMap<string, SourceDefinition<SubscriptionSettings>>;
 
   constructor(
-    definitions: readonly SourceDefinition[],
+    declared: readonly SourceDefinition[],
     schedule: ScheduleFileInfo,
     exchange: (registry: SourceRegistry) => SubscriptionExchange,
   ) {
-    super(definitions);
-    this.definitions = Object.freeze([...definitions]);
+    super(declared);
+    this.definitions = Object.freeze(declared.map(withCommonSettings));
     this.subscriptionDefinitions = Object.freeze(this.definitions.filter((definition) => definition.subscription && definition.storage));
     this.schedule = Object.freeze({ ...schedule });
     this.definitionById = new Map(this.definitions.map((definition) => [definition.id, definition]));
@@ -61,11 +68,11 @@ export class SourceRegistry extends SourceDeclarations {
     Object.freeze(this);
   }
 
-  definition(type: string): SourceDefinition | undefined {
+  definition(type: string): SourceDefinition<SubscriptionSettings> | undefined {
     return this.definitionById.get(type);
   }
 
-  require(type: string): SourceDefinition {
+  require(type: string): SourceDefinition<SubscriptionSettings> {
     const definition = this.definitionById.get(type);
     if (!definition) throw new Error(`Source type ${type} is not registered`);
     return definition;

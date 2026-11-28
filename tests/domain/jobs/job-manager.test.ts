@@ -121,7 +121,7 @@ function setup(options: { limits?: Partial<JobLimits>; records?: JobRecords; sto
   subs.attach(manager);
   const collect = (target: SubscriptionTarget) => {
     const subscribed = subs.get('youtube', target.id)
-      ?? subs.add('youtube', target, { settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 } });
+      ?? subs.add('youtube', target, { settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50, documentStatus: 'published' } });
     return manager.submitCheck('youtube', subscribed, 'manual');
   };
   return { manager, vault, subs, source, search, store, records, collect };
@@ -265,7 +265,7 @@ describe('JobManager', () => {
     expect(job).toMatchObject({ state: 'completed', result: { outcome: 'created' } });
     const [subscribed] = subs.of('subscribed');
     expect(subs.of('subscribed')).toEqual([{ kind: 'subscribed', type: 'youtube', id: 'UCsamplexxxxxxxxxxxxxxxx', outcome: 'created' }]);
-    expect(subs.get('youtube', subscribed!.id)?.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 });
+    expect(subs.get('youtube', subscribed!.id)?.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' });
     const followUp = await manager.whenSettled(job.result!.followUpJobId!);
     expect(followUp).toMatchObject({ kind: 'youtube.channel', source: { id: subscribed!.id }, result: { outcome: 'empty' } });
     expect(subs.of('checked')).toEqual([expect.objectContaining({ id: subscribed!.id, candidates: [], collecting: [] })]);

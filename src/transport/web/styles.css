@@ -269,6 +269,7 @@ dialog::backdrop { background:var(--overlay); }
 .policy-sentence .setting-number { margin-left:6px; }
 .policy-row select,.policy-row input { padding:6px 10px; border:1px solid var(--control-border); border-radius:6px; color:var(--primary); background:var(--control); font:inherit; font-weight:600; }
 .policy-row input { width:5.5em; text-align:right; }
+.policy-row .segmented { margin-top:0; }
 .policy-row input[aria-invalid="true"] { border-color:var(--error); }
 .setting-number { display:inline-flex; align-items:center; gap:6px; }
 .collection-settings .setting-error { margin:8px 0 0; color:var(--error-fg); font-size:12px; line-height:1.5; }

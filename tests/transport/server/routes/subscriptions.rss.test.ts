@@ -56,7 +56,7 @@ describe('RSS on the shared routes (R11-T9)', () => {
       actions: [{ id: 'subscribe', label: '訂閱網站', request: { method: 'POST', path: '/api/subscriptions', body: { url: feeds.url('/feed.xml') } } }],
     });
     expect((await w.send('POST', '/api/subscription-previews', { url: feeds.url('/') })).body.preview)
-      .toMatchObject({ type: 'rss', subscription: null, settings: { intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30 } });
+      .toMatchObject({ type: 'rss', subscription: null, settings: { intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30, documentStatus: 'published' } });
     expect(await w.send('POST', '/api/items', { url: feeds.url('/1') })).toMatchObject({ status: 400, body: { error: { code: 'invalid_url' } } });
 
     const added = await w.settled((await w.send('POST', '/api/subscriptions', { url: feeds.url('/'), settings: { backfillMaxItems: 5 } })).body.job.id);

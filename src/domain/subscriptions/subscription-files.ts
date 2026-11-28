@@ -18,12 +18,22 @@ export function subscriptionsFromJson(spec: SubscriptionFileSpec, value: unknown
   if (value === undefined) return [];
   const { storage, subscription } = storageOf(spec);
   const file = value as Record<string, unknown> | null;
-  const list = file && typeof file === 'object' ? file[storage.listKey] : undefined;
-  if (!file || typeof file !== 'object' || file.version !== storage.version || !Array.isArray(list)
+  const stored = file && typeof file === 'object' ? file[storage.listKey] : undefined;
+  const list = Array.isArray(stored) ? stored.map(withDocumentStatus) : null;
+  if (!file || typeof file !== 'object' || file.version !== storage.version || !list
     || !list.every((entry) => isRecord(entry, storage.outOfRangeKeyField, subscription.isValidSettings))) {
     throw new InvalidSubscriptionFile(`Invalid ${storage.description} settings`);
   }
   return list as SubscriptionRecord[];
+}
+
+function withDocumentStatus(entry: unknown): unknown {
+  if (!isObject(entry) || !isObject(entry.settings) || 'documentStatus' in entry.settings) return entry;
+  return { ...entry, settings: { ...entry.settings, documentStatus: 'published' } };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function removalsFromJson(spec: SubscriptionFileSpec, value: unknown): SubscriptionRemoval[] {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DocumentCollector } from '../../shared/documents/document-collector.js';
+import type { DocumentStatus } from '../../shared/documents/document-types.js';
 import type { CollectionPause } from '../../shared/jobs/collection-pause.js';
 import type { Connectivity } from './connectivity.js';
 import { isRetryable, jobEventSubject, jobKey, roleOf, roleView, subscriptionOf, workKey } from '../../shared/jobs/job-role.js';
@@ -280,13 +281,14 @@ export class JobManager {
     return job.vaultPath === this.options.vaultPath && job.vaultId === this.vaultId;
   }
 
-  async submit(type: string, url: string): Promise<JobSubmission> {
+  /** `documentStatus` applies to a single item's address; a subscription address starts with the source type's defaults. */
+  async submit(type: string, url: string, documentStatus: DocumentStatus = 'published'): Promise<JobSubmission> {
     const input = this.requirePlugin(type).classify(url);
-    return input.kind === 'item' ? this.submitItem(type, input.ref.url) : this.submitSubscriptionAdd(type, input.url);
+    return input.kind === 'item' ? this.submitItem(type, input.ref.url, documentStatus) : this.submitSubscriptionAdd(type, input.url);
   }
 
-  async submitItem(type: string, url: string): Promise<JobSubmission> {
-    const submission = this.enqueueItem(type, this.requirePlugin(type).parseItem(url), null);
+  async submitItem(type: string, url: string, documentStatus: DocumentStatus = 'published'): Promise<JobSubmission> {
+    const submission = this.enqueueItem(type, this.requirePlugin(type).parseItem(url), { parentId: null, documentStatus });
     await this.flushThenPump();
     return submission;
   }
@@ -299,10 +301,11 @@ export class JobManager {
     const plugin = this.requirePlugin(type);
     const input = plugin.classify(url);
     const kind = this.options.sources.jobKind(type, 'add');
-    if (input.kind !== 'subscription' || !kind || !plugin.subscription) {
+    const declared = this.options.sources.get(type)?.subscription;
+    if (input.kind !== 'subscription' || !kind || !declared) {
       throw new CollectorError('invalid_subscription', plugin.prompts.subscriptionInputHint);
     }
-    const accepted = settings ?? plugin.subscription.defaults;
+    const accepted = settings ?? declared.defaults;
     const target = this.options.recentTarget?.(type, input.url);
     const submission = this.enqueue(kind, type, workKey(type, 'add', input.url), {
       id: null, url: input.url, title: target?.title ?? null,
@@ -437,7 +440,9 @@ export class JobManager {
     if (!isRetryable(this.options.sources, job)) throw new CollectorError('job_not_retryable', `只有失敗或有${noun}失敗的工作可以重試。`);
     let submission: JobSubmission;
     if (role === 'item') {
-      submission = this.enqueueItem(type, itemRefOf(job, plugin), null, null, { retryOf: job.id }, job.source.title);
+      submission = this.enqueueItem(type, itemRefOf(job, plugin), {
+        parentId: null, documentStatus: job.documentStatus ?? 'published', retryOf: job.id, title: job.source.title,
+      });
     } else if (role === 'add') {
       const settings = this.acceptedSettings(job);
       submission = this.enqueue(job.kind, type, jobKey(this.options.sources, job), { id: null, url: job.source.url, title: null }, null, {
@@ -648,12 +653,13 @@ export class JobManager {
   }
 
   private enqueueItem(
-    type: string, ref: Pick<ItemRef, 'key' | 'url'>, parentId: string | null, publishedNotBefore: string | null = null,
-    extra: Pick<CollectionJob, 'retryOf'> = {}, title: string | null = null,
+    type: string, ref: Pick<ItemRef, 'key' | 'url'>,
+    { parentId, title = null, ...extra }: { parentId: string | null; documentStatus: DocumentStatus; title?: string | null }
+      & Pick<CollectionJob, 'publishedNotBefore' | 'retryOf'>,
   ): JobSubmission {
     return this.enqueue(this.options.sources.jobKind(type, 'item')!, type, workKey(type, 'item', ref.key), {
       id: ref.key, url: ref.url, title,
-    }, parentId, { ...(publishedNotBefore ? { publishedNotBefore } : {}), ...extra });
+    }, parentId, extra);
   }
 
   private enqueueCheck(type: string, subscription: SubscriptionTarget, trigger: ChannelJobTrigger): JobSubmission {
@@ -670,7 +676,7 @@ export class JobManager {
     key: string,
     source: Omit<CollectionJob['source'], 'type'>,
     parentId: string | null,
-    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore' | 'checkpoint' | 'retryOf'> = {},
+    extra: Pick<CollectionJob, 'scope' | 'publishedNotBefore' | 'documentStatus' | 'checkpoint' | 'retryOf'> = {},
   ): JobSubmission {
     if (this.closed) throw new CollectorError('vault_busy', '服務正在停止，無法接受新的收集工作。');
     const activeId = this.activeByKey.get(key);
@@ -832,7 +838,9 @@ export class JobManager {
         }
         this.update(job, { phase: 'save', source: { ...job.source, title: captured.title, publisher: captured.publisher.name } });
         await this.options.store.flush();
-        const saved = await documents.save({ sourceType: plugin.id, ...captured }, { explicitAt: explicitRequestTime(this.options.sources, job) });
+        const saved = await documents.save({ sourceType: plugin.id, ...captured }, {
+          explicitAt: explicitRequestTime(this.options.sources, job), status: job.documentStatus ?? 'published',
+        });
         document = saved.document;
         outcome = 'created';
         this.update(job, { checkpoint: { ...job.checkpoint, savedDocumentId: document.id } });
@@ -941,7 +949,7 @@ export class JobManager {
   }
 
   private acceptedSettings(job: CollectionJob): SubscriptionSettings {
-    return job.checkpoint?.settings ?? { ...this.requirePlugin(job.source.type).subscription!.defaults };
+    return job.checkpoint?.settings ?? { ...this.options.sources.get(job.source.type)!.subscription!.defaults };
   }
 
   private async discover(job: CollectionJob, signal: AbortSignal): Promise<void> {
@@ -974,7 +982,9 @@ export class JobManager {
         sourceId: found.key, title, url: found.url, jobId: null, state: 'queued', outcome: null, error: null,
       };
       try {
-        const submission = this.enqueueItem(type, found, job.id, discovery.publishedNotBefore, {}, title || null);
+        const submission = this.enqueueItem(type, found, {
+          parentId: job.id, documentStatus: plan.documentStatus, publishedNotBefore: discovery.publishedNotBefore, title: title || null,
+        });
         item.jobId = submission.job.id;
         item.state = submission.job.state;
         if (submission.job.wait) item.wait = submission.job.wait;

@@ -1,7 +1,7 @@
 // Source plugins that hold the core to its contract without YouTube: types `fake` and `fake2`, each
 // in its own pacing group. An item is `https://<type>.example/item/<key>`, a feed `https://<type>.example/feed/<id>`.
 import { CollectorError } from '../../src/shared/lib/collector-error.js';
-import type { SubscriptionSettings } from '../../src/shared/subscriptions/subscription-types.js';
+import type { SourceSettings } from '../../src/shared/subscriptions/subscription-types.js';
 import type { PacingGate } from '../../src/domain/pacing/pacing-gate.js';
 import type {
   CapturedItem,
@@ -17,7 +17,7 @@ import { HeldCaptures } from './held-captures.js';
 
 const DAY = 24 * 60 * 60_000;
 
-export interface FakeSettings extends SubscriptionSettings {
+export interface FakeSettings extends SourceSettings {
   intervalMinutes: number;
   windowDays: number;
   maxItems: number;

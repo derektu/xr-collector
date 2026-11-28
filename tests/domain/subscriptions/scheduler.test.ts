@@ -16,6 +16,7 @@ import type { NewJobEvent } from '../../../src/shared/activity/activity-types.js
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
 import { MemoryDocuments, SyntheticYouTube } from '../../support/synthetic-youtube.js';
 import type { CollectionPolicy } from '../../../src/domain/sources/youtube/settings.js';
+import type { SubscriptionSettings } from '../../../src/shared/subscriptions/subscription-types.js';
 import { youtubePlugin } from '../../../src/domain/sources/youtube/server.js';
 import { eventually } from '../../support/wait.js';
 import { VaultFileWriter } from '../../../src/domain/vault/vault-files.js';
@@ -83,7 +84,7 @@ async function world(schedule: StoredSchedule = { enabled: true }, pause?: Colle
       await eventually(() => expect(jobs.isBusy()).toBe(false));
       (await jobs.hold())();
     },
-    async subscribe(name: string, settings: Partial<CollectionPolicy>): Promise<string> {
+    async subscribe(name: string, settings: Partial<CollectionPolicy & SubscriptionSettings>): Promise<string> {
       const id = source.addChannel(name);
       source.publish(id, name.slice(0, 1), clock.now, [1]);
       const added = await jobs.whenSettled((await channels.add(`@${name}`, settings)).job.id);
@@ -429,7 +430,7 @@ describe('concurrent changes of one subscription (A5)', () => {
       w.channels.updateSettings(id, { backfillMaxItems: 50 }),
       w.channels.applySettingsToAll(id),
     ]);
-    const settings = { intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50 };
+    const settings = { intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50, documentStatus: 'published' };
     expect(await w.channel(id)).toMatchObject({ settings });
     expect(await w.channel(other)).toMatchObject({ settings });
 
@@ -445,7 +446,7 @@ describe('concurrent changes of one subscription (A5)', () => {
 describe('apply settings to the same type (A5)', () => {
   it('gives every other subscription the settings, keeps paused ones paused and starts nothing', async () => {
     const w = await world();
-    const source = await w.subscribe('source', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 });
+    const source = await w.subscribe('source', { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'draft' });
     const other = await w.subscribe('other', {});
     const paused = await w.subscribe('resting', {});
     await w.channels.setEnabled(paused, false);
@@ -453,7 +454,7 @@ describe('apply settings to the same type (A5)', () => {
     w.advance(10 * MINUTE);
 
     expect(await w.channels.applySettingsToAll(source)).toEqual({ updated: 2, paused: 1 });
-    const settings = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'draft' };
     expect(await w.channel(other)).toMatchObject({ settings, enabled: true, nextCheckAt: '2026-10-15T05:00:00.000Z' });
     expect(await w.channel(paused)).toMatchObject({ settings, enabled: false, nextCheckAt: null });
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);

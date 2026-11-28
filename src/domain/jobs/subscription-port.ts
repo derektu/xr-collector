@@ -1,6 +1,7 @@
 import type { FailureClass, ListedItem, SubscriptionTarget } from '../../shared/sources/source-contract.js';
 import type { ItemFailureEntry, SubscriptionSettings } from '../../shared/subscriptions/subscription-types.js';
 import type { JobError, JobSubmission, SkipReason } from '../../shared/jobs/job-types.js';
+import type { DocumentStatus } from '../../shared/documents/document-types.js';
 
 export interface CandidateSelection {
   /** Keys of every candidate, collected or not, newest first. */
@@ -13,6 +14,8 @@ export interface CandidateSelection {
 
 export interface CheckPlan {
   target: SubscriptionTarget;
+  /** The status the documents of the items this check queues are saved with. */
+  documentStatus: DocumentStatus;
   /**
    * `listing` yields newest first; read it only as far as the check needs. `hasDocument` is true for
    * an item collected or deleted in the Vault.

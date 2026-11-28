@@ -177,7 +177,7 @@ Onboarding 的「從匯出檔建立」與 `POST /api/vault/setup` 的 `import` �
 
 每個有訂閱的來源類型在 plugin 的 `storage` 宣告訂閱檔位置、版本與清單欄位名稱；檔案格式都是 `{ "version": <版本>, "<清單欄位>": [...], "removed": [...] }`。`removed` 是移除紀錄 `{ "id", "title", "url", "removedAt" }`，沒有移除紀錄時省略。每個訂閱帶識別與使用者設定（`id`、`title`、`url`、`enabled`、`addedAt`、`updatedAt`）、`settings`（該來源類型的收集設定）、`lastCheckedAt`、`checkFailures`（可省略，連續失敗的檢查次數、第一次失敗時間與錯誤）、`autoPausedAt`（可省略，自動暫停的時間）、`outOfRange`（可省略，超出收集範圍的項目與當時的範圍起點）、`failures`（可省略，檢查中收集失敗的項目：鍵、標題、已試次數、錯誤碼、最後失敗時間與是否已略過；失敗滿 3 次或屬不重試的錯誤時略過，之後的檢查不再收集，成功收集或離開範圍後移除）、`nextCheckAt` 與 `lastDispatchedAt`。`updatedAt` 必填，任一筆訂閱缺少時整個檔案不讀取。訂閱與檔案中不認得的欄位照原樣讀取與保存。其他版本的檔案不讀取：開啟 Vault 與讀取匯出檔時都拒絕並說明原因。
 
-YouTube 與 RSS 的 `settings` 都是 `intervalMinutes`（檢查頻率的分鐘數）、`backfillDays`（每次檢查往前涵蓋的天數，1–60 的整數）、`backfillMaxItems`（每次檢查的數量上限，1–100 的整數）；任一筆訂閱的設定不符合時，整個檔案不讀取。
+YouTube 與 RSS 的 `settings` 都是 `intervalMinutes`（檢查頻率的分鐘數）、`backfillDays`（每次檢查往前涵蓋的天數，1–60 的整數）、`backfillMaxItems`（每次檢查的數量上限，1–100 的整數）與 `documentStatus`（檢查收集的文件存成的狀態，`published` 或 `draft`）；任一筆訂閱的設定不符合時，整個檔案不讀取。`documentStatus` 是每種來源類型都有的設定，沒有這個欄位的訂閱讀成 `published`，與沒有 `status` 的文件同一條規則。
 
 YouTube 的訂閱檔是 `youtube-channels.json`，版本 3，清單欄位是 `channels`；`outOfRange` 的項目以 `videoId` 記錄。RSS 的訂閱檔是 `rss-subscriptions.json`，版本 2，清單欄位是 `subscriptions`，`outOfRange` 與 `failures` 的項目以 `articleKey` 記錄。`youtube-schedule.json` 是 `{ "version": 2, "enabled": <boolean> }`，涵蓋所有來源類型的訂閱。
 

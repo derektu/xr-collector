@@ -5,7 +5,7 @@ import {
   asksAboutDocuments, removalOutcome, removeOptions, subscribePlan, subscriptionStatus, subscriptionStatusTone,
 } from '../../../../src/transport/web/sources/subscription-presentation.js';
 
-const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const };
 
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {

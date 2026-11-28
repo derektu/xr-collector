@@ -52,17 +52,17 @@ export class Collector implements DocumentCollector {
     return (await this.vault.deletions.get(documentId(key))) != null;
   }
 
-  async isDeletedFor(key: DocumentKey, intent: SaveIntent): Promise<boolean> {
+  async isDeletedFor(key: DocumentKey, intent: Pick<SaveIntent, 'explicitAt'>): Promise<boolean> {
     const deletion = await this.vault.deletions.get(documentId(key));
     return deletion != null && !explicitAfter(intent, deletion.deletedAt);
   }
 
-  save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null }): Promise<{ document: SavedDocument }> {
+  save(captured: CapturedDocument, intent: SaveIntent = { explicitAt: null, status: 'published' }): Promise<{ document: SavedDocument }> {
     const id = documentId({ sourceType: captured.sourceType, sourceId: captured.key });
     return this.exclusive(id, async () => {
       const deletion = await this.vault.deletions.get(id);
       if (!deletion) {
-        const document = await this.vault.add(captured);
+        const document = await this.vault.add(captured, { status: intent.status });
         this.noted(id);
         return { document };
       }
@@ -72,7 +72,7 @@ export class Collector implements DocumentCollector {
       }
       const now = this.vault.now();
       const after = new Date(Date.parse(deletion.deletedAt) + 1);
-      const document = await this.vault.add(captured, { collectedAt: now > after ? now : after });
+      const document = await this.vault.add(captured, { status: intent.status, collectedAt: now > after ? now : after });
       await this.vault.deletions.clear(id);
       this.noted(id);
       return { document };
@@ -254,7 +254,7 @@ export class Collector implements DocumentCollector {
   }
 }
 
-function explicitAfter(intent: SaveIntent, deletedAt: string): boolean {
+function explicitAfter(intent: Pick<SaveIntent, 'explicitAt'>, deletedAt: string): boolean {
   return intent.explicitAt !== null && !collectedBeforeDeletion(intent.explicitAt, deletedAt);
 }
 

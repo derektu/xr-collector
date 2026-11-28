@@ -23,7 +23,7 @@ Preconditions:
 - 可直接執行 [examples/collect-video.mjs](../examples/collect-video.mjs)，它涵蓋 `collect-add`、`collect-done`、`collect-read`。
 
 - **開對話框。** `page.getByTestId('add-document').click()`，再 `getByTestId('add-item-url').click()`。`add-dialog` 出現，標題 `add-dialog-title` 為「加入網址」，焦點在 `add-url`。空 Vault 另以 `add-document-empty` 重走同一入口。
-- **貼網址。** `getByTestId('add-url').fill(<影片網址>)`。等 `add-confirm` 文字為「加入」且 enabled。
+- **貼網址。** `getByTestId('add-url').fill(<影片網址>)`。等 `add-confirm` 文字為「加入」且 enabled。辨識卡片有「存成」的正式／草稿切換 `add-status`（radiogroup，`data-value` 是目前的 `published`／`draft`，選項以 `[data-value=draft]` 點選）；初始值是這次開啟頁面後上一次單篇加入的選擇，重新整理頁面後是正式。文件的 frontmatter `status` 照這個選擇。
 - **加入。** 點 `add-confirm`。`add-dialog` detached，仍在 `page-documents`，沒有 `notice` 提示，列表沒有進行中項目。
 - **完成。** 等 `document-list` 出現影片標題（合成約 1 秒）。
 - **閱讀。** 點列表中的標題。`reader-body` 含「【合成字幕】」；`reader-source-link` 的 href 含影片 ID。

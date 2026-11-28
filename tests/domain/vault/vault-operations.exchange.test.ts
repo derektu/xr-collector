@@ -363,6 +363,12 @@ const SUBSCRIPTION_RULES: Rule[] = [
     subscription: { title: 'B 改的名稱', enabled: false, settings: { ...settings, intervalMinutes: 360 }, updatedAt: at(2), ...progress, nextCheckAt: null },
   },
   {
+    name: '#311 a subscription brings its documentStatus setting with it',
+    change: async (_a, b) => { await store(b, at(1)).update('UC123', { settings: { ...settings, documentStatus: 'draft' } }); },
+    preview: { merge: counts({}, { updated: 1 }) },
+    subscription: { settings: { ...settings, documentStatus: 'draft' }, updatedAt: at(1) },
+  },
+  {
     name: 'S3 newer local settings and progress stay, so a merge has nothing to import',
     change: async (a, b) => {
       await store(b, at(1)).update('UC123', { settings: { ...settings, intervalMinutes: 360 } });
