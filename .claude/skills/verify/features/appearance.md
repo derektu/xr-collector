@@ -6,7 +6,7 @@
 
 - `appearance-theme`：設定頁 `settings-appearance` 的「主題」單選群組：「跟隨系統」「深色」「淺色」三個 `role="radio"` 按鈕，選中的 `aria-checked="true"`；方向鍵（上下左右）、Home、End 在三者間切換並移動焦點，Tab 只停在選中的那一個。
 - `appearance-persist`：選擇保存：Web 存在瀏覽器的 `localStorage`（`xr-collector.theme`），Desktop 經 preload bridge 存在裝置的 `userData/appearance.json`；重新整理或重啟後沿用，跟隨系統時隨作業系統外觀改變。
-- `appearance-focus`：焦點外框跟著操作方式：用 Tab、Enter 或空白鍵操作後，焦點所在的控制項顯示 2px 強調色外框；用滑鼠點按後不顯示，之後按方向鍵或 Esc 也不顯示（例如點「淺色」後用方向鍵切換主題、用滑鼠打開的選單以 Esc 關閉）。選單裡聚焦的項目有底色。文字輸入框聚焦時一律顯示外框。
+- `appearance-focus`：按鈕、開關、下拉選單與選單項目聚焦時沒有外框，不論用滑鼠或鍵盤；選單裡聚焦的項目有底色。文字輸入框聚焦時有 1px 淡外框，篩選欄與搜尋欄的外框畫在容器上。
 
 ## How to get to it (user POV)
 
@@ -21,7 +21,7 @@ Preconditions:
 - **切換主題。** `getByTestId('settings-appearance').getByRole('radio', { name: '淺色' })` 點擊；該按鈕 `aria-checked` 為 `true`，App 根元素（`.shell`）的 `data-theme` 為 `silverblue`。選「深色」為 `duskblue`。
 - **鍵盤。** 焦點在選中的按鈕上按 `ArrowRight`／`ArrowLeft`／`Home`／`End`，選中項目與焦點一起移動。
 - **保存。** 選「淺色」後 `page.reload()`，仍是淺色、`data-theme` 為 `silverblue`；`localStorage.getItem('xr-collector.theme')` 為 `light`。
-- **焦點外框。** 點「淺色」後 `document.documentElement.dataset.input` 為 `pointer`，按 `ArrowRight` 切換後，焦點所在按鈕的 computed `outline-style` 為 `none`；按 Tab 再 Shift+Tab 回來，`dataset.input` 為 `keyboard`，`outline-style` 為 `solid`、寬 2px。滑鼠點網址欄等文字輸入框，外框照樣出現。
+- **焦點外框。** 點「淺色」後按 `ArrowRight`，再按 Tab 再 Shift+Tab 回來，焦點所在按鈕的 computed `outline-style` 都是 `none`。點網址欄，`outline-style` 為 `solid`、寬 1px；點篩選欄或搜尋欄的輸入框，`.filter-input`／`.search-field` 容器的 `outline-style` 為 `solid`、寬 1px。
 - **跟隨系統。** 選「跟隨系統」後以 `page.emulateMedia({ colorScheme: 'light' | 'dark' })` 改變瀏覽器外觀，`data-theme` 跟著變。
 
 ## Gotchas
@@ -39,4 +39,4 @@ Preconditions:
 
 - `appearance-theme`：一個簡短的 Web 操作：切換深色／淺色並比對 `aria-checked` 與 `data-theme`，鍵盤操作一次。主題解析與鍵盤索引已有 `tests/transport/web/shell/app-shell.test.ts`。
 - `appearance-persist`：Web 重新整理後保留；跟隨系統隨瀏覽器外觀改變；Desktop 偏好檔的保存歸平台專項，讀寫規則已有 `tests/desktop/electron/theme-preference.test.ts`。
-- `appearance-focus`：一個簡短的 Web 操作：滑鼠點選後方向鍵與 Esc 不出外框、Tab 後出現。哪些按鍵改變操作方式已有 `tests/transport/web/infra/input-modality.test.ts`。
+- `appearance-focus`：一個簡短的 Web 操作，照上面「焦點外框」的步驟。

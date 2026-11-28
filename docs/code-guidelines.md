@@ -49,6 +49,7 @@ lint 規則在 `eslint.config.ts`，執行的指令見 [建置與發布](buildin
 | 跟外部狀態同步用 `useSyncExternalStore`；媒體查詢與網址用 `infra/browser-state.ts` 的 `useMediaQuery`、`useLocation`，改網址經同檔的 `writeHistory` | review |
 | 跟著輸入或網址變的草稿，在 render 時比對上一次的輸入，不同就重設 state（記下上一次的值，不用 `key` 重掛元件）；從讀取結果算得出的值在 render 時算 | review |
 | 對話框以 `infra/dialog.ts` 的 `showModalOnMount` 當 ref，在掛上 DOM 時 `showModal()`；開啟時焦點落在標了 `data-initial-focus` 的元素，沒有標的落在第一個可聚焦的元素。受控的對話框只在開啟時 render | review |
+| 個別元件不寫 `:focus` 或 `outline` 樣式；焦點外框由 `styles.css` 開頭的兩條全域規則決定，行為見 [App Shell 擴充](app-shell-extension.md) | `styles.css` 開頭的兩條全域規則；個別元件由 review 把關 |
 
 畫面需要跟外部同步時，用 `src/transport/web/infra/` 提供的 hook：
 
