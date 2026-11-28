@@ -12,6 +12,7 @@ import { CollectorError } from '../../../src/shared/lib/collector-error.js';
 import type { CollectionJob } from '../../../src/shared/jobs/job-types.js';
 import type { SavedDocument } from '../../../src/shared/documents/document-types.js';
 import type { Subscription } from '../../../src/shared/subscriptions/subscription-types.js';
+import type { DocumentStatus } from '../../../src/shared/documents/document-types.js';
 import { JobManager } from '../../../src/domain/jobs/job-manager.js';
 import { JobStore } from '../../../src/domain/jobs/job-store.js';
 import { memoryJobRecords } from '../../../src/app/runtime/job-records.js';
@@ -153,7 +154,7 @@ describe('HTTP app', () => {
       enabled: true,
       addedAt: '2026-09-17T00:00:00.000Z',
       updatedAt: '2026-09-17T00:00:00.000Z',
-      settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
+      settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const },
     };
     const run = {
       id: 'run-1',
@@ -190,8 +191,8 @@ describe('HTTP app', () => {
         return {
           type: 'youtube',
           target: { id: savedChannel.id, title: savedChannel.title, url: savedChannel.url },
-          subscription: { enabled: true, settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 } },
-          settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
+          subscription: { enabled: true, settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' } },
+          settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' },
           autoCollection: true,
         };
       },
@@ -283,7 +284,7 @@ describe('HTTP app', () => {
   it('changes settings before resuming in one request, so the check the resume starts collects the new range', async () => {
     let record = {
       id: 'UC-paused', title: '暫停頻道', url: 'https://www.youtube.com/channel/UC-paused/videos', enabled: false,
-      addedAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z', settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 },
+      addedAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z', settings: { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as DocumentStatus },
     };
     const resumedWithRange: number[] = [];
     const channels = subscriptionCollection('youtube', {

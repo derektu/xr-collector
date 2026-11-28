@@ -1,6 +1,6 @@
 import type { ContentExtent, DocumentMetadata } from '../documents/document-types.js';
 import type { SourceTypeInfo } from './source-info-types.js';
-import type { SubscriptionSettings } from '../subscriptions/subscription-types.js';
+import type { SourceSettings, SubscriptionSettings } from '../subscriptions/subscription-types.js';
 
 /** `key` is unique within its source type; `url` is the item's canonical address; `title` is null until the source reports it. */
 export interface ItemRef {
@@ -73,7 +73,7 @@ export interface ItemDeclaration {
   openOriginalLabel: string;
 }
 
-export interface SubscriptionDeclaration<S extends SubscriptionSettings = SubscriptionSettings> {
+export interface SubscriptionDeclaration<S extends SourceSettings = SourceSettings> {
   targetNoun: string;
   defaults: S;
   /** Whether a stored value is a complete, valid set of settings. */
@@ -108,7 +108,7 @@ export interface JobKindNames {
   add?: string;
 }
 
-export interface SourcePluginDeclaration<S extends SubscriptionSettings = SubscriptionSettings> extends SourceTypeInfo {
+export interface SourcePluginDeclaration<S extends SourceSettings = SourceSettings> extends SourceTypeInfo {
   item: ItemDeclaration;
   subscription?: SubscriptionDeclaration<S>;
   jobKindNames: JobKindNames;
@@ -153,7 +153,7 @@ export interface FrontmatterCodec {
   read(collector: Record<string, unknown>): Record<string, unknown> | null;
 }
 
-export interface SourceDefinition<S extends SubscriptionSettings = SubscriptionSettings> extends SourcePluginDeclaration<S> {
+export interface SourceDefinition<S extends SourceSettings = SourceSettings> extends SourcePluginDeclaration<S> {
   classifyFailure(error: { code: string }): FailureClass;
   pacing: PacingDeclaration | null;
   storage: SubscriptionStorage | null;
@@ -165,7 +165,7 @@ export interface SourceLogin {
   status(): 'signed_in' | 'required';
 }
 
-export interface SourcePlugin<S extends SubscriptionSettings = SubscriptionSettings> extends SourceDefinition<S> {
+export interface SourcePlugin<S extends SourceSettings = SourceSettings> extends SourceDefinition<S> {
   captureItem(ref: ItemRef, context: RequestContext): Promise<CapturedItem>;
   resolveTarget?(url: string, context: RequestContext): Promise<SubscriptionTarget>;
   /** The target's items, newest first; the core stops reading once it has what one check needs. */

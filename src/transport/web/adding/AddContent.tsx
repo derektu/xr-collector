@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { settingsErrors } from '../../../shared/sources/collection-settings.js';
-import { settingsFor, subscribeWaitsForSettings, type ChosenSettings } from './add-content.js';
+import { DOCUMENT_STATUS_OPTIONS, settingsErrors } from '../../../shared/sources/collection-settings.js';
+import type { DocumentStatus } from '../../../shared/documents/document-types.js';
+import { lastDocumentStatus, rememberDocumentStatus, settingsFor, subscribeWaitsForSettings, type ChosenSettings } from './add-content.js';
 import type { RecognitionAction, SourceSettingField, SourceTypeInfo, UrlRecognition } from '../../../shared/sources/source-info-types.js';
 import type { SubscriptionSettings } from '../../../shared/subscriptions/subscription-types.js';
 import { addDialogTitles, addMismatch, addPlaceholder, isUnsupportedUrl, UNSUPPORTED_URL, type AddMode } from './add-menu.js';
@@ -10,6 +11,7 @@ import { showModalOnMount } from '../infra/dialog.js';
 import { useDebouncedValue } from '../infra/timing.js';
 import { useRead } from '../infra/use-read.js';
 import { Icon, SourceTypeBadge } from '../shell/icons.js';
+import { SegmentedChoice } from '../shell/SegmentedChoice.js';
 import { currentRecognition, initials } from '../sources/source-presentation.js';
 import { resumeSummary, subscribeSummary, targetNoun } from '../sources/subscription-presentation.js';
 import { useSourceDeclarations } from '../sources/source-declarations.js';
@@ -30,6 +32,7 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ChosenSettings | null>(null);
+  const [collectStatus, setCollectStatus] = useState(() => lastDocumentStatus('collect'));
   const typed = url.trim();
   const settled = useDebouncedValue(typed, RECOGNIZE_DELAY_MS);
   const read = useRead(async (signal) => ({ input: settled, recognition: await api.recognizeUrl(settled, signal) }), [settled], { enabled: settled !== '' });
@@ -41,9 +44,10 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
     setFailure(null);
     try {
       const settings = settingsFor(chosen, found);
-      onDone(await api.performAction(action.id === 'subscribe' && settings
-        ? { ...action, request: { ...action.request, body: { ...action.request.body, settings } } }
-        : action));
+      if (action.id === 'subscribe' && settings) rememberDocumentStatus('subscribe', settings.documentStatus);
+      if (action.id === 'collect') rememberDocumentStatus('collect', collectStatus);
+      const extra = action.id === 'subscribe' && settings ? { settings } : action.id === 'collect' ? { status: collectStatus } : {};
+      onDone(await api.performAction({ ...action, request: { ...action.request, body: { ...action.request.body, ...extra } } }));
     } catch (error) {
       setFailure(error instanceof Error ? error.message : '操作失敗，請稍後再試。');
       setBusy(false);
@@ -89,8 +93,9 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
         <button type="button" className="button small" onClick={() => switchMode(mismatch.switchTo)} data-testid="add-switch">{mismatch.action}</button>
       </div> : null}
       {unsupported ? <p className="add-problem" role="alert" data-testid="add-unsupported">{UNSUPPORTED_URL}</p> : null}
-      {found && !mismatch && !unsupported ? <RecognitionCard recognition={found} fields={fields} settings={settings} disabled={busy}
-        onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } as SubscriptionSettings })} onOpenSource={onOpenSource} /> : null}
+      {found && !mismatch && !unsupported ? <RecognitionCard recognition={found} fields={fields} settings={settings} collectStatus={collectStatus} disabled={busy}
+        onSettings={(patch) => setChosen({ recognition: found, settings: { ...settings!, ...patch } as SubscriptionSettings })}
+        onCollectStatus={setCollectStatus} onOpenSource={onOpenSource} /> : null}
       {failure ? <p className="add-problem" role="alert">{failure}</p> : null}
 
       <div className="dialog-actions">
@@ -101,12 +106,14 @@ export function AddContent({ mode: initialMode, sourceTypes, onClose, onDone, on
   </dialog>;
 }
 
-function RecognitionCard({ recognition, fields, settings, disabled, onSettings, onOpenSource }: {
+function RecognitionCard({ recognition, fields, settings, collectStatus, disabled, onSettings, onCollectStatus, onOpenSource }: {
   recognition: UrlRecognition;
   fields: SourceSettingField[];
   settings: SubscriptionSettings | null;
+  collectStatus: DocumentStatus;
   disabled: boolean;
   onSettings: (patch: Partial<SubscriptionSettings>) => void;
+  onCollectStatus: (status: DocumentStatus) => void;
   onOpenSource: (type: string, id: string) => void;
 }) {
   const declarations = useSourceDeclarations();
@@ -133,6 +140,15 @@ function RecognitionCard({ recognition, fields, settings, disabled, onSettings, 
         <p className="card-kind">{recognition.kindLabel}</p>
         <p className="card-title">{target.url.replace(/^https:\/\/(www\.)?/u, '')}</p>
         <p>{declaration?.prompts.itemCardText}</p>
+        <div className="card-settings">
+          <div className="collection-settings">
+            <div className="policy-row">
+              <span id="add-status-label">存成</span>
+              <SegmentedChoice options={DOCUMENT_STATUS_OPTIONS} value={collectStatus} onChange={onCollectStatus} labelledBy="add-status-label"
+                disabled={disabled} testId="add-status" />
+            </div>
+          </div>
+        </div>
       </div>
     </div>;
   }

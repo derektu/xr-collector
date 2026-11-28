@@ -1,10 +1,14 @@
 import { publishedSince } from '../../shared/documents/published.js';
 import type { CheckRange, ListedItem, SubscriptionTarget } from '../../shared/sources/source-contract.js';
+import type { DocumentStatus } from '../../shared/documents/document-types.js';
 import type { CandidateSelection, CheckPlan } from '../jobs/index.js';
 
-export function checkPlan(target: SubscriptionTarget, range: CheckRange, excluded: ReadonlySet<string>): CheckPlan {
+export function checkPlan(
+  target: SubscriptionTarget, range: CheckRange, excluded: ReadonlySet<string>, documentStatus: DocumentStatus,
+): CheckPlan {
   return {
     target,
+    documentStatus,
     select: (listing, hasDocument) => selectCandidates(listing, range, async (key) => excluded.has(key) || hasDocument(key)),
   };
 }

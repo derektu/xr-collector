@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { editSettingsForm, openSettingsForm, takeUnsent } from '../../../../src/transport/web/sources/settings-form.js';
 
-const opened = { intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30 };
+const opened = { intervalMinutes: 60, backfillDays: 7, backfillMaxItems: 30, documentStatus: 'published' as const };
 
 describe('a save sends only the fields the user changed since the last save', () => {
   it.each([

@@ -62,8 +62,8 @@ export interface EnabledResult {
 
 export class SubscriptionService {
   private readonly now: () => Date;
-  private readonly definition: SourceDefinition;
-  private readonly subscription: SubscriptionDeclaration;
+  private readonly definition: SourceDefinition<SubscriptionSettings>;
+  private readonly subscription: SubscriptionDeclaration<SubscriptionSettings>;
   private readonly storage: NonNullable<SourceDefinition['storage']>;
 
   constructor(
@@ -319,7 +319,7 @@ export class SubscriptionService {
     const since = range.since.toISOString();
     const excluded = new Set((record.outOfRange ?? []).filter((entry) => entry.before <= since).map((entry) => entry[this.keyField]!));
     for (const entry of record.failures ?? []) if (entry.skipped) excluded.add(entry[this.keyField] as string);
-    return checkPlan(record, range, excluded);
+    return checkPlan(record, range, excluded, record.settings.documentStatus);
   }
 
   async checked(id: string, report: CheckReport): Promise<SkipReason | null> {

@@ -1,6 +1,6 @@
 import type { ActivityCheckSummary } from '../activity/activity-types.js';
 import type { ConnectivityStatus } from '../api/device-types.js';
-import type { DocumentSourceType } from '../documents/document-types.js';
+import type { DocumentSourceType, DocumentStatus } from '../documents/document-types.js';
 import type { ChannelJobTrigger, JobError } from '../jobs/job-types.js';
 
 export interface SubscriptionRecord {
@@ -93,10 +93,17 @@ export interface Subscription extends Omit<SubscriptionRecord, 'checkFailures' |
 }
 
 /**
- * Collection settings of one subscription: the check interval every type uses, and the fields its
- * source type defines for the range a check collects.
+ * The collection settings a source type declares: the check interval every type uses, and the fields
+ * it defines for the range a check collects.
  */
-export type SubscriptionSettings = { intervalMinutes: number; [key: string]: string | number };
+export type SourceSettings = { intervalMinutes: number; [key: string]: string | number };
+
+/**
+ * Collection settings of one subscription: its source type's settings and the status of the
+ * documents its checks save, which the core adds for every type. A stored subscription without
+ * `documentStatus` reads as `published`.
+ */
+export type SubscriptionSettings = SourceSettings & { documentStatus: DocumentStatus };
 
 export interface SubscriptionPreview {
   type: DocumentSourceType;

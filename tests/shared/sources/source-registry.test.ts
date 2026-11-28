@@ -12,7 +12,7 @@ describe('source declarations', () => {
   it('keeps the list order and looks types up by ID', () => {
     const declarations = new SourceDeclarations([fake2, fake]);
     expect(declarations.list.map((declaration) => declaration.id)).toEqual(['fake2', 'fake']);
-    expect(declarations.get('fake')).toBe(fake);
+    expect(declarations.get('fake')?.id).toBe('fake');
     expect(declarations.get('other')).toBeUndefined();
     expect(declarations.jobKind('fake', 'check')).toBe('fake.feed');
     expect(declarations.jobKind('other', 'check')).toBeNull();
@@ -51,7 +51,7 @@ describe('source declarations', () => {
   it('as a registry, holds the definitions, the schedule file and a subscription exchange of its own types, and does not change', () => {
     const one = sourceRegistry([fake]);
     const both = sourceRegistry([fake2, fake]);
-    expect(one.require('fake')).toBe(fake);
+    expect(one.require('fake').id).toBe('fake');
     expect(() => one.require('fake2')).toThrow('Source type fake2 is not registered');
     expect(one.exchange.files().map((file) => file.type)).toEqual(['fake']);
     expect(both.exchange.files().map((file) => file.type)).toEqual(['fake2', 'fake']);

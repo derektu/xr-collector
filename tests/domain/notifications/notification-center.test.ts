@@ -12,7 +12,7 @@ import { recordingLog } from '../../support/log.js';
 
 const record = (at = '2026-10-28T01:00:00.000Z'): SubscriptionRecord => ({
   id: 'channel-a', title: 'Channel A', url: 'https://example.test/a', enabled: false, addedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
-  settings: { intervalMinutes: 60, latestItems: 10 }, autoPausedAt: at,
+  settings: { intervalMinutes: 60, latestItems: 10, documentStatus: 'published' }, autoPausedAt: at,
   checkFailures: { count: 5, since: '2026-10-27T00:00:00.000Z', error: { code: 'network_error', message: 'secret? no, safe reason' } },
 });
 

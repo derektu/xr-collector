@@ -49,12 +49,13 @@ describe('subscription file versions', () => {
   });
 
   it('rejects files it cannot read instead of guessing', async () => {
-    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const };
     for (const channels of [
       {}, { version: 2, channels: [] }, { version: 4, channels: [] },
       { version: 3, channels: [{ ...row('UCa'), settings: { ...valid, intervalMinutes: 45 } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: valid }, { ...row('UCb'), settings: { ...valid, backfillDays: 61 } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: { intervalMinutes: 30, backfillWindow: '1m', backfillMaxItems: 10 } }] },
+      { version: 3, channels: [{ ...row('UCa'), settings: { ...valid, documentStatus: 'final' } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: valid, checkFailures: { count: 0, since: '2026-10-15T03:30:00.000Z', error: { code: 'x', message: 'x' } } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: valid, checkFailures: { count: 2, since: '2026-10-15T03:30:00.000Z' } }] },
       { version: 3, channels: [{ ...row('UCa'), settings: valid, autoPausedAt: 1 }] },
@@ -67,7 +68,7 @@ describe('subscription file versions', () => {
   });
 
   it('rejects the whole file when any subscription lacks updatedAt, since import merge decides between two copies by it', async () => {
-    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const valid = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const };
     const { updatedAt: _updatedAt, ...withoutUpdatedAt } = row('UCb');
     const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings: valid }, { ...withoutUpdatedAt, settings: valid }] } });
     await expect(new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).rejects.toThrow('Invalid YouTube channel settings');
@@ -78,7 +79,7 @@ describe('JsonSubscriptionStore', () => {
   it('persists subscriptions with their settings as version 3 across instances', async () => {
     const root = await vault({});
     const first = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
-    const settings = { intervalMinutes: 15, backfillDays: 7, backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 15, backfillDays: 7, backfillMaxItems: 5, documentStatus: 'published' as const };
     await first.add({ ...row('UCa'), settings });
     await first.add({ ...row('UCb'), settings });
     await first.setEnabled('UCa', false);
@@ -94,8 +95,15 @@ describe('JsonSubscriptionStore', () => {
     expect((await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list()).map((channel) => channel.id)).toEqual(['UCb']);
   });
 
+  it('reads a subscription saved without documentStatus as published, the same rule as a document without status', async () => {
+    const { documentStatus: _documentStatus, ...withoutStatus } = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' };
+    const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings: withoutStatus }] } });
+    expect((await new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube').list())[0]!.settings)
+      .toEqual({ ...withoutStatus, documentStatus: 'published' });
+  });
+
   it('keeps fields the store does not know through reads and saves (R-10)', async () => {
-    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const };
     const root = await vault({ channels: { version: 3, channels: [{ ...rowWithUnknownFields('UCa'), settings }, { ...row('UCb'), settings }] } });
     const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube');
     expect(await store.list()).toEqual([{ ...rowWithUnknownFields('UCa'), settings }, { ...row('UCb'), settings }]);
@@ -105,7 +113,7 @@ describe('JsonSubscriptionStore', () => {
   });
 
   it('reads and writes failed items with a subscription, as collection progress that is not a change of it (N69-T1)', async () => {
-    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 };
+    const settings = { intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' as const };
     const failure = { videoId: 'aaaaaaaaaaa', title: '影片', attempts: 2, errorCode: 'no_subtitles', failedAt: '2026-10-15T03:30:00.000Z', skipped: false };
     const root = await vault({ channels: { version: 3, channels: [{ ...row('UCa'), settings, updatedAt: '2026-09-01T00:00:00.000Z' }] } });
     const store = new JsonSubscriptionStore(new VaultFileWriter(root, PRODUCT_SOURCES), 'youtube', () => new Date('2026-10-16T00:00:00.000Z'));

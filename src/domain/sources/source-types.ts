@@ -2,7 +2,7 @@ import type { SourceDeclarations } from '../../shared/sources/source-registry.js
 import { API_ROUTES, routePath } from '../../shared/api/api-routes.js';
 import { CollectorError } from '../../shared/lib/collector-error.js';
 import type { SourceTypeInfo, UrlRecognition } from '../../shared/sources/source-info-types.js';
-import type { SubscriptionPreview } from '../../shared/subscriptions/subscription-types.js';
+import type { SubscriptionPreview, SubscriptionSettings } from '../../shared/subscriptions/subscription-types.js';
 import type { SourcePluginDeclaration } from '../../shared/sources/source-contract.js';
 
 const BARE_HOST_ADDRESS = /^[^\s/@:]+\.[^\s/]+(\/\S*)?$/u;
@@ -16,7 +16,7 @@ export interface SourceTypeDeclaration extends SourceTypeInfo {
   recognize(input: string, context: RecognitionContext): Promise<UrlRecognition>;
 }
 
-export function recognizingSourceType(declaration: SourcePluginDeclaration): SourceTypeDeclaration {
+export function recognizingSourceType(declaration: SourcePluginDeclaration<SubscriptionSettings>): SourceTypeDeclaration {
   const type = declaration.id;
   const single = declaration.kinds.find((kind) => kind.capability === 'single');
   const subscribing = declaration.kinds.find((kind) => kind.capability === 'subscription');

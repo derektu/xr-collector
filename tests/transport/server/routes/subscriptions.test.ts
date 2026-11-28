@@ -48,7 +48,9 @@ interface TypeCase {
   defaults: Record<string, string | number>;
   patch: Record<string, string | number>;
   badPatch: Record<string, unknown>;
-  addTarget(name: string): { id: string; url: string; itemUrl: string };
+  addTarget(name: string): { id: string; url: string; itemUrl: string; itemKey: string };
+  publishNewestItem(targetId: string, name: string): { key: string; url: string };
+  failCapturesUntilRestored(key: string): () => void;
 }
 
 async function world(connectivity?: ConnectivityAccess) {
@@ -105,19 +107,36 @@ async function world(connectivity?: ConnectivityAccess) {
   const cases: TypeCase[] = [
     {
       type: 'youtube', kindLabel: 'YouTube 頻道', itemKind: 'youtube.video', addKind: 'youtube.channel-add',
-      defaults: { ...DEFAULT_POLICY }, patch: { backfillDays: 45 }, badPatch: { backfillDays: 61 },
+      defaults: { ...DEFAULT_POLICY, documentStatus: 'published' }, patch: { backfillDays: 45 }, badPatch: { backfillDays: 61 },
       addTarget(name) {
         const id = youtube.addChannel(name);
         const [video] = youtube.publish(id, name.slice(0, 1), clock.now, [1]);
-        return { id, url: `https://www.youtube.com/@${name}`, itemUrl: `https://www.youtube.com/watch?v=${video}` };
+        return { id, url: `https://www.youtube.com/@${name}`, itemUrl: `https://www.youtube.com/watch?v=${video}`, itemKey: video! };
+      },
+      publishNewestItem(targetId, name) {
+        const [video] = youtube.publish(targetId, name.slice(0, 1), clock.now, [0], 50);
+        return { key: video!, url: `https://www.youtube.com/watch?v=${video}` };
+      },
+      failCapturesUntilRestored(key) {
+        youtube.failures.set(key, new CollectorError('network_error', '無法連線。'));
+        return () => youtube.failures.delete(key);
       },
     },
     {
       type: 'fake', kindLabel: 'fake 動態', itemKind: 'fake.item', addKind: 'fake.feed-add',
-      defaults: { ...FAKE_DEFAULTS }, patch: { maxItems: 3 }, badPatch: { maxItems: 0 },
+      defaults: { ...FAKE_DEFAULTS, documentStatus: 'published' }, patch: { maxItems: 3 }, badPatch: { maxItems: 0 },
       addTarget(name) {
         const [key] = fake.addFeed(name, clock.now, [1]);
-        return { id: name, url: `https://fake.example/feed/${name}`, itemUrl: `https://fake.example/item/${key}` };
+        return { id: name, url: `https://fake.example/feed/${name}`, itemUrl: `https://fake.example/item/${key}`, itemKey: key! };
+      },
+      publishNewestItem(targetId, name) {
+        const key = `${targetId}-${name}`;
+        fake.feed(targetId).items.unshift({ key, title: `${targetId} ${name}`, publishedAt: clock.now.toISOString() });
+        return { key, url: `https://fake.example/item/${key}` };
+      },
+      failCapturesUntilRestored(key) {
+        fake.fail(key, new CollectorError('network_error', '無法連線。'));
+        return () => undefined;
       },
     },
   ];
@@ -255,6 +274,51 @@ describe.each(['youtube', 'fake'] as const)('subscription and collection routes 
     expect(await w.send('DELETE', route(first.id))).toMatchObject({ status: 404, body: { error: { code: 'subscription_not_found' } } });
     expect(await w.send('DELETE', `${route(second.id)}?documents=delete`)).toEqual({ status: 200, body: { removed: true, documentsKept: 0, documentsDeleted: 1, documentsFailed: 0 } });
     expect((await w.send('GET', `/api/subscriptions?type=${type}`)).body.subscriptions).toEqual([]);
+    await w.close();
+  });
+
+  it('saves documents as the subscription or the single-item request chose, and never changes a saved one (#311)', async () => {
+    const w = await world();
+    const c = caseOf(type)(w);
+    const status = async (key: string) => /^status: (\S+)$/mu.exec(await readFile(path.join(w.root, 'documents', type, `${key}.md`), 'utf8'))?.[1];
+    const drafts = c.addTarget('drafts');
+    const finals = c.addTarget('finals');
+    await w.settled((await w.send('POST', '/api/subscriptions', { url: drafts.url, settings: { documentStatus: 'draft' } })).body.job.id)
+      .then((added) => w.settled(added.result.followUpJobId));
+    await w.subscribe(finals.url);
+    expect([await status(drafts.itemKey), await status(finals.itemKey)]).toEqual(['draft', 'published']);
+
+    const route = `/api/subscriptions/${type}/${encodeURIComponent(drafts.id)}`;
+    expect(await w.send('PATCH', route, { settings: { documentStatus: 'published' } })).toMatchObject({
+      status: 200, body: { subscription: { settings: { ...c.defaults, documentStatus: 'published' } } },
+    });
+    expect(await status(drafts.itemKey)).toBe('draft');
+    for (const [method, url, body] of [
+      ['PATCH', route, { settings: { documentStatus: 'final' } }],
+      ['POST', '/api/subscriptions', { url: c.addTarget('rejected').url, settings: { documentStatus: 'final' } }],
+      ['POST', '/api/items', { url: finals.itemUrl, status: 'final' }],
+      ['POST', '/api/submissions', { url: finals.itemUrl, status: 'final' }],
+    ] as const) {
+      expect(await w.send(method, url, body), `${method} ${url}`).toMatchObject({ status: 400, body: { error: { code: 'invalid_request' } } });
+    }
+
+    const chosen = c.publishNewestItem(finals.id, 'chosen');
+    const plain = c.publishNewestItem(finals.id, 'plain');
+    const submitted = c.publishNewestItem(finals.id, 'submitted');
+    await w.settled((await w.send('POST', '/api/items', { url: chosen.url, status: 'draft' })).body.job.id);
+    await w.settled((await w.send('POST', '/api/items', { url: plain.url })).body.job.id);
+    await w.settled((await w.send('POST', '/api/submissions', { url: submitted.url, status: 'draft' })).body.job.id);
+    expect([await status(chosen.key), await status(plain.key), await status(submitted.key)]).toEqual(['draft', 'published', 'draft']);
+    await w.settled((await w.send('POST', '/api/items', { url: chosen.url, status: 'published' })).body.job.id);
+    expect(await status(chosen.key)).toBe('draft');
+
+    const retried = c.publishNewestItem(finals.id, 'retried');
+    const restore = c.failCapturesUntilRestored(retried.key);
+    const failed = await w.settled((await w.send('POST', '/api/items', { url: retried.url, status: 'draft' })).body.job.id);
+    expect(failed.state).toBe('failed');
+    restore();
+    await w.settled((await w.send('POST', `/api/jobs/${failed.id}/retry`)).body.job.id);
+    expect(await status(retried.key)).toBe('draft');
     await w.close();
   });
 

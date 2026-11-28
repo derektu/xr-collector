@@ -2,15 +2,16 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { API_ROUTES } from '../../../shared/api/api-routes.js';
 import { CollectorError } from '../../../shared/lib/collector-error.js';
 import type { JobOverview, JobPage, JobSubmission, JobSummary, JobView } from '../../../shared/jobs/job-types.js';
+import type { DocumentStatus } from '../../../shared/documents/document-types.js';
 import type { SourceRegistry } from '../../../shared/sources/source-registry.js';
 import { serve } from '../api-route.js';
 import { ownedAddress, requiredUrl } from './addresses.js';
 import type { NetworkGuard } from './network.js';
-import { isInstant, pagination, singleValues } from './query-params.js';
+import { isInstant, pagination, requestedStatus, singleValues } from './query-params.js';
 
 export interface CollectionJobs {
-  submit(type: string, url: string): Promise<JobSubmission>;
-  submitItem(type: string, url: string): Promise<JobSubmission>;
+  submit(type: string, url: string, documentStatus: DocumentStatus): Promise<JobSubmission>;
+  submitItem(type: string, url: string, documentStatus: DocumentStatus): Promise<JobSubmission>;
   get(id: string): JobView;
   list(query: { state?: 'active' | 'all'; limit?: number; cursor?: string }): JobPage;
   summary(since: string): JobSummary;
@@ -20,16 +21,18 @@ export interface CollectionJobs {
 }
 
 export function registerJobRoutes(app: FastifyInstance, jobs: CollectionJobs, sources: SourceRegistry, network: NetworkGuard): void {
-  serve(app, API_ROUTES.submitAddress, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
+  serve(app, API_ROUTES.submitAddress, async (request: FastifyRequest<{ Body: { url?: unknown; status?: unknown } }>) => {
     const { type, input } = ownedAddress(sources, requiredUrl(request.body?.url, '請貼上要加入的網址。'));
+    const status = itemStatus(request.body?.status);
     network.requireOnline();
-    return await jobs.submit(type, input);
+    return await jobs.submit(type, input, status);
   });
 
-  serve(app, API_ROUTES.collectItem, async (request: FastifyRequest<{ Body: { url?: unknown } }>) => {
+  serve(app, API_ROUTES.collectItem, async (request: FastifyRequest<{ Body: { url?: unknown; status?: unknown } }>) => {
     const { type, input } = ownedAddress(sources, requiredUrl(request.body?.url, '請貼上要收集的網址。'));
+    const status = itemStatus(request.body?.status);
     network.requireOnline();
-    return await jobs.submitItem(type, input);
+    return await jobs.submitItem(type, input, status);
   });
 
   serve(app, API_ROUTES.jobs, async (request: FastifyRequest<{ Querystring: { state?: string; limit?: string; cursor?: string } }>) => {
@@ -65,4 +68,8 @@ export function registerJobRoutes(app: FastifyInstance, jobs: CollectionJobs, so
   serve(app, API_ROUTES.dismissJob, async (request: FastifyRequest<{ Params: { id: string } }>) => ({
     job: await jobs.dismiss(request.params.id),
   }));
+}
+
+function itemStatus(value: unknown): DocumentStatus {
+  return value === undefined ? 'published' : requestedStatus(value);
 }

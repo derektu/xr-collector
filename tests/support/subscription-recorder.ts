@@ -81,6 +81,7 @@ export class SubscriptionRecorder implements SubscriptionPort {
       { id: subscription.id, title: subscription.title, url: subscription.url },
       this.sources.require(type).subscription!.checkRange(subscription.settings, at),
       new Set(subscription.excluded),
+      subscription.settings.documentStatus,
     );
   }
 

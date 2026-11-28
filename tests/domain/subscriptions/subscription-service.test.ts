@@ -105,7 +105,7 @@ describe('SubscriptionService', () => {
     const submission = await channels.add('https://www.youtube.com/@sample');
     expect(submission.job).toMatchObject({ kind: 'youtube.channel-add', state: 'queued' });
     expect(await jobs.whenSettled(submission.job.id)).toMatchObject({ state: 'completed', result: { outcome: 'created', subscriptionId: 'UC123' } });
-    expect(store.channels).toEqual([expect.objectContaining({ id: 'UC123', title: '測試頻道', enabled: true, settings: DEFAULT_POLICY })]);
+    expect(store.channels).toEqual([expect.objectContaining({ id: 'UC123', title: '測試頻道', enabled: true, settings: { ...DEFAULT_POLICY, documentStatus: 'published' } })]);
     await jobs.close();
   });
 
@@ -147,6 +147,6 @@ function channel(id: string, enabled: boolean): SubscriptionRecord {
     enabled,
     addedAt: '2026-09-17T00:00:00.000Z',
     updatedAt: '2026-09-17T00:00:00.000Z',
-    settings: DEFAULT_POLICY,
+    settings: { ...DEFAULT_POLICY, documentStatus: 'published' },
   };
 }

@@ -1,4 +1,4 @@
-import type { DocumentSourceType } from '../documents/document-types.js';
+import type { DocumentSourceType, DocumentStatus } from '../documents/document-types.js';
 import type { SubscriptionSettings, WorkStatus } from '../subscriptions/subscription-types.js';
 
 export type ChannelJobTrigger = 'subscribe' | 'resume' | 'scheduled' | 'manual';
@@ -110,6 +110,8 @@ export interface CollectionJob {
   progress: JobProgress | null;
   scope?: ChannelJobScope;
   publishedNotBefore?: string;
+  /** On an item job: the status its document is saved with. */
+  documentStatus?: DocumentStatus;
   items: JobItem[] | null;
   result: JobResult | null;
   error: JobError | null;

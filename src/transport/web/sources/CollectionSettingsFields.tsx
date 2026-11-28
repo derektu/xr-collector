@@ -4,6 +4,7 @@ import type { SourceSettingField } from '../../../shared/sources/source-info-typ
 import type { SubscriptionSettings } from '../../../shared/subscriptions/subscription-types.js';
 import { useSourceDeclarations } from './source-declarations.js';
 import { typedNumber } from './source-presentation.js';
+import { SegmentedChoice } from '../shell/SegmentedChoice.js';
 
 export function CollectionSettingsFields({ idPrefix, type, fields, value, onChange, onCommitNumber, disabled = false }: {
   idPrefix: string;
@@ -40,7 +41,8 @@ export function CollectionSettingsFields({ idPrefix, type, fields, value, onChan
   };
   const interval = field('intervalMinutes');
   const sentence = type ? declarations.get(type)?.subscription?.sentence : undefined;
-  const rangeFields = fields.filter((candidate) => candidate.key !== 'intervalMinutes');
+  const status = field('documentStatus');
+  const rangeFields = fields.filter((candidate) => candidate.key !== 'intervalMinutes' && candidate.key !== 'documentStatus');
   const errors = settingsErrors(fields, value);
   return <div className="collection-settings">
     {interval ? <div className="policy-row">
@@ -58,6 +60,11 @@ export function CollectionSettingsFields({ idPrefix, type, fields, value, onChan
       <label htmlFor={`${idPrefix}-${candidate.key}`}>{candidate.label}</label>
       {control(candidate.key, { id: `${idPrefix}-${candidate.key}` })}
     </div>)}
+    {status?.input === 'choice' ? <div className="policy-row">
+      <span id={`${idPrefix}-documentStatus-label`}>{status.label}</span>
+      <SegmentedChoice options={status.options} value={value.documentStatus} labelledBy={`${idPrefix}-documentStatus-label`} disabled={disabled}
+        testId={`${idPrefix}-documentStatus`} onChange={(next) => onChange({ documentStatus: next } as Partial<SubscriptionSettings>)} />
+    </div> : null}
     {errors.map((error) => <p key={error.key} id={errorId(error.key)} className="setting-error" role="alert"
       data-testid={`${idPrefix}-${error.key}-error`}>{error.message}</p>)}
   </div>;

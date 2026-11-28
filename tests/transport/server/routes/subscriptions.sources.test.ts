@@ -223,7 +223,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     const gamma = w.source.addChannel('gamma');
     for (const id of [alpha, beta, gamma]) w.source.publish(id, id.slice(-1), w.clock.now, Array.from({ length: 8 }, (_, index) => 1 + 3 * index));
 
-    const added = await send('POST', '/api/subscriptions', { url: '@alpha', settings: { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 } });
+    const added = await send('POST', '/api/subscriptions', { url: '@alpha', settings: { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'draft' } });
     expect(added.status).toBe(202);
     const first = await w.jobs.whenSettled((await w.jobs.whenSettled(added.body.job.id)).result!.followUpJobId!);
     expect(first.progress).toMatchObject({ total: 5 });
@@ -231,7 +231,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     await send('POST', '/api/subscriptions', { url: '@gamma', settings: { backfillMaxItems: 20 } });
     await eventually(() => expect(w.jobs.isBusy()).toBe(false));
 
-    for (const settings of [{ intervalMinutes: 45 }, { backfillDays: 1.5 }, { backfillMaxItems: 101 }, { backfillDays: 0 }, { backfillWindow: '1m' }, { cadence: 30 }, 'often']) {
+    for (const settings of [{ intervalMinutes: 45 }, { backfillDays: 1.5 }, { backfillMaxItems: 101 }, { backfillDays: 0 }, { backfillWindow: '1m' }, { cadence: 30 }, { documentStatus: 'final' }, 'often']) {
       const rejected = await send('POST', '/api/subscriptions', { url: '@beta', settings });
       expect(rejected.status).toBe(400);
       expect(rejected.body.error.code).toBe('invalid_request');
@@ -242,7 +242,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     expect((await send('PATCH', `/api/subscriptions/youtube/${beta}`, {})).status).toBe(400);
 
     const changed = await send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillDays: 45 } });
-    expect(changed).toMatchObject({ status: 200, body: { subscription: { id: beta, settings: { intervalMinutes: 30, backfillDays: 45, backfillMaxItems: 10 } }, submission: null } });
+    expect(changed).toMatchObject({ status: 200, body: { subscription: { id: beta, settings: { intervalMinutes: 30, backfillDays: 45, backfillMaxItems: 10, documentStatus: 'published' } }, submission: null } });
     expect((await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: false })).status).toBe(200);
 
     const jobsBefore = w.jobs.list({ limit: 100 }).jobs.length;
@@ -250,7 +250,7 @@ describe('per-subscription settings over HTTP (A5)', () => {
     expect(w.jobs.list({ limit: 100 }).jobs).toHaveLength(jobsBefore);
     expect((await send('POST', '/api/subscriptions/youtube/UCmissing/apply-settings')).status).toBe(404);
 
-    const settings = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
+    const settings = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'draft' };
     const listed = (await w.get('/api/subscriptions?type=youtube')).body.subscriptions;
     expect(listed.map((channel: { id: string; enabled: boolean; settings: unknown }) => [channel.id, channel.enabled, channel.settings])).toEqual([
       [alpha, true, settings], [beta, true, settings], [gamma, false, settings],
@@ -264,14 +264,14 @@ describe('per-subscription settings over HTTP (A5)', () => {
       send('PATCH', `/api/subscriptions/youtube/${beta}`, { settings: { backfillMaxItems: 50 } }),
     ]);
     expect(concurrent.map((answer) => answer.status)).toEqual([200, 200, 200]);
-    expect((await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription.settings).toEqual({ intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50 });
+    expect((await w.get(`/api/subscriptions/youtube/${beta}`)).body.subscription.settings).toEqual({ intervalMinutes: 180, backfillDays: 60, backfillMaxItems: 50, documentStatus: 'draft' });
 
     const delta = w.source.addChannel('delta');
     w.source.publish(delta, 'd', w.clock.now, [1]);
     const defaults = await send('POST', '/api/subscriptions', { url: '@delta', settings: {} });
     expect(defaults.status).toBe(202);
     await w.jobs.whenSettled((await w.jobs.whenSettled(defaults.body.job.id)).result!.followUpJobId!);
-    expect((await w.get(`/api/subscriptions/youtube/${delta}`)).body.subscription.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10 });
+    expect((await w.get(`/api/subscriptions/youtube/${delta}`)).body.subscription.settings).toEqual({ intervalMinutes: 30, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' });
 
     const resumed = await send('PATCH', `/api/subscriptions/youtube/${gamma}`, { enabled: true, settings: { backfillMaxItems: 20 } });
     expect(resumed.body).toMatchObject({ subscription: { enabled: true, settings: { backfillMaxItems: 20 } }, submission: { job: { scope: { trigger: 'resume' } } } });

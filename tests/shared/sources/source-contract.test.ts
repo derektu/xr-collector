@@ -201,7 +201,7 @@ describe('subscriptions of a type the core does not name (P-T2)', () => {
     const preview = await w.service('fake').preview(feedUrl('fake', 'news'));
     expect(preview).toEqual({
       type: 'fake', target: { id: 'news', title: 'fake 動態 news', url: feedUrl('fake', 'news') },
-      subscription: null, settings: FAKE_DEFAULTS, autoCollection: true,
+      subscription: null, settings: { ...FAKE_DEFAULTS, documentStatus: 'published' }, autoCollection: true,
     });
 
     const first = await w.subscribe('fake', 'news', { maxItems: 3 });
@@ -400,7 +400,7 @@ describe('exchanging a Vault that holds several source types (P-T2)', () => {
   });
   const feed = (type: string, id: string): SubscriptionRecord => ({
     id, title: `${type} 動態 ${id}`, url: feedUrl(type, id), enabled: true, addedAt: '2026-09-18T00:00:00.000Z', updatedAt: '2026-09-18T00:00:00.000Z',
-    settings: FAKE_DEFAULTS, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
+    settings: { ...FAKE_DEFAULTS, documentStatus: 'published' }, nextCheckAt: '2099-01-01T00:00:00.000Z', lastDispatchedAt: null,
   });
   const items = async (root: string) => new Map([...await itemStates(SOURCES, registeredSource(await registeredFiles(root, SOURCES)))]
     .map(([key, state]) => [key, state.state === 'present' ? `present:${state.digest}` : `deleted:${state.at}`]));

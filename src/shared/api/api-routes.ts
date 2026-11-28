@@ -102,6 +102,8 @@ export interface NewVaultRequest { location: string; name: string }
 export interface SubscriptionKey { type: string; id: string }
 export interface DocumentStatusChange { status: DocumentStatus }
 export interface UrlRequest { url: string }
+/** `status` is the status of a single item's new document, `published` when omitted. */
+export interface ItemRequest extends UrlRequest { status?: DocumentStatus }
 export interface DocumentQuery { sourceType?: string; publisherId?: string; status?: DocumentStatus; offset?: number; limit?: number }
 export interface SearchParameters extends DocumentQuery { q: string; publishedFrom?: string; publishedTo?: string }
 export interface JobListQuery { state?: 'active' | 'all'; limit?: number; cursor?: string }
@@ -166,8 +168,8 @@ export const API_ROUTES = {
   searchStatus: json<{ status: SearchStatusReport }>()({ method: 'GET', path: '/api/search/status' }),
   rebuildSearch: json<{ status: SearchStatusReport }>()({ method: 'POST', path: '/api/search/rebuild' }),
 
-  submitAddress: json<JobSubmission, UrlRequest>()({ method: 'POST', path: '/api/submissions', status: 202 }),
-  collectItem: json<JobSubmission, UrlRequest>()({ method: 'POST', path: '/api/items', status: 202 }),
+  submitAddress: json<JobSubmission, ItemRequest>()({ method: 'POST', path: '/api/submissions', status: 202 }),
+  collectItem: json<JobSubmission, ItemRequest>()({ method: 'POST', path: '/api/items', status: 202 }),
   jobs: json<JobPage, undefined, JobListQuery>()({ method: 'GET', path: '/api/jobs', access: 'device-data' }),
   jobSummary: json<{ summary: JobSummary }, undefined, { since?: string }>()({ method: 'GET', path: '/api/jobs/summary', access: 'device-data' }),
   job: json<{ job: JobView }>()({ method: 'GET', path: '/api/jobs/:id', access: 'device-data' }),

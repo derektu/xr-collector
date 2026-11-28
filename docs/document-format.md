@@ -18,7 +18,7 @@
 | `type` | 該來源類型的文件類型，見上表 |
 | `title`、`resource` | 標題與來源 URL。RSS 沒有標題時寫「無標題」；文章沒有連結時 `resource` 是 feed 網址 |
 | `tags` | 初始為空陣列 |
-| `status` | 文件狀態：`draft`（草稿）或 `published`（正式）；收集時寫 `published`。沒有這個欄位或值不是這兩者的文件是正式 |
+| `status` | 文件狀態：`draft`（草稿）或 `published`（正式）。訂閱檢查收集的文件寫該訂閱設定的 `documentStatus`，單篇收集寫請求選的狀態，沒有選時寫 `published`；文件已存在時不改它。沒有這個欄位或值不是這兩者的文件是正式 |
 | `collector.id` | 文件 ID |
 | `collector.source`、`collector.source_id` | 來源類型與來源 ID |
 | `collector.publisher` | 發布者名稱：YouTube 是頻道名稱，RSS 是 feed 標題 |

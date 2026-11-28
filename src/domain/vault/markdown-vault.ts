@@ -115,7 +115,7 @@ export class MarkdownVault implements DocumentVault {
     return this.read(documentId(key));
   }
 
-  async add(capture: CapturedDocument, options: { collectedAt?: Date } = {}): Promise<SavedDocument> {
+  async add(capture: CapturedDocument, options: { status?: DocumentStatus; collectedAt?: Date } = {}): Promise<SavedDocument> {
     const definition = this.sources.definition(capture.sourceType);
     if (!definition) throw new Error(`Source type ${capture.sourceType} is not registered`);
     const key: DocumentKey = { sourceType: capture.sourceType, sourceId: capture.key };
@@ -131,7 +131,7 @@ export class MarkdownVault implements DocumentVault {
       title: capture.title,
       resource: capture.sourceUrl,
       tags: [],
-      status: 'published',
+      status: options.status ?? 'published',
       collector: {
         id,
         source: capture.sourceType,

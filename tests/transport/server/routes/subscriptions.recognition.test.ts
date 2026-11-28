@@ -8,7 +8,7 @@ import { createHttpApp, type SubscriptionCollection } from '../../../../src/tran
 import { recognizeUrl, sourceTypeDeclarations, type SourceTypeDeclaration } from '../../../../src/domain/sources/source-types.js';
 import { PRODUCT_SOURCES } from '../../../support/product-sources.js';
 
-const own = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5 };
+const own = { intervalMinutes: 60, backfillDays: 14, backfillMaxItems: 5, documentStatus: 'published' as const };
 const CHANNEL_ID = 'UCchannel-one-xxxxxxxxxx';
 
 function channelsWith(previews: Record<string, { enabled: boolean } | null>, failure?: CollectorError) {
@@ -18,7 +18,7 @@ function channelsWith(previews: Record<string, { enabled: boolean } | null>, fai
     return {
       type: 'youtube', target: { id: CHANNEL_ID, title: '頻道一', url: `https://www.youtube.com/channel/${CHANNEL_ID}/videos` },
       subscription: previews[url] ? { ...previews[url]!, settings: own } : null,
-      settings: previews[url] ? own : DEFAULT_POLICY,
+      settings: previews[url] ? own : { ...DEFAULT_POLICY, documentStatus: 'published' },
       autoCollection: true,
     };
   });
@@ -54,8 +54,9 @@ describe('source type declarations (T-01)', () => {
       { input: 'choice', key: 'intervalMinutes', label: '檢查頻率', options: INTERVAL_OPTIONS.map((value) => ({ value })) },
       { input: 'number', key: 'backfillDays', label: '時間範圍', min: 1, max: 60, unit: '天' },
       { input: 'number', key: 'backfillMaxItems', label: '數量上限', min: 1, max: 100, unit: '支影片' },
+      { input: 'choice', key: 'documentStatus', label: '預設狀態', options: [{ value: 'published' }, { value: 'draft' }] },
     ]);
-    expect(Object.fromEntries(youtube.settings.map((field: { key: string; default: unknown }) => [field.key, field.default]))).toEqual(DEFAULT_POLICY);
+    expect(Object.fromEntries(youtube.settings.map((field: { key: string; default: unknown }) => [field.key, field.default]))).toEqual({ ...DEFAULT_POLICY, documentStatus: 'published' });
     expect(youtube.settings[0].options.map((option: { label: string }) => option.label)).toEqual(['每 15 分鐘', '每 30 分鐘', '每 1 小時', '每 3 小時', '每 6 小時', '每 12 小時', '每天']);
     expect(youtube).not.toHaveProperty('recognize');
   });
@@ -178,7 +179,7 @@ describe('URL recognition (T-02 to T-05)', () => {
   it('offers to subscribe to the feed a web address leads to', async () => {
     const target = { id: '0123456789abcdef', title: '部落格', url: 'https://example.com/feed.xml' };
     const preview = vi.fn(async (): Promise<SubscriptionPreview> => ({
-      type: 'rss', target, subscription: null, settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10 }, autoCollection: true,
+      type: 'rss', target, subscription: null, settings: { intervalMinutes: 60, backfillDays: 30, backfillMaxItems: 10, documentStatus: 'published' }, autoCollection: true,
     }));
     const feeds = { type: 'rss', preview, listSubscriptions: async () => [], checkJobs: () => [] } as unknown as SubscriptionCollection;
     const recognition = (await recognize('https://example.com/', feeds)).json().recognition;

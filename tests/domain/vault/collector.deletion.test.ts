@@ -53,7 +53,7 @@ function captured(id: string): CapturedTranscript {
 
 const SUBSCRIPTION: SubscriptionRecord = {
   id: CHANNEL, title: '刪除測試頻道', url: `https://www.youtube.com/channel/${CHANNEL}/videos`, enabled: true, addedAt: T0.toISOString(), updatedAt: T0.toISOString(),
-  settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50 },
+  settings: { intervalMinutes: 30, backfillDays: 60, backfillMaxItems: 50, documentStatus: 'published' },
 };
 
 class Source implements YouTubeSource {
@@ -237,11 +237,11 @@ describe('visibility and re-collection (A2)', () => {
     if (removeFile) await w.collector.delete(`youtube:${a}`);
     else await w.vault.deletions.record({ sourceType: 'youtube', sourceId: a, sourceUrl: watchUrl(a), title: 'A', publisherId: null, publisherName: 'P' });
 
-    await expect(w.collector.save(transcriptDocument(captured(a)), { explicitAt: T0.toISOString() })).rejects.toMatchObject({ code: 'document_deleted' });
+    await expect(w.collector.save(transcriptDocument(captured(a)), { explicitAt: T0.toISOString(), status: 'published' })).rejects.toMatchObject({ code: 'document_deleted' });
     await expect(w.collector.save(transcriptDocument(captured(a)))).rejects.toMatchObject({ code: 'document_deleted' });
 
     const later = new Date(T0.getTime() + 1).toISOString();
-    const result = await w.collector.save(transcriptDocument({ ...captured(a), bodyMarkdown: '重新收集的正文' }), { explicitAt: later });
+    const result = await w.collector.save(transcriptDocument({ ...captured(a), bodyMarkdown: '重新收集的正文' }), { explicitAt: later, status: 'published' });
     expect(result.document.collectedAt).toBe(later);
     expect(await readFile(path.join(w.root, 'documents/youtube', `${a}.md`), 'utf8')).toContain('重新收集的正文');
     expect(await w.vault.deletions.list()).toEqual([]);
